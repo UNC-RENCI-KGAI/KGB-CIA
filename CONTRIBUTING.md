@@ -15,7 +15,7 @@ Six weeks, twenty people, one repo. These conventions keep us out of each other'
 | `evaluation/` | @UNC-RENCI-KGAI/evaluation | :bar_chart: |
 | `shared/`, `.github/`, root files | @UNC-RENCI-KGAI/leads | |
 
-`.github/CODEOWNERS` maps these. A PR that touches your team's directory automatically asks your
+Current members: [`docs/teams.md`](docs/teams.md). `.github/CODEOWNERS` maps these. A PR that touches your team's directory automatically asks your
 team for review; nobody else is blocked on it.
 
 ## Branches and pull requests
@@ -32,7 +32,7 @@ team for review; nobody else is blocked on it.
   (`Progress report (Oct 27)` or `Final submission (Nov 17)`).
 - Each team has a **Tracking** issue with its Oct 27 checklist. Break it into small issues during
   the Code Bursts and tick the boxes as they close.
-- The org Project board (Status: Backlog, In progress, Review, Done) is the single view of who is
+- The [org Project board](https://github.com/orgs/UNC-RENCI-KGAI/projects/1) (Status: Backlog, In progress, Review, Done) is the single view of who is
   doing what. Team leads move their cards before each Code Burst and post a two-line status in
   Slack.
 - Something you cannot resolve? Label it `open question` and, if it stops you, `blocked`.
