@@ -5,6 +5,10 @@ Directories with their own rules have their own `AGENTS.md`: [`agents/`](agents/
 [`shared/`](shared/AGENTS.md), [`evaluation/`](evaluation/AGENTS.md). Read the one for the
 directory you are editing before you change anything there.
 
+Don't add a `CLAUDE.md` anywhere in the repo, even one that only imports this file: Claude Code
+reads `AGENTS.md` files directly only as long as no `CLAUDE.md` exists in the repo. (`/init`
+creates one, so delete it afterwards and move anything useful into an `AGENTS.md`.)
+
 ## What this is
 
 KGB-CIA, a team entry for the Bio-Agent Knowledge Graph Construction Challenge. A pipeline of
