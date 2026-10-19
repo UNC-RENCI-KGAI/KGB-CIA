@@ -55,6 +55,17 @@ uv is not installed.
 
 ## Working on the repo
 
+**Never push to `main`. Every change, however small, goes through a pull request.** That is what
+routes the review to the right team through CODEOWNERS and runs the CI gate. Admins can bypass
+the protection, but should not.
+
+```bash
+git checkout -b <team>/<short-description>
+# ... edit, commit ...
+git push -u origin <team>/<short-description>
+gh pr create
+```
+
 One monorepo, one directory per subagent, one GitHub Team per directory. Each team owns its
 directory through `.github/CODEOWNERS` and reviews its own pull requests. Cross-directory changes
 get the `integration` label. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the branch, review, and
