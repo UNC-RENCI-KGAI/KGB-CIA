@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", help="path to the previous stage's output")
     parser.add_argument("--output", help="where to write this stage's output")
     args = parser.parse_args(argv)
-    print(f"Filter and integration agent: not implemented yet")
+    print("Filter and integration agent: not implemented yet")
     print(f"  input={args.input} output={args.output}")
     return 0
 
