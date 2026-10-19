@@ -1,0 +1,14 @@
+# Each line: path pattern, then the team that reviews changes there.
+# Later lines win. Teams live at https://github.com/orgs/UNC-RENCI-KGAI/teams
+
+*                           @UNC-RENCI-KGAI/leads
+/shared/                    @UNC-RENCI-KGAI/leads
+/.github/                   @UNC-RENCI-KGAI/leads
+
+/agents/metadata/           @UNC-RENCI-KGAI/metadata
+/agents/transformation/     @UNC-RENCI-KGAI/transformation
+/agents/filter/             @UNC-RENCI-KGAI/filter
+/agents/augmentation/       @UNC-RENCI-KGAI/augmentation
+/agents/cleaning/           @UNC-RENCI-KGAI/cleaning
+/agents/mcp_interface/      @UNC-RENCI-KGAI/mcp-interface
+/evaluation/                @UNC-RENCI-KGAI/evaluation

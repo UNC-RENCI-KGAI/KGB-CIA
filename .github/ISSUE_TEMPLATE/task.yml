@@ -1,0 +1,36 @@
+name: Task
+description: A unit of work for one subagent team
+labels: []
+body:
+  - type: dropdown
+    id: team
+    attributes:
+      label: Team
+      options:
+        - "agent: metadata"
+        - "agent: transformation"
+        - "agent: filter"
+        - "agent: augmentation"
+        - "agent: cleaning"
+        - "agent: mcp-interface"
+        - evaluation
+        - integration
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs to happen
+      description: Outcome, not activity. What will exist or work when this closes?
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      placeholder: "- [ ] command X produces Y on the toy data\n- [ ] test added"
+  - type: input
+    id: tracking
+    attributes:
+      label: Parent tracking issue
+      placeholder: "#3"

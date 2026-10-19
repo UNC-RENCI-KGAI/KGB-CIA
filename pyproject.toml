@@ -1,0 +1,44 @@
+[project]
+name = "kgb-cia"
+version = "0.1.0"
+description = "Knowledge Graph Based Creation of Informed Agents: agentic Biolink KG construction from Pharos/TCRD"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+kgb-metadata = "agents.metadata.cli:main"
+kgb-transform = "agents.transformation.cli:main"
+kgb-filter = "agents.filter.cli:main"
+kgb-augment = "agents.augmentation.cli:main"
+kgb-clean = "agents.cleaning.cli:main"
+kgb-mcp = "agents.mcp_interface.cli:main"
+kgb-pipeline = "shared.pipeline:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agents", "shared", "evaluation"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

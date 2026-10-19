@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Team Slack
+    url: https://slack.com
+    about: Quick questions go to the team channel; design decisions come back here as issues.

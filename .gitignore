@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# Data and generated graphs: never commit
+data/*
+!data/README.md
+*.sql
+*.sql.gz
+*.tar.gz
+*.parquet
+*.jsonl
+*.tsv.gz
+*.csv.gz
+*.db
+*.sqlite
+outputs/
+runs/
+
+# Secrets and local config
+.env
+.env.*
+*.key
+.claude/settings.local.json
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+.ipynb_checkpoints/
