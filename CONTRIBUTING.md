@@ -20,6 +20,12 @@ team for review; nobody else is blocked on it.
 
 ## Branches and pull requests
 
+**Rule one: nothing lands on `main` except through a pull request.** No direct pushes, no admin
+bypass, no "it's just a typo". The PR is what makes CODEOWNERS request the right team's review
+and what runs CI before the merge. Direct pushes skip both, so a mistake on `main` is caught by
+nobody and breaks `make demo` for everyone. If you have admin rights and GitHub offers to bypass
+the rule, decline.
+
 - Branch from `main`, name it `<team>/<short-description>`, e.g. `filter/affinity-defaults`.
 - Open a PR early, as a draft if it is not ready. Link the issue with `Closes #N`.
 - One approval from a code owner merges it. Squash merge; the branch is deleted automatically.
