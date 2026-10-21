@@ -1,0 +1,143 @@
+{
+  "providers": {
+    "renci-azure": {
+      "baseUrl": "https://renci-analytics.openai.azure.com/openai/v1",
+      "api": "azure-openai-responses",
+      "apiKey": "$RENCI_AZURE_API_KEY",
+      "models": [
+        {
+          "id": "gpt-5.5",
+          "name": "GPT-5.5 (Azure)",
+          "input": ["text", "image"],
+          "reasoning": true,
+          "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 },
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "name": "GPT-5.6 Terra (Azure)",
+          "input": ["text", "image"],
+          "reasoning": true,
+          "cost": { "input": 2, "output": 12, "cacheRead": 0.2, "cacheWrite": 2.5 },
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "name": "GPT-5.6 Luna (Azure)",
+          "input": ["text", "image"],
+          "reasoning": true,
+          "cost": { "input": 0.2, "output": 1.2, "cacheRead": 0.02, "cacheWrite": 0.25 },
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "name": "GPT-5.6 Sol (Azure)",
+          "input": ["text", "image"],
+          "reasoning": true,
+          "cost": { "input": 4, "output": 20, "cacheRead": 0.4, "cacheWrite": 5 },
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
+        },
+        {
+          "id": "gpt-6.1-sol",
+          "name": "GPT-6.1 Sol (Azure)",
+          "input": ["text", "image"],
+          "reasoning": true,
+          "cost": { "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5 },
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
+        },
+        {
+          "id": "gpt-6-astra",
+          "name": "GPT-6 Astra (Azure)",
+          "input": ["text", "image"],
+          "reasoning": true,
+          "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
+        },
+        {
+          "id": "gpt-5.2-codex",
+          "name": "GPT-5.2 Codex (Azure)",
+          "input": ["text"],
+          "reasoning": true,
+          "cost": { "input": 1.75, "output": 14, "cacheRead": 0.175, "cacheWrite": 0 },
+          "contextWindow": 400000,
+          "maxTokens": 128000
+        },
+        {
+          "id": "gpt-5.3-codex",
+          "name": "GPT-5.3 Codex (Azure)",
+          "input": ["text"],
+          "reasoning": true,
+          "cost": { "input": 1.75, "output": 14, "cacheRead": 0.175, "cacheWrite": 0 },
+          "contextWindow": 400000,
+          "maxTokens": 128000
+        },
+        {
+          "id": "gpt-5.4",
+          "name": "GPT-5.4 (Azure)",
+          "input": ["text", "image"],
+          "reasoning": true,
+          "cost": { "input": 2.5, "output": 15, "cacheRead": 0.25, "cacheWrite": 0 },
+          "contextWindow": 1050000,
+          "maxTokens": 128000
+        },
+        {
+          "id": "gpt-5.4-mini",
+          "name": "GPT-5.4 Mini (Azure)",
+          "input": ["text", "image"],
+          "reasoning": true,
+          "cost": { "input": 0.75, "output": 4.5, "cacheRead": 0.075, "cacheWrite": 0 },
+          "contextWindow": 400000,
+          "maxTokens": 128000
+        },
+        {
+          "id": "gpt-5.4-nano",
+          "name": "GPT-5.4 Nano (Azure)",
+          "input": ["text"],
+          "reasoning": false,
+          "cost": { "input": 0.2, "output": 1.25, "cacheRead": 0.02, "cacheWrite": 0 },
+          "contextWindow": 400000,
+          "maxTokens": 128000
+        },
+        {
+          "id": "gpt-oss-120b",
+          "name": "GPT-OSS 120B (Azure)",
+          "input": ["text"],
+          "reasoning": false,
+          "cost": { "input": 0.15, "output": 0.6, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 131072,
+          "maxTokens": 131072
+        },
+        {
+          "id": "DeepSeek-V4-Flash",
+          "name": "DeepSeek V4 Flash (Azure)",
+          "input": ["text"],
+          "reasoning": true,
+          "cost": { "input": 0.19, "output": 0.51, "cacheRead": 0.028, "cacheWrite": 0 },
+          "contextWindow": 1000000,
+          "maxTokens": 128000
+        },
+        {
+          "id": "Kimi-K2.6",
+          "name": "Kimi K2.6 (Azure)",
+          "input": ["text"],
+          "reasoning": true,
+          "cost": { "input": 0.95, "output": 4, "cacheRead": 0.16, "cacheWrite": 0 },
+          "contextWindow": 262144,
+          "maxTokens": 262144
+        }
+      ]
+    }
+  }
+}
