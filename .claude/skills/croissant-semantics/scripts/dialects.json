@@ -57,6 +57,14 @@
     "columns": "header",
     "header_in_comments": true
   },
+  "tsv-commented-noheader": {
+    "description": "Tab-separated values after a '#' comment block, with no header row: columns are the croissant's fields in order (FlyBase files that list their columns only in the comments).",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
+    "edam": "http://edamontology.org/format_3475",
+    "csvw": {"delimiter": "\t", "commentPrefix": "#", "header": false, "quoteChar": null},
+    "columns": "field_order"
+  },
   "vcf-4": {
     "description": "Variant Call Format 4.x: '##' meta-information lines, then a '#CHROM POS ID REF ALT QUAL FILTER INFO ...' header row, then tab-separated records.",
     "media_type": "text/tab-separated-values",
@@ -71,6 +79,14 @@
     "spec": "https://psicquic.github.io/MITAB27Format.html",
     "csvw": {"delimiter": "\t", "header": true, "quoteChar": null, "null": "-"},
     "columns": "header"
+  },
+  "mitab-2.7-comment-header": {
+    "description": "PSI-MI TAB 2.7 after a '#' comment block whose last line names the columns ('#ID(s) interactor A\t...', FlyBase and Alliance interaction files). '-' means no value.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://psicquic.github.io/MITAB27Format.html",
+    "csvw": {"delimiter": "\t", "commentPrefix": "#", "header": true, "quoteChar": null, "null": "-"},
+    "columns": "header",
+    "header_in_comments": true
   },
   "gaf-2.2": {
     "description": "GO Gene Association File 2.2: '!' header lines, no column-name row, 17 tab-separated columns in a fixed order.",

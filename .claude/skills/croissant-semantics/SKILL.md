@@ -82,15 +82,22 @@ dependencies). Use `--help` on any of them.
      per knowledge base, never many in parallel: hosts block bursts with a bot challenge, and then
      every later request fails. The scripts pace their own requests and cache downloads (in
      `~/.cache/croissant-semantics/downloads`; `--refresh` downloads again), so re-running is
-     cheap. If a script reports a bot challenge, stop sampling that host, don't try to get past
-     it, and say in `notes.md` which checks couldn't run.
+     cheap (the cache key includes `--max-mb`, so keep it the same between runs). If a script
+     reports a bot challenge or an HTTP 403, stop sampling that host, don't try to get past it,
+     and say in `notes.md` which checks couldn't run. The scripts then refuse that host for an
+     hour, across runs, and work from cached files.
    - Spreadsheets (xlsx) and SQLite databases are sampled and profiled too: the sheet or table is
      the part of the record set's name after " — ". They're read whole, so raise `--max-mb` if
      needed (on `check.py` as well). mlcroissant can't read them, so their records aren't loaded.
    - `--profile` with `--layout` profiles `--files` record sets of the layout (default 3, or
      `all`) instead of naming each with `--record-set`. `--prefixes` counts each value's prefix
-     or tag (for id columns with many values); `--by COL` cross-tabulates against another
-     column (which object types each code occurs with).
+     or tag, for all profiled columns or only those listed (`--prefixes COL1,COL2`); `--by COL`
+     cross-tabulates against another column (which object types each code occurs with);
+     `--split SEP` counts the items of list cells; `--stop-mb N` stops each file after N MB, for
+     files of many GB (the counts then cover only the start).
+   - A `match.has_columns` entry that covers many layouts is sampled by `check.py` on only a few
+     of its files. Sample the layouts it spans that differ (`--record-set-name`, `--files`)
+     before trusting it.
    - The scripts use the operating system's certificate store. If downloads still fail with a
      certificate error, report it with the output; don't turn verification off.
    - If the documentation is behind a bot check ("verify you are human", a Cloudflare or ALTCHA
@@ -108,7 +115,9 @@ dependencies). Use `--help` on any of them.
      nodes after 200 IRIs, a rare code): confirm id forms and codes with `--profile`, which
      reads whole files.
    - `inventory.py` lists documentation files shipped with the data (README.pdf inside a zip, a
-     data dictionary) after the layouts. Read the relevant ones.
+     data dictionary) after the layouts. Read the relevant ones: `sample.py CROISSANT --dump
+     FILE` prints a file as text, `--member NAME` a member of an archive (it lists the members
+     of a zip when the name is wrong), `--sheet NAME` a sheet of a spreadsheet.
    - `sample.py` flags columns whose declared type doesn't fit the values (an `sc:Integer`
      column holding `27152464|29518214`) and files whose rows are wider or narrower than the
      header. Both are usually pipeline problems: fix types with `atomic`, and report them.
@@ -123,7 +132,9 @@ dependencies). Use `--help` on any of them.
      release. Find the current URLs from its download page and pass `--url-map OLD=NEW` to
      `sample.py` and `check.py` (e.g. `--url-map 202607=202610`). When more than the release
      changed (another path or file name), map whole URLs, one `--url-map OLD_URL=NEW_URL` per
-     file. When the URLs themselves contain `=` (query strings), write `OLD=>NEW`. Say so in `notes.md`; it's a pipeline problem too.
+     file. When the URLs themselves contain `=` (query strings), write `OLD=>NEW`. Say so in
+     `notes.md`; it's a pipeline problem too. A SPARQL endpoint URL that returns JSON where the
+     croissant describes a table usually needs `&format=csv` (or `text/csv`) mapped on.
    - Archives: members of zip and tar archives are sampled. A zip is downloaded whole (up to
      `--max-mb`); a tar is streamed until the member is found, so a member deep inside a huge
      tar can exceed `--max-mb`. An archive that fails once isn't tried again, and sampling stops
@@ -189,6 +200,10 @@ dependencies). Use `--help` on any of them.
    from `check_report.findings.json`) and in `notes.md`. `apply_plan.py` also warns about plan
    keys it doesn't know.
 
+   For a croissant too large for the validator to finish (thousands of record sets; it can
+   take many hours), `--validate-reduced` validates one record set per layout and row type,
+   with the record sets and files they reference; the report says it was reduced.
+
    Records that don't load from the original croissant either are pre-existing problems
    (formats mlcroissant can't read, commented headers, dead URLs, wrong checksums); mention them
    in `notes.md`. Fix them only when the plan can describe the file correctly (a `dialect`, an
@@ -196,6 +211,12 @@ dependencies). Use `--help` on any of them.
    `notes.md` as a problem for the pipeline. For layouts that still don't load, the
    sampled-data checks are the evidence. Evidence you gathered outside the scripts (a member
    you extracted by hand, units you looked up) goes in `notes.md` with how you got it.
+
+   Some problems a plan can't fix: a column the croissant declares but the files don't have
+   (the plan can only describe columns that exist), and `null_values`, which mlcroissant
+   ignores, so a numeric column holding `-` or `NA` still fails to load; type such a column
+   `atomic: sc:Text` and report the type. Files that are deliberately invalid (test fixtures,
+   examples of bad input) go in `skipped`, not in the plan.
 
 7. **Write `notes.md`**: what you covered (layouts, record sets, coverage numbers from the
    report), what you left out and why, choices a reviewer should know about (local terms,

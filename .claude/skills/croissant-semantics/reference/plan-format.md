@@ -27,7 +27,9 @@ the plan itself is kept next to the result as the record of what was asserted an
   code mappings, constant values) **and** every prefix that appears in the data's CURIE values.
   `biolink`, `skos`, `sh`, `qudt`, `unit`, `rcv`, `csvw`, `rdfs`, `sc`, `cr` are built in.
   Use the expansion Biolink uses (`vocab.py prefix X`); if Biolink doesn't have the prefix, use
-  Bioregistry's URI format up to the `$1`.
+  Bioregistry's URI format up to the `$1`. The key is the prefix as the data writes it (`MGI`, not
+  `mgi`), which is what checks compare values against; the expansion is what makes it
+  resolvable. When the data's spelling differs from Biolink's, declare the data's.
 - `column_library`: column specs defined once by name, for knowledge bases whose many layouts
   share columns (snapshots that add columns over time). Use one in a layout with
   `"PubMedIDs": { "use": "pubmed_ids" }`; other keys next to `use` override the library's, and
@@ -54,7 +56,10 @@ the plan itself is kept next to the result as the record of what was asserted an
   `[{"where": "disease_annotations", "message": "biomarker_for", "reason": "a cross-tab of the whole file shows these codes only on gene rows"}]`.
   `where` and `message` are substrings of the warning's location and text; a matching warning
   becomes a note carrying the reason. Only for warnings you verified (with the evidence in the
-  reason), never to hide one you didn't look into. Entries that match nothing are reported.
+  reason), never to hide one you didn't look into. Entries that match nothing are reported, and
+  so are entries that match more than one warning. The location is the bold text before the
+  colon in the report (a layout id, often followed by a column name): make `where` long enough
+  to name the one place you checked, and write one entry per place.
 
 ## Layouts
 
@@ -296,7 +301,8 @@ Every `row`, entity and top-level column spec carries:
   values or the documentation.
 - `source`: `documentation` (the knowledge base's own docs or data dictionary — cite the URL in
   `basis`), `data_dictionary` (a schema shipped with the files), `agent` (inferred from names
-  and values), or `maintainer`.
+  and values), or `maintainer`. Nothing else: what you saw in sampled data is `agent`, with the
+  values quoted in `basis`.
 - `confidence`: `high` (the values and documentation agree, or the meaning is unmistakable from
   the values), `medium` (consistent with the values but the meaning is inferred), `low` (a
   plausible reading that a maintainer should confirm).

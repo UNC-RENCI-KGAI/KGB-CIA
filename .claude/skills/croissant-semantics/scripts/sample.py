@@ -100,6 +100,10 @@ def parse_url_maps(items: list[str] | None) -> None:
         URL_MAP.append((old, new))
 
 
+class AccessDenied(requests.HTTPError):
+    """The host wants a login or key (HTTP 401/403): every other file there will be refused too."""
+
+
 class BotCheck(requests.HTTPError):
     """The host answered with a bot challenge instead of the file."""
 
@@ -109,7 +113,38 @@ USE_CACHE = True  # False: don't read or write the cache (tests)
 REFRESH = False  # sample.py --refresh: download again and replace the cached copy
 MIN_INTERVAL = 1.0  # seconds between requests to one host from this process
 DOWNLOAD_LIMIT_S = 1800  # give up on one download after this long
+HOLD_S = 3600  # after a bot challenge or a 403, leave the host alone this long, across runs
 _last_request: dict[str, float] = {}
+
+
+def _hold_path(host: str) -> Path:
+    return CACHE_DIR.parent / "refused" / host.replace(":", "_")
+
+
+def _check_hold(host: str) -> None:
+    """Refuse to ask a host that refused us within HOLD_S, in this process or an earlier one: a
+    loop of fresh sample.py runs would otherwise keep provoking its bot check."""
+    import time
+
+    path = _hold_path(host)
+    if not USE_CACHE or not path.exists():
+        return
+    left = HOLD_S - (time.time() - path.stat().st_mtime)
+    if left <= 0:
+        return
+    reason = path.read_text().strip()
+    raise (BotCheck if reason.startswith("bot") else AccessDenied)(
+        f"{host} refused a request {(HOLD_S - left) / 60:.0f} min ago ({reason}); no requests go "
+        f"there for another {left / 60:.0f} min. Work from cached files meanwhile. "
+        f"(Delete {path} only once you know the host will answer again.)"
+    )
+
+
+def _hold(host: str, reason: str) -> None:
+    if USE_CACHE:
+        path = _hold_path(host)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(reason + "\n")
 
 
 def _cache_path(*key) -> Path:
@@ -175,6 +210,7 @@ def _get(url: str):
     from urllib.parse import urlparse
 
     host = urlparse(url).netloc
+    _check_hold(host)
     wait = _last_request.get(host, 0) + MIN_INTERVAL - time.monotonic()
     if wait > 0:
         time.sleep(wait)
@@ -191,6 +227,7 @@ def _get(url: str):
     )
     if challenge:
         r.close()
+        _hold(host, f"bot challenge, HTTP {r.status_code}")
         raise BotCheck(
             f"HTTP {r.status_code}: {host} answered with a bot challenge, not the file. Don't try "
             "to get "
@@ -200,9 +237,12 @@ def _get(url: str):
         )
     if r.status_code in (401, 403):
         r.close()
-        raise requests.HTTPError(
-            f"HTTP {r.status_code}: {url} needs a login or key; this data can't be sampled "
-            "(see the croissant's conditionsOfAccess). Plan from documentation instead."
+        if r.status_code == 403:  # also how hosts block automated requests; 401 is about the file
+            _hold(host, "HTTP 403")
+        raise AccessDenied(
+            f"HTTP {r.status_code}: {url} needs a login or key, or the host is blocking automated "
+            "requests; this data can't be sampled (see the croissant's conditionsOfAccess). Plan "
+            "from documentation and cached files instead."
         )
     if r.status_code in (404, 410):
         r.close()
@@ -406,7 +446,8 @@ def table_rows(
     lines = data.decode("utf-8", errors="replace").splitlines()
     if lines and not data.endswith(b"\n"):
         lines = lines[:-1]  # last line may be cut off
-    if data.lstrip()[:1] in (b"{", b"[") and not str(
+    # JSON opens with { "key" or [ followed by a value; a table header like "[class]" doesn't
+    if re.match(rb'\s*(\{\s*["}]|\[\s*[\[{"\]\d-])', data[:200]) and not str(
         dist.get("contentUrl") or ""
     ).lower().removesuffix(".gz").endswith((".json", ".jsonl")):
         raise ValueError(
@@ -450,21 +491,30 @@ def table_rows(
                 )  # names are cleaned of comment marks below, unless the croissant keeps them
         else:
             break
-    body = [ln for ln in lines if ln.strip() and not ln.startswith(("#", "!"))]
-    sample = body[:20]
+    # blank lines stay until after parsing: inside a quoted field they're part of the value
+    body = [ln for ln in lines if not ln.startswith(("#", "!"))]
+    sample = [ln for ln in body if ln.strip()][:20]
     tabs, commas = sum(ln.count("\t") for ln in sample), sum(ln.count(",") for ln in sample)
     name = str(dist.get("contentUrl") or dist.get("name") or "")
     delim = "\t" if (tabs >= commas or ".vcf" in name or ".tsv" in name) and tabs else ","
     if header_line is not None:
         body = [header_line] + body
     # one reader over the lines, so quoted fields that span lines stay whole
-    reader = list(itertools.islice(csv.reader((ln + "\n" for ln in body), delimiter=delim), n + 1))
+    reader = list(
+        itertools.islice(
+            (r for r in csv.reader((ln + "\n" for ln in body), delimiter=delim) if r), n + 1
+        )
+    )
     if not reader:
         return []
     # a commented header ("#CHROM", MITAB "#ID(s) interactor A"): keep the '#' when the croissant's
     # column has it
     header = [
-        h.strip() if h.strip() in columns else h.strip().lstrip("\ufeff#! ").strip()
+        h
+        if h in columns
+        else h.strip()
+        if h.strip() in columns
+        else h.strip().lstrip("\ufeff#! ").strip()
         for h in reader[0]
     ]
     if len(set(header) & set(columns)) >= max(1, len(columns) // 2):
@@ -550,6 +600,13 @@ def part_name(rs: dict) -> str | None:
     return name.split(" — ", 1)[1].strip() if " — " in name else None
 
 
+def _header_name(cell, columns: list[str]) -> str:
+    """A header cell as the croissant names it: exact when the croissant keeps its spaces ('Genus ',
+    a line break), else stripped."""
+    name = "" if cell is None else str(cell)
+    return name if name in columns else name.strip()
+
+
 def _named_rows(header_rows: list[list], columns: list[str], n: int) -> list[dict]:
     """Rows of a sheet: the header is the first of the top rows that names most of the croissant's
     columns."""
@@ -557,11 +614,11 @@ def _named_rows(header_rows: list[list], columns: list[str], n: int) -> list[dic
     best = max(
         range(min(10, len(header_rows))),
         default=None,
-        key=lambda i: len(want & {str(c).strip() for c in header_rows[i] if c is not None}),
+        key=lambda i: len(want & {_header_name(c, columns) for c in header_rows[i]}),
     )
     if best is None:
         return []
-    names = [str(c).strip() if c is not None else "" for c in header_rows[best]]
+    names = [_header_name(c, columns) for c in header_rows[best]]
     if not want & set(names):
         names, best = list(columns), -1  # no header row: by position
     return [
@@ -791,10 +848,13 @@ MIN_SAMPLE_BYTES = 2000
 
 def pick_record_sets(candidates: list[dict], dists: dict, k: int) -> list[dict]:
     """Up to k record sets that differ: the newest-looking (last by name), the largest and the
-    smallest file.
+    smallest file. None when there are no candidates.
 
     The smallest file alone is often an old snapshot or a filtered subset, so its values aren't
     representative."""
+
+    if not candidates:
+        return []
 
     def size_of(rs):
         sizes = [content_size(dists.get(i, {})) for i in record_set_files(rs)]
@@ -884,7 +944,10 @@ def sample_rows(
                 rows = sqlite_rows(data, part_name(rs), column_names(rs), n)
             else:
                 rows = table_rows(data, dist, column_names(rs), n, file_dialect)
-        except BotCheck as e:
+        except (
+            BotCheck,
+            AccessDenied,
+        ) as e:  # the host refuses us: every other file there would be too
             errors.append(f"{rs.get('@id')}: {e}")
             break
         except (
@@ -987,19 +1050,25 @@ def profile(
     prefixes=None,
     by: str | None = None,
     shapes=None,
+    split: str | None = None,
+    stop_mb: float | None = None,
 ) -> None:
     """Count every distinct value of the given columns over whole files (several record sets add
     up). Plain files are streamed; archive members, JSON, spreadsheets and databases are read up to
     max_bytes. prefixes / shapes: a set of columns (or True for all) whose values are counted by
     CURIE prefix or tag, or by pattern (digits as 9), instead of whole values. by: count each value
-    together with another column's value (a cross-tab)."""
+    together with another column's value (a cross-tab). split: a list separator, so each item of a
+    joined cell is counted. stop_mb: stop streaming each file after this many MB of text."""
     dists = distribution_index(croissant)
     counts = {c: Counter() for c in columns}
 
     def count(rec: dict) -> None:
         for c in columns:
             v = rec.get(c)
-            for item in v if isinstance(v, list) else [v]:
+            items = v if isinstance(v, list) else [v]
+            if split:
+                items = [p.strip() for i in items for p in (str(i).split(split) if i else [i])]
+            for item in items:
                 key = "" if item is None else str(item)
                 if key and (prefixes is True or (prefixes and c in prefixes)):
                     key = _prefix_of(key)
@@ -1014,7 +1083,7 @@ def profile(
     skipped = []
     for rs in record_sets:
         try:
-            _profile_one(rs, dists, columns, dialect, max_bytes, count)
+            _profile_one(rs, dists, columns, dialect, max_bytes, count, stop_mb)
         except (
             SystemExit,
             ValueError,
@@ -1043,7 +1112,20 @@ def profile(
             print(f"    {n:9}  {v[:140] if v else '<empty>'!r}")
 
 
-def _profile_one(rs: dict, dists: dict, columns: list[str], dialect, max_bytes: int, count) -> None:
+def _capped(lines, limit: float | None, stopped: list):
+    """The lines until `limit` characters have been read (None: all of them)."""
+    read = 0
+    for ln in lines:
+        read += len(ln)
+        if limit is not None and read > limit:
+            stopped.append(read)
+            return
+        yield ln
+
+
+def _profile_one(
+    rs: dict, dists: dict, columns: list[str], dialect, max_bytes: int, count, stop_mb=None
+) -> None:
     """Count one record set's file into `count`."""
     dist, why = source_file(rs, dists)
     if dist is None:
@@ -1099,6 +1181,8 @@ def _profile_one(rs: dict, dists: dict, columns: list[str], dialect, max_bytes: 
             else raw
         )
         text_stream, where = io.TextIOWrapper(stream, encoding="utf-8", errors="replace"), url
+    stopped: list = []
+    text_stream = _capped(text_stream, stop_mb * 1e6 if stop_mb else None, stopped)
     try:
         if kind == "jsonl":
             exprs = {
@@ -1125,7 +1209,52 @@ def _profile_one(rs: dict, dists: dict, columns: list[str], dialect, max_bytes: 
     finally:
         if r is not None:
             r.close()
-    print(f"Profiled {total} rows of {where}")
+    print(
+        f"Profiled {total} rows of {where}"
+        + (f" (stopped after {stop_mb:g} MB: counts cover only the start)" if stopped else "")
+    )
+
+
+def dump(croissant: dict, which: str, member: str | None, sheet: str | None, max_bytes: int):
+    """Print a distribution (or a member of an archive distribution, or a sheet) as text."""
+    dists = distribution_index(croissant)
+    dist = dists.get(which) or next(
+        (d for d in dists.values() if which in (text(d.get("name")), d.get("contentUrl"))), None
+    )
+    if dist is None:
+        sys.exit(f"No distribution {which!r} (give its @id, name or contentUrl)")
+    if member:
+        dist = {"@id": f"{dist['@id']}!/{member}", "contentUrl": member,
+                "containedIn": {"@id": dist["@id"]}}  # fmt: skip
+    try:
+        data = file_bytes(dist, dists, max_bytes, whole=False)
+    except SystemExit as e:
+        url = str(dists[dist["containedIn"]["@id"]]["contentUrl"]) if member else ""
+        if member and not url.lower().endswith(TAR_SUFFIXES):
+            with zipfile.ZipFile(io.BytesIO(fetch_bytes(url, max_bytes, whole=True))) as z:
+                sys.exit(f"{e}. Members: {', '.join(z.namelist()[:200])}")
+        raise
+    if data[:4] == b"PK\x03\x04" and not member:
+        import openpyxl
+
+        try:
+            book = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        except (zipfile.BadZipFile, KeyError, OSError):  # a zip archive, not a spreadsheet
+            try:
+                with zipfile.ZipFile(io.BytesIO(data)) as z:
+                    names = ", ".join(z.namelist()[:200])
+            except zipfile.BadZipFile:
+                sys.exit(f"The file is cut off at --max-mb {max_bytes / 1e6:g}; raise it")
+            sys.exit(f"An archive; pick a file with --member: {names}")
+        if not sheet:
+            print("Sheets:", ", ".join(book.sheetnames))
+            return
+        for row in book[sheet].iter_rows(values_only=True):
+            print("\t".join("" if v is None else str(v) for v in row))
+        return
+    sys.stdout.write(data.decode("utf-8", errors="replace"))
+    if len(data) >= max_bytes:
+        print(f"\n(cut at --max-mb {max_bytes / 1e6:g})")
 
 
 def main() -> None:
@@ -1147,6 +1276,15 @@ def main() -> None:
             "every record set whose name matches (avoids building --record-set lists in the shell)"
         ),
     )
+    g.add_argument(
+        "--dump",
+        metavar="FILE",
+        help="print a file as text (a distribution's @id, name or URL), to read documentation "
+        "the knowledge base ships: a README in an archive (with --member), a sheet of a "
+        "spreadsheet (with --sheet; without it, the sheet names). Up to --max-mb",
+    )
+    ap.add_argument("--member", help="with --dump: the archive member to print (zip or tar)")
+    ap.add_argument("--sheet", help="with --dump: the spreadsheet sheet to print, tab-separated")
     ap.add_argument("-n", type=int, default=200, help="rows to read per file (default 200)")
     ap.add_argument(
         "--files",
@@ -1195,6 +1333,17 @@ def main() -> None:
         "(a cross-tab, e.g. which object types each code occurs with)",
     )
     ap.add_argument(
+        "--split",
+        metavar="SEP",
+        help="with --profile: split each value on SEP and count the items (list columns)",
+    )
+    ap.add_argument(
+        "--stop-mb",
+        type=float,
+        help="with --profile: stop streaming each file after this many MB of text, for files of "
+        "many GB (the counts then cover only the start of the file)",
+    )
+    ap.add_argument(
         "--url-map",
         action="append",
         metavar="OLD=NEW",
@@ -1229,6 +1378,9 @@ def main() -> None:
     REFRESH = args.refresh
 
     croissant = load_croissant(args.croissant)
+    if args.dump:
+        dump(croissant, args.dump, args.member, args.sheet, int(args.max_mb * 1e6))
+        return
     if args.record_set_name:
         candidates = [
             rs
@@ -1264,6 +1416,8 @@ def main() -> None:
             dialect,
             int(args.max_mb * 1e6),
             by=args.by,
+            split=args.split,
+            stop_mb=args.stop_mb,
             prefixes=True
             if args.prefixes == "*"
             else set(args.prefixes.split(","))
@@ -1281,8 +1435,14 @@ def main() -> None:
     )
     if not got:
         sys.exit("Could not sample:\n  " + "\n  ".join(errors))
+    if args.record_set_name:
+        print(
+            f"{len(candidates)} record set(s) match {args.record_set_name!r}; sampled {len(got)} "
+            f"of them (--files {args.files})"
+        )
     for rs, url, rows in got:
-        print(f"Sampled {len(rows)} rows of {text(rs.get('name'))} from {url}")
+        read_from = f" (read from {mapped(str(url))})" if mapped(str(url)) != str(url) else ""
+        print(f"Sampled {len(rows)} rows of {text(rs.get('name'))} from {url}{read_from}")
         wide, narrow, total = WIDTHS.get(str(url), (0, 0, 0))
         if wide or narrow:
             print(

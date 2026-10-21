@@ -53,12 +53,17 @@ GENERIC = {
     "tsv-noheader",
     "tsv-commented",
     "tsv-comment-header",
+    "tsv-commented-noheader",
 }
 # ROBOT template strings (https://robot.obolibrary.org/template): a row of these under the header is
 # not data
+# not data: keywords alone, annotations naming a property ("A rdfs:comment", "AL
+# definition@en"), logical templates with a '%' ("SC %"), and split markers
 ROBOT_CELL = re.compile(
-    r"^(ID|LABEL|TYPE|CLASS_TYPE|PROPERTY_TYPE|DOMAIN|RANGE|CHARACTERISTIC|INDIVIDUAL_TYPE|"
-    r">?(A|AT|AL|AI|AA|C|SC|EC|EQ|DC|DI|SP|EP|DP|IP|I|II|SI|DI)( |$)|SPLIT=)"
+    r"^(ID|LABEL|TYPE|CLASS_TYPE|PROPERTY_TYPE|DOMAIN|RANGE|CHARACTERISTIC|INDIVIDUAL_TYPE)$"
+    r"|^>?(A|AT|AL|AI|AA) \S+[:@]\S*"
+    r"|^>?(C|SC|EC|EQ|DC|DI|SP|EP|DP|IP|I|II|SI) .*%"
+    r"|^SPLIT="
 )
 
 
@@ -178,15 +183,18 @@ def encoding_formats(dist: dict, dialect: dict) -> list[str]:
 
 def iter_rows(lines, dialect: dict, field_names: list[str]):
     """Rows from text lines, following the dialect. Implements the CSVW properties used in
-    dialects.json: delimiter, quoteChar, doubleQuote, commentPrefix, header, headerRowCount,
-    skipRows, skipBlankRows, null. A row wider than the column names keeps the surplus cells under
-    '__extra__', unless they're all empty (a trailing delimiter, as in CTD's TSVs)."""
+    dialects.json: delimiter, quoteChar, doubleQuote (false: backslash escapes), commentPrefix,
+    header, headerRowCount, skipRows, skipBlankRows, null. A row wider than the column names keeps
+    the surplus cells under '__extra__', unless they're all empty (a trailing delimiter, as in
+    CTD's TSVs)."""
     c = dialect.get("csvw", {})
     quote = c.get("quoteChar", '"')
     fmt = {
         "delimiter": c.get("delimiter", ","),
         "quotechar": quote or '"',
         "doublequote": c.get("doubleQuote", True),
+        # CSVW: doubleQuote false means a backslash escapes the quote character (\")
+        "escapechar": None if c.get("doubleQuote", True) else "\\",
         "quoting": csv.QUOTE_NONE if quote is None else csv.QUOTE_MINIMAL,
     }
     comment = c.get("commentPrefix")
@@ -213,7 +221,8 @@ def iter_rows(lines, dialect: dict, field_names: list[str]):
             if i < skip:
                 continue
             if comment and line.startswith(comment):
-                if not started:
+                # blank and rule lines ("#", "#-----") after the names don't replace them
+                if not started and re.search(r"\w", line[len(comment) :]):
                     last_comment = line
                 continue
             if not started and header_in_comments and last_comment is not None:
@@ -232,7 +241,9 @@ def iter_rows(lines, dialect: dict, field_names: list[str]):
                 # keep the mark only
                 # if the croissant's column has it
                 names = [
-                    h.strip()
+                    h  # exact when the croissant keeps the header's spaces
+                    if h in field_names
+                    else h.strip()
                     if h.strip() in field_names or not h.strip().startswith(("#", "!"))
                     else h.strip().lstrip("#! ")
                     for h in cells
@@ -279,7 +290,10 @@ def fit(rows: list[dict], field_names: list[str], dialect: dict) -> tuple[float,
             )
     if dialect.get("csvw", {}).get("headerRowCount", 1) < 2:
         cells = [str(v).strip() for k, v in rows[0].items() if k != "__extra__" and v]
-        if cells and sum(bool(ROBOT_CELL.match(c)) for c in cells) >= 0.5 * len(cells):
+        robot = [c for c in cells if ROBOT_CELL.match(c)]
+        # and one cell that only a template has: the ID keyword, a '%' or a split marker
+        strong = any(c == "ID" or "%" in c or c.startswith("SPLIT=") for c in robot)
+        if cells and strong and len(robot) >= 0.5 * len(cells):
             return (
                 0.0,
                 "the first data row is a ROBOT template row, not data (use a robot-template "

@@ -8,6 +8,7 @@
     vocab.py class Gene                 # a Biolink class: definition, parents, id prefixes, slots
     vocab.py slot has_evidence          # a Biolink slot: definition, domain, range
     vocab.py search "evidence"          # Biolink classes and slots whose name or definition matches
+    vocab.py search RO:0002331          # ... or that are mapped to this term (GO's RO relations)
     vocab.py prefix FB                  # a CURIE prefix: Biolink's expansion, Bioregistry record
     vocab.py identify FBgn0031086 12345 # which registered prefixes a bare id could belong to
     vocab.py associations --subject ChemicalEntity --object Disease  # association classes that fit
@@ -259,6 +260,15 @@ def cmd_associations(args) -> None:
         )
 
 
+MAPPING_KEYS = (
+    "exact_mappings",
+    "close_mappings",
+    "narrow_mappings",
+    "broad_mappings",
+    "related_mappings",
+)
+
+
 def cmd_search(args) -> None:
     model = biolink()
     words = args.text.lower().replace("_", " ").split()
@@ -267,7 +277,14 @@ def cmd_search(args) -> None:
         for k, v in model[section].items():
             desc = (v.get("description") or "").lower()
             names = " ".join([k] + [a.lower() for a in (v.get("aliases") or [])])
-            if " ".join(words) == k:
+            mapped = {
+                m.lower()
+                for key in MAPPING_KEYS
+                for m in v.get(key) or []
+            }  # fmt: skip
+            if args.text.lower() in mapped:  # an RO or SIO id: the Biolink term mapped to it
+                score = 5
+            elif " ".join(words) == k:
                 score = 4
             elif all(w in names for w in words):
                 score = 3
@@ -465,7 +482,20 @@ def qudt_units() -> list[dict]:
     return units
 
 
+def ucum_division(code: str) -> str:
+    """QUDT writes UCUM codes with negative exponents: 'kg/m2' -> 'kg.m-2', 'mg/dL' -> 'mg.dL-1'."""
+    if " " in code.strip() or code.count("/") != 1:
+        return code
+    top, bottom = code.split("/")
+    parts = []
+    for u in bottom.split("."):
+        m = re.fullmatch(r"(.*?[^\d-])(\d*)", u)
+        parts.append(f"{m.group(1)}-{m.group(2) or 1}" if m else u)
+    return ".".join([top, *parts]) if top not in ("", "1") else ".".join(parts)
+
+
 def cmd_unit(args) -> None:
+    args.text = ucum_division(args.text)
     words = []
     for w in args.text.lower().split():
         # "nanomolar" is "nanomole per litre" in QUDT

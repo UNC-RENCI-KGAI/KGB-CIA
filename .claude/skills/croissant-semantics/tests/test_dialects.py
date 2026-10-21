@@ -340,3 +340,58 @@ def test_quoted_tsv_header():
         )[0]
         < 0.9
     )
+
+
+def test_a_bracketed_header_isnt_json():
+    data = b"[class]\tlabel\nVO:0000001\tvaccine\n"
+    rows = table_rows(data, {"contentUrl": "x.tsv"}, ["[class]", "label"], 10)
+    assert rows == [{"[class]": "VO:0000001", "label": "vaccine"}]
+    with pytest.raises(ValueError, match="the file is JSON"):
+        table_rows(b'[{"a": 1}]\n', {"contentUrl": "x.tsv"}, ["a"], 10)
+
+
+def test_blank_lines_inside_quoted_fields_are_kept():
+    data = b'id,note\n1,"first\n\nsecond"\n\n2,plain\n'
+    rows = table_rows(data, {"contentUrl": "x.csv"}, ["id", "note"], 10)
+    assert rows == [{"id": "1", "note": "first\n\nsecond"}, {"id": "2", "note": "plain"}]
+
+
+def test_backslash_escapes_when_doublequote_is_false():
+    d = dialects.resolve({"based_on": "csv", "csvw": {"doubleQuote": False}})
+    rows = dialects.parse(["id,q", '1,"say \\"hi\\", then go"'], d, ["id", "q"])
+    assert rows == [{"id": "1", "q": 'say "hi", then go'}]
+
+
+def test_comment_header_skips_rule_lines():
+    lines = ["#gene\tsymbol", "#-----", "#", "FBgn1\tabc"]
+    rows = dialects.parse(lines, dialects.resolve("tsv-comment-header"), ["gene", "symbol"])
+    assert rows == [{"gene": "FBgn1", "symbol": "abc"}]
+
+
+def test_ucum_division_matches_qudt_codes():
+    import vocab
+
+    assert vocab.ucum_division("kg/m2") == "kg.m-2"
+    assert vocab.ucum_division("mg/dL") == "mg.dL-1"
+    assert vocab.ucum_division("umol/L") == "umol.L-1"
+    assert vocab.ucum_division("1/s") == "s-1"
+    assert vocab.ucum_division("per second") == "per second"
+
+
+def test_data_with_short_codes_isnt_a_robot_template():
+    cols = ["grade", "class", "label"]
+    lines = ["grade,class,label", "A,I,first", "C,II,second"]
+    rows = dialects.parse(lines, dialects.resolve("csv"), cols)
+    assert dialects.fit(rows, cols, dialects.resolve("csv"))[0] == 1.0
+
+
+def test_header_names_keep_spaces_the_croissant_keeps():
+    cols = ["Genus ", "Species"]
+    rows = table_rows(
+        b"Genus ,Species\nAlphavirus,Sindbis virus\n", {"contentUrl": "x.csv"}, cols, 5
+    )
+    assert rows == [{"Genus ": "Alphavirus", "Species": "Sindbis virus"}]
+    rows = dialects.parse(
+        ["Genus ,Species", "Alphavirus,Sindbis virus"], dialects.resolve("csv"), cols
+    )
+    assert rows == [{"Genus ": "Alphavirus", "Species": "Sindbis virus"}]

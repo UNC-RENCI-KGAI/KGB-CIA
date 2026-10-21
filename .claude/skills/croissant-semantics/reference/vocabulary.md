@@ -191,7 +191,13 @@ the type only reaches option 3 or 4.
   - electronic annotation (IEA): `prediction`, `automated_agent`
   - no data (ND): `not_provided`
 
-  Map them with `derived` fields on the evidence column.
+  Map them with `derived` fields on the evidence column. GPAD files give ECO ids instead; GO's mapping between the two is
+  http://purl.obolibrary.org/obo/eco/gaf-eco-mapping.txt.
+- **RO relations.** GPAD and some other files give relations as RO ids. `vocab.py search
+  RO:0002331` finds the Biolink predicate mapped to one (`actively_involved_in`); when none is,
+  use the nearest broader predicate and say so in `basis`.
+- **Gene sets.** A set of genes (MSigDB, GMT files) relates to its members with
+  `biolink:has_gene_or_gene_product`, not `has_participant` (which needs a process).
 - **Dates.** Biolink's date slots (`update_date`, `creation_date`) take dates. A column of
   timestamps (`2024-01-31 12:00:00 UTC`) still fits the property; give it `atomic: sc:DateTime`,
   and say in `description` that values carry a time.

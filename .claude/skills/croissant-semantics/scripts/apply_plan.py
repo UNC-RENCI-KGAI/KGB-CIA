@@ -332,9 +332,12 @@ def local_terms_record_set(terms: list[dict]) -> dict:
     }
 
 
+_WARNED_UNUSED: set[str] = set()
+
+
 def match_record_sets(croissant: dict, plan: dict) -> dict[str, dict]:
     """record set @id -> the plan layout that applies to it (most specific match wins)."""
-    chosen: dict[str, tuple[tuple[int, int], dict]] = {}
+    matches: dict[str, list[tuple[tuple[int, int], dict]]] = {}
     for lay in plan.get("layouts") or []:
         m = lay.get("match") or {}
         if not m:
@@ -371,18 +374,30 @@ def match_record_sets(croissant: dict, plan: dict) -> dict[str, dict]:
                 + bool(m.get("layout") or m.get("layouts")),
                 len(as_list(m.get("has_columns"))),
             )
-            prev = chosen.get(rs["@id"])
-            if prev and prev[0] == specificity:
-                raise PlanError(
-                    f"record set {rs['@id']} matches layouts {prev[1]['id']} and {lay['id']} "
-                    "equally"
-                )
-            if not prev or specificity > prev[0]:
-                chosen[rs["@id"]] = (specificity, lay)
+            matches.setdefault(rs["@id"], []).append((specificity, lay))
             hits += 1
         if not hits:
             raise PlanError(f"layout {lay.get('id')}: matches no record set ({json.dumps(m)})")
-    return {k: v[1] for k, v in chosen.items()}
+    # decided over all matches, so a tie between two layouts that a third outranks isn't an error
+    chosen = {}
+    for rs_id, cands in matches.items():
+        best = max(sp for sp, _ in cands)
+        top = [lay for sp, lay in cands if sp == best]
+        if len(top) > 1:
+            raise PlanError(
+                f"record set {rs_id} matches layouts {', '.join(lay['id'] for lay in top)} equally"
+            )
+        chosen[rs_id] = top[0]
+    used = {lay["id"] for lay in chosen.values()}
+    for lay in plan.get("layouts") or []:
+        if lay["id"] not in used and lay["id"] not in _WARNED_UNUSED:
+            _WARNED_UNUSED.add(lay["id"])
+            print(
+                f"[apply_plan] warning: layout {lay['id']} applies to no record set: every record "
+                "set it matches is matched more specifically by another layout",
+                file=sys.stderr,
+            )
+    return chosen
 
 
 def resolve_constant(const: dict, rs: dict, layout_key: str) -> dict:
@@ -419,11 +434,11 @@ def apply_layout(rs: dict, lay: dict, enums: dict) -> None:
         for c, sp in (lay.get("columns") or {}).items()
         if c in by_name or not sp.get("optional")
     }
-    for ent in lay.get("entities") or []:
+    for ent in lay.get("entities") or []:  # an optional entity's columns are all optional
         ent["columns"] = {
             c: sp
             for c, sp in (ent.get("columns") or {}).items()
-            if c in by_name or not sp.get("optional")
+            if c in by_name or not (sp.get("optional") or ent.get("optional"))
         }
     lay["entities"] = [
         e for e in lay.get("entities") or [] if e["columns"] or not e.get("optional")

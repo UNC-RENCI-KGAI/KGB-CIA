@@ -86,7 +86,7 @@ class Findings:
         # "reason": ...}
         # (substrings); a matching warning becomes a note carrying the reason
         self.explained = explained or []
-        self.used: set[int] = set()
+        self.used: dict[int, list[str]] = {}  # explained entry -> where each warning it took was
 
     def error(self, where, msg):
         self.items.append(("error", where, msg))
@@ -98,7 +98,7 @@ class Findings:
                 and str(e.get("message", "")) in str(msg)
                 and e.get("reason")
             ):
-                self.used.add(i)
+                self.used.setdefault(i, []).append(str(where))
                 self.items.append(("note", where, f"{msg} (explained in the plan: {e['reason']})"))
                 return
         self.items.append(("warning", where, msg))
@@ -410,13 +410,24 @@ def check_code_merges(plan: dict, f: "Findings") -> None:
                 # isn't
                 continue
             codes = spec.get("codes") or {}
-            flagged = {t for d in spec.get("derived") or [] for t in as_list(d.get("true_values"))}
+            derived = spec.get("derived") or []
+
+            def told_apart(code: str, plain: list[str], derived=derived) -> bool:
+                """A derived field (negated, knowledge_level, agent_type) marks the code's rows."""
+                for d in derived:
+                    if code in as_list(d.get("true_values")):
+                        return True
+                    dc = d.get("codes") or {}
+                    if code in dc and any(dc.get(p) != dc[code] for p in plain):
+                        return True
+                return False
+
             by_target: dict[str, list[str]] = {}
             for code, target in codes.items():
                 by_target.setdefault(str(target), []).append(code)
             for target, keys in by_target.items():
-                marked = [k for k in keys if MARKERS.search(k) and k not in flagged]
                 plain = [k for k in keys if not MARKERS.search(k)]
+                marked = [k for k in keys if MARKERS.search(k) and not told_apart(k, plain)]
                 if marked and plain:
                     f.warn(
                         where,
@@ -462,7 +473,13 @@ def check_local_term_links(plan: dict, f: "Findings") -> None:
     """Code values are concepts: linking one with SKOS to a property (a Biolink slot) says the wrong
     thing."""
     specs = [spec for lay in plan.get("layouts") or [] for _, spec, _ in iter_assertions(lay)]
-    code_values = {str(v) for spec in specs for v in (spec.get("codes") or {}).values()}
+    # a local predicate (a code of a predicate column) is rightly linked to a Biolink predicate
+    code_values = {
+        str(v)
+        for spec in specs
+        if spec.get("property") != "biolink:predicate"
+        for v in (spec.get("codes") or {}).values()
+    }
     properties = {str(spec.get(k)) for spec in specs for k in ("property", "role") if spec.get(k)}
     for t in plan.get("local_terms") or []:
         if t.get("id") not in code_values:
@@ -543,6 +560,35 @@ def check_infores(plan: dict, f: "Findings", catalog: dict | None) -> None:
             )
         elif entry.get("status") != "released":
             f.warn(iid, f"infores status is {entry.get('status')!r}, not released")
+
+
+_INFORES: list = []  # the catalog, loaded once by the first data check that needs it
+
+
+def _check_infores_values(values: list[str], spec: dict, where: str, f: "Findings") -> None:
+    """infores ids in the data itself (a primary_knowledge_source column) must be in the catalog."""
+    if not _INFORES:
+        import vocab
+
+        try:
+            _INFORES.append(vocab.infores())
+        except Exception as e:  # noqa: BLE001 - reported; the values are then unchecked
+            _INFORES.append(None)
+            f.warn(where, f"couldn't load the infores catalog ({e}); infores ids unchecked")
+    catalog = _INFORES[0]
+    if catalog is None:
+        return
+    ids = {v if v.startswith("infores:") else f"infores:{v}" for v in values}
+    if spec.get("id_prefix") != "infores":
+        ids = {i for i in ids if i.startswith("infores:")}
+    unknown = sorted(i for i in ids if i not in catalog)
+    if unknown:
+        f.warn(
+            where,
+            f"{len(unknown)} of {len(ids)} infores ids in the sample aren't in the infores "
+            f"catalog: {unknown[:6]} (a knowledge base problem to report, or ids newer than the "
+            "catalog)",
+        )
 
 
 def check_units(plan: dict, f: "Findings") -> None:
@@ -846,7 +892,15 @@ def check_data(
                     "prefixes",
                 )
             if not values:
-                if spec.get("id_prefix") or spec.get("codes") or spec.get("id_form"):
+                if spec.get("codes"):
+                    f.warn(
+                        where,
+                        f"has a code table but is empty in all {len(rows)} sampled rows: "
+                        "mlcroissant's join to the code table fails on a column with no values. "
+                        "Profile it (sample.py --profile); if it's empty throughout, drop its "
+                        "codes",
+                    )
+                elif spec.get("id_prefix") or spec.get("id_form"):
                     f.note(
                         where,
                         f"empty in all {len(rows)} sampled rows (a sparse column may still have "
@@ -952,10 +1006,17 @@ def check_data(
             missing = sorted(p for p in seen if p not in declared)
             prop = str(spec.get("property") or "")
             text_column = prop.removeprefix("biolink:") in TEXT_SLOTS or bool(spec.get("codes"))
+            # only for identifier columns: a plain column's 'C5:GO:BP' or 'note: ...' isn't a CURIE
+            id_column = bool(form) or (
+                model is not None
+                and prop.startswith("biolink:")
+                and identifier_valued(model, prop[8:])
+            )
             if (
                 missing
                 and sum(seen.values()) >= 0.5 * len(values)
                 and form != "native"
+                and id_column
                 and not text_column
             ):
                 (f.error if form == "curie" else f.warn)(
@@ -978,6 +1039,10 @@ def check_data(
                         f"{list(dict.fromkeys(values))[:3]}); add id_prefix or codes, or use "
                         "another property",
                     )
+            if spec.get("id_prefix") == "infores" or (
+                form in ("curie", "mixed") and any(v.startswith("infores:") for v in values)
+            ):
+                _check_infores_values(values, spec, where, f)
             if spec.get("codes"):
                 unmapped = Counter(v for v in values if v not in spec["codes"])
                 if unmapped:
@@ -995,6 +1060,43 @@ def check_data(
                 lay["id"],
                 f"sampled {len(rows)} rows; ids, prefixes and codes fit for: {', '.join(passed)}",
             )
+
+
+def reduced_croissant(out: dict) -> dict:
+    """The croissant cut down to one record set per layout (same columns), with the record sets,
+    code tables and files those reference: a croissant too large for mlcroissant validate to finish
+    (thousands of record sets) is checked on a representative of each kind."""
+    sets = {rs["@id"]: rs for rs in out.get("recordSet") or []}
+    dists = {d["@id"]: d for d in out.get("distribution") or [] if d.get("@id")}
+    owner = {}  # field @id (subfields too) -> its record set, since references name fields
+
+    def own(fields, rs_id):
+        for fld in fields or []:
+            if fld.get("@id"):
+                owner[fld["@id"]] = rs_id
+            own(fld.get("subField"), rs_id)
+
+    for rs in out.get("recordSet") or []:
+        own(rs.get("field"), rs["@id"])
+    keep, seen = [], set()
+    for rs in out.get("recordSet") or []:
+        key = (layout_id(column_names(rs)), tuple(as_list(rs.get("dataType"))))
+        if key not in seen:
+            seen.add(key)
+            keep.append(rs["@id"])
+    todo, kept = list(keep), set()
+    while todo:
+        i = todo.pop()
+        i = owner.get(i, i)
+        if i in kept or (i not in sets and i not in dists):
+            continue
+        kept.add(i)
+        todo += _referenced_ids(sets.get(i) or dists.get(i))
+    return {
+        **out,
+        "recordSet": [rs for rs in out.get("recordSet") or [] if rs["@id"] in kept],
+        "distribution": [d for d in out.get("distribution") or [] if d.get("@id") in kept],
+    }
 
 
 def plain_json(path: str, tmpdir: str) -> str:
@@ -1138,7 +1240,9 @@ def _load(path: str, record_set_id: str, timeout: int) -> tuple[bool, str]:
         if re.search(r"(Error|Exception)\b", ln) and "WarningException" not in ln
     ]
     LOAD_LOG.append(f"=== {path} {record_set_id}\n{p.stderr[-6000:]}")
-    return False, " | ".join(dict.fromkeys(lines[-3:])) or (
+    # the root exception first: mlcroissant wraps it in a GenerationError whose text varies
+    root = [ln for ln in lines if re.match(r"^[\w.]+(Error|Exception): ", ln) and not _wrapper(ln)]
+    return False, " | ".join(dict.fromkeys(root[:1] + lines[-3:])) or (
         p.stderr.strip().splitlines()[-1:] or [""]
     )[0]
 
@@ -1155,8 +1259,24 @@ def _hint(msg: str) -> str:
     return ""
 
 
+def _wrapper(line: str) -> bool:
+    return "GenerationError" in line
+
+
 def _gist(msg: str) -> str:
-    """An error message without temp paths and ids, to tell whether two failures are the same."""
+    """An error message without temp paths and ids, to tell whether two failures are the same: its
+    root exception when there is one, since mlcroissant's wrapper says 'occured' or 'occurred',
+    'sequential' or 'streaming', depending on how the records were read."""
+    roots = [
+        part
+        for part in msg.split(" | ")
+        if re.match(r"^[\w.]+(Error|Exception): ", part) and not _wrapper(part)
+    ]
+    if roots:
+        msg = roots[0]
+    else:
+        msg = re.sub(r"occurr?ed during the \w+ generation", "occurred during generation", msg)
+        msg = re.sub(r"recordset_\w+|field_\w+", "<id>", msg)
     msg = re.sub(r"/\S*/(new|original)_\S*", "<file>", msg)
     msg = re.sub(r"\b(new|original)_", "", msg)
     # the same failure can name a different column or node first (grouping reorders fields): compare
@@ -1420,6 +1540,7 @@ def load_records(
         for key in list(groups):
             if groups[key] and len(chosen) < max_layouts:
                 chosen.append(groups[key].pop(0))
+    refused: dict[str, int] = {}  # hosts that refused us (login, bot check) -> record sets skipped
     for n, (key, (_, first)) in enumerate(chosen, 1):
         lay_id = assignments[first["@id"]]["id"]
         progress(f"loading records {n}/{len(chosen)}: {lay_id}")
@@ -1430,6 +1551,20 @@ def load_records(
         for attempt, rs in enumerate(tries):
             where = f"{lay_id} records ({text(rs.get('name'))})"
             src, _ = smp.source_file(rs, dists)
+            from urllib.parse import urlparse
+
+            archive = next(
+                (
+                    dists.get(p_["@id"], {})
+                    for p_ in as_list((src or {}).get("containedIn"))
+                    if isinstance(p_, dict)
+                ),
+                None,
+            )
+            host = urlparse(str((archive or src or {}).get("contentUrl") or "")).netloc
+            if host in refused:
+                refused[host] += 1
+                break
             # JSON must be read whole; JSON Lines and tables can be cut to their first lines
             whole = smp.file_kind(src or {}, rs.get("field") or []) == "json"
             files = {}
@@ -1466,8 +1601,12 @@ def load_records(
                             f"{d.get('contentUrl')} must be read whole and is over {whole_mb} MB"
                         )
                     files[i] = data
-            except smp.BotCheck as e:
-                f.warn(where, f"couldn't load records: {e}")
+            except (smp.BotCheck, smp.AccessDenied) as e:
+                # the host refuses us: stop asking it for anything else this run
+                refused[host] = refused.get(host, 0)
+                f.warn(
+                    where, f"couldn't load records: {e}. No more requests go to {host} this run."
+                )
                 continue
             except (
                 Exception,
@@ -1545,6 +1684,13 @@ def load_records(
             PREEXISTING.setdefault(key, []).append(where)
             if attempt + 1 == len(tries):
                 break
+    for host, n in refused.items():
+        if n:
+            f.note(
+                "records",
+                f"{n} more record set(s) on {host} weren't tried: "
+                "the host refused earlier requests",
+            )
     for msg, wheres in PREEXISTING.items():
         f.note(
             "records",
@@ -1643,6 +1789,13 @@ def write_report(args, out: dict, original: dict, f: "Findings", stage_note: str
                 f.note(
                     "plan explained", f"matched no warning (now fixed, or the text changed?): {e}"
                 )
+    for i, wheres in f.used.items():  # a loose entry can hide a new warning at another place
+        if len(wheres) > 1:
+            f.note(
+                "plan explained",
+                f"{f.explained[i]} matched {len(wheres)} warnings, at "
+                f"{'; '.join(sorted(set(wheres)))[:400]}: check each is the one meant",
+            )
     cov = coverage(out)
     before = coverage(original)
 
@@ -1739,6 +1892,13 @@ def main() -> None:
     )
     ap.add_argument("--validate-timeout", type=int, default=3600)
     ap.add_argument(
+        "--validate-reduced",
+        action="store_true",
+        help="validate one record set per layout (with the record sets and files it references) "
+        "instead of the whole croissant, for croissants of thousands of record sets that the "
+        "validator can't finish; the report says so",
+    )
+    ap.add_argument(
         "--answers",
         help="maintainer answers (default: semantics_answers.json next to the original "
         "croissant, if any); merged into the plan as apply_plan.py does",
@@ -1773,6 +1933,11 @@ def main() -> None:
         # the same merge apply_plan.py does, so the checks see the plan that was applied
         plan, answer_lines = merge_answers(
             plan, original, json.loads(apath.read_text()).get("answers") or []
+        )
+    if not Path(args.out).exists():
+        sys.exit(
+            f"No croissant at {args.out}: write it with apply_plan.py first (the same plan, "
+            "original and answers), then check it"
         )
     out = load_croissant(args.out)
     f = Findings(plan.get("explained"))
@@ -1838,8 +2003,23 @@ def main() -> None:
             out_plain = plain_json(args.out, tmp)
             if not args.no_validate:
                 stage = "validation"
-                progress("running mlcroissant validate (minutes for large croissants)")
+                if args.validate_reduced:
+                    small = reduced_croissant(out)
+                    out_plain = str(Path(tmp) / "reduced.json")
+                    Path(out_plain).write_text(json.dumps(small))
+                    progress(
+                        f"running mlcroissant validate on {len(small['recordSet'])} of "
+                        f"{len(out.get('recordSet') or [])} record sets (--validate-reduced)"
+                    )
+                else:
+                    progress("running mlcroissant validate (minutes for large croissants)")
                 run_validate(out_plain, f, args.validate_timeout)
+                if args.validate_reduced:
+                    VALIDATION["result"] += (
+                        f" on a reduced croissant ({len(small['recordSet'])} of "
+                        f"{len(out.get('recordSet') or [])} record sets: one per layout and row "
+                        "type, with what they reference)"
+                    )
             if args.load_records:
                 stage = "record loading"
                 load_records(

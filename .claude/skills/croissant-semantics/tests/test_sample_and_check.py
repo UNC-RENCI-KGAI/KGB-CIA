@@ -471,7 +471,7 @@ def test_explained_warnings_become_notes():
     f.warn("other", "something else")
     levels = [lv for lv, _, _ in f.items]
     assert levels == ["note", "warning"] and "only gene rows" in f.items[0][2]
-    assert f.used == {0}
+    assert set(f.used) == {0}
 
 
 def test_same_failure_naming_different_columns_counts_as_same():
@@ -541,3 +541,237 @@ def test_round7_check_fixes():
     with pytest.raises(check.subprocess.TimeoutExpired):
         check.run_bounded(["sleep", "30"], 3)
     assert time.time() - t < 10
+
+
+def test_sampling_stops_at_the_first_refusal():
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    import sample
+
+    hits = []
+
+    class Refuse(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server's name
+            hits.append(self.path)
+            self.send_response(401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Refuse)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    croissant = {
+        "distribution": [{"@id": f"f{i}", "contentUrl": f"{base}/{i}.csv"} for i in range(5)],
+        "recordSet": [
+            {
+                "@id": f"rs{i}",
+                "name": f"rs{i}",
+                "field": [
+                    {
+                        "name": "a",
+                        "source": {"fileObject": {"@id": f"f{i}"}, "extract": {"column": "a"}},
+                    }
+                ],
+            }
+            for i in range(5)
+        ],
+    }
+    sample.USE_CACHE = False
+    try:
+        got, errors = sample.sample_rows(croissant, croissant["recordSet"], 5, 10_000, k=3)
+    finally:
+        sample.USE_CACHE = True
+        server.shutdown()
+    assert not got and len(hits) == 1 and "login or key" in errors[0]
+
+
+def test_a_bot_challenge_holds_the_host_across_runs(tmp_path):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    import pytest
+    import sample
+
+    hits = []
+
+    class Challenge(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server's name
+            hits.append(self.path)
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Challenge)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    cache_dir = sample.CACHE_DIR
+    sample.CACHE_DIR = tmp_path / "downloads"
+    try:
+        with pytest.raises(sample.BotCheck, match="bot challenge"):
+            sample.fetch_bytes(f"{base}/a.tsv", 1000, whole=False)
+        # a later run (the hold is on disk) and another file: refused without a request
+        sample._last_request.clear()
+        with pytest.raises(sample.BotCheck, match="no requests go there"):
+            sample.fetch_bytes(f"{base}/b.tsv", 1000, whole=False)
+        assert hits == ["/a.tsv"]
+    finally:
+        sample.CACHE_DIR = cache_dir
+        server.shutdown()
+
+
+def test_load_errors_compare_by_root_exception():
+    from check import _gist
+
+    new = (
+        "ValueError: invalid literal for int() with base 10: '21966275.0' | "
+        "mlcroissant._src.core.issues.GenerationError: An error occured during the sequential "
+        "generation of the dataset, more specifically during the operation ReadFields(rs1)"
+    )
+    same = (
+        "ValueError: invalid literal for int() with base 10: '21966275.0' | "
+        "mlcroissant._src.core.issues.GenerationError: An error occurred during the streaming "
+        "generation of the dataset, more specifically during the operation ReadFields(rs1)"
+    )
+    other = "KeyError: 'pmid' | mlcroissant._src.core.issues.GenerationError: An error occured"
+    assert _gist(new) == _gist(same)
+    assert _gist(new) != _gist(other)
+    wrapped_a = "mlcroissant._src.core.issues.GenerationError: An error occured during the sequential generation"  # noqa: E501
+    wrapped_b = "mlcroissant._src.core.issues.GenerationError: An error occurred during the streaming generation"  # noqa: E501
+    assert _gist(wrapped_a) == _gist(wrapped_b)
+
+
+def test_code_merge_warning_accepts_a_knowledge_level_field():
+    from check import Findings, check_code_merges
+
+    def plan(kl_codes):
+        return {
+            "layouts": [
+                {
+                    "id": "dis",
+                    "columns": {
+                        "AssociationType": {
+                            "property": "biolink:predicate",
+                            "codes": {
+                                "is_implicated_in": "biolink:contributes_to",
+                                "implicated_via_orthology": "biolink:contributes_to",
+                            },
+                            "derived": [
+                                {
+                                    "name": "knowledge_level",
+                                    "property": "biolink:knowledge_level",
+                                    "codes": kl_codes,
+                                }
+                            ],
+                        }
+                    },
+                }
+            ]
+        }
+
+    told = {
+        "implicated_via_orthology": "biolink:prediction",
+        "is_implicated_in": "biolink:knowledge_assertion",
+    }
+    f = Findings()
+    check_code_merges(plan(told), f)
+    assert f.count("warning") == 0
+    same = dict.fromkeys(told, "biolink:knowledge_assertion")
+    f = Findings()
+    check_code_merges(plan(same), f)
+    assert f.count("warning") == 1
+
+
+def test_profile_splits_lists_and_stops_early(tmp_path, capsys):
+    import sample
+
+    path = tmp_path / "sets.tsv"
+    path.write_text("set\tgenes\n" + "".join(f"s{i}\tA|B|C\n" for i in range(1000)))
+    croissant = {
+        "distribution": [{"@id": "f", "contentUrl": f"file://{path}"}],
+        "recordSet": [
+            {
+                "@id": "rs",
+                "field": [
+                    {"name": n, "source": {"fileObject": {"@id": "f"}, "extract": {"column": n}}}
+                    for n in ("set", "genes")
+                ],
+            }
+        ],
+    }
+    sample.profile(croissant, croissant["recordSet"], ["genes"], 5, None, 10**6, split="|")
+    out = capsys.readouterr().out
+    assert "Profiled 1000 rows" in out and "1000  'B'" in out
+    sample.profile(croissant, croissant["recordSet"], ["genes"], 5, None, 10**6, stop_mb=0.001)
+    out = capsys.readouterr().out
+    assert "stopped after 0.001 MB" in out and "Profiled 1000 rows" not in out
+
+
+def test_reduced_croissant_keeps_one_record_set_per_layout_and_its_references():
+    from check import reduced_croissant
+
+    def rs(i, cols, file, refs=None):
+        fields = [
+            {"@id": f"{i}/{c}", "name": c, "source": {"fileObject": {"@id": file}}} for c in cols
+        ]
+        if refs:
+            fields[0]["references"] = {"field": {"@id": refs}}
+        return {"@id": i, "field": fields}
+
+    out = {
+        "distribution": [{"@id": f"f{i}", "contentUrl": f"http://x/{i}.tsv"} for i in range(4)]
+        + [{"@id": "codes_file", "contentUrl": "http://x/c.csv"}],
+        "recordSet": [
+            rs("a1", ["gene", "disease"], "f0", refs="codes/key"),
+            rs("a2", ["gene", "disease"], "f1", refs="codes/key"),
+            rs("a3", ["gene", "disease"], "f2", refs="codes/key"),
+            rs("b1", ["chem"], "f3"),
+            rs("codes", ["key", "value"], "codes_file"),
+            rs("codes2", ["key", "value"], "codes_file"),
+        ],
+    }
+    out["recordSet"][3] = rs("b1", ["chem"], "f3", refs="codes2/key")
+    small = reduced_croissant(out)
+    # codes2 has the same columns as codes, but b1 references it
+    assert [r["@id"] for r in small["recordSet"]] == ["a1", "b1", "codes", "codes2"]
+    assert [d["@id"] for d in small["distribution"]] == ["f0", "f3", "codes_file"]
+
+
+def test_dump_prints_archive_members_and_sheets(tmp_path, capsys):
+    import zipfile as zf
+
+    import openpyxl
+    import pytest
+    import sample
+
+    with zf.ZipFile(tmp_path / "docs.zip", "w") as z:
+        z.writestr("release/README.txt", "Column 'Genus ' is the genus.\n")
+    book = openpyxl.Workbook()
+    book.active.title = "VMR"
+    book.active.append(["Genus ", "Species"])
+    book.active.append(["Alphavirus", "Sindbis virus"])
+    book.save(tmp_path / "vmr.xlsx")
+    croissant = {
+        "distribution": [
+            {"@id": "docs", "contentUrl": "http://kb.test/docs.zip"},
+            {"@id": "vmr", "contentUrl": "http://kb.test/vmr.xlsx"},
+        ]
+    }
+    sample.URL_MAP.append(("http://kb.test/", f"file://{tmp_path}/"))
+    try:
+        sample.dump(croissant, "docs", "README.txt", None, 10**6)
+        assert "is the genus" in capsys.readouterr().out
+        with pytest.raises(SystemExit, match="release/README.txt"):
+            sample.dump(croissant, "docs", None, None, 10**6)
+        sample.dump(croissant, "vmr", None, None, 10**6)
+        assert "Sheets: VMR" in capsys.readouterr().out
+        sample.dump(croissant, "vmr", None, "VMR", 10**6)
+        assert "Alphavirus\tSindbis virus" in capsys.readouterr().out
+    finally:
+        sample.URL_MAP.clear()

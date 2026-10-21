@@ -28,12 +28,14 @@ the spec URL and the EDAM format where there is one.
 | `csv`, `tsv` | Plain tables with a header row |
 | `vcf-4` | VCF 4.x: `##` meta lines, `#CHROM …` header row |
 | `mitab-2.7` | PSI-MI TAB 2.7: `#`-prefixed header row, `-` for no value |
+| `mitab-2.7-comment-header` | PSI-MI TAB 2.7 after a `#` comment block whose last line names the columns (FlyBase, Alliance) |
 | `gaf-2.2`, `gpad-2.0`, `gpi-2.0` | GO annotation files: `!` header lines, no column-name row |
 | `ctd-csv`, `ctd-tsv` | CTD reports: `#` comment block, names on a commented `# Fields:` line, no column-name row |
 | `flybase-tsv` | FlyBase precomputed files: `##` comment lines, a header row starting with `#` |
 | `csv-noheader`, `tsv-noheader` | Plain tables with no header row (UniProt idmapping files) |
 | `tsv-commented` | A `#` comment block (release, date), then an ordinary header row (Alliance downloads) |
 | `tsv-comment-header` | A `#` comment block whose last line names the columns (Alliance MITAB) |
+| `tsv-commented-noheader` | A `#` comment block, then rows with no header row: columns in the croissant's field order |
 | `sssom-tsv` | SSSOM mapping sets: a `#`-prefixed YAML block, then a header row |
 | `robot-template-tsv`, `robot-template-csv` | ROBOT templates: a header row, then a template row (`ID`, `LABEL`, `A rdfs:comment`, …), then data |
 | `gmt` | Gene Matrix Transposed (GSEA, MSigDB, Enrichr): name, description, then any number of genes; no header row |
@@ -78,7 +80,10 @@ Two things the CSVW properties can't say, which named dialects handle:
   read as the header; the mark is kept when the croissant's column name has it and dropped when
   it doesn't.
 - **A header in the comment block**: `"header_in_comments": true` (written as
-  `rcv:headerInComments`) reads the last comment line before the data as the header row.
+  `rcv:headerInComments`) reads the last comment line before the data as the header row. Blank
+  comment lines and rules (`#`, `#-----`) after it don't count.
+- **Backslash escapes**: `"doubleQuote": false` means a backslash escapes the quote character
+  (`\"`), as CSVW defines it (PhenX exports).
 - **A last column that takes the rest of the row** (GMT's genes): `"rest_column": true` in the
   dialect, written as `rcv:restColumn` (the column's name) on the file. The column should be
   `isArray` in the croissant.
