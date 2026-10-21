@@ -8,8 +8,8 @@ Adds what the data **means** to an existing Croissant file for a biomedical know
 - how to read each file (a dialect: comment lines, header row, delimiter).
 
 It uses only Croissant 1.1 constructs plus a few conventions of our own, and checks the result
-against the real data. RoboCroissant (the rest of `agents/metadata/`) describes the files and
-columns; this adds the semantics on top.
+against the real data. RoboCroissant (the metadata agent, `agents/metadata/`) describes the files
+and columns; this adds the semantics on top.
 
 [`DESIGN.md`](DESIGN.md) explains the approach and the conventions. [`SKILL.md`](SKILL.md) is
 the workflow an agent follows.
@@ -49,16 +49,16 @@ scripts/check.py path/to/croissant.json OUT/semantics_plan.json OUT/croissant.se
 
 Every script has `--help`. Downloads are cached in `~/.cache/croissant-semantics/`.
 
-## Use it as a Claude Code skill
+## Use it as a skill
 
-Link this directory into a project's (or your own) skills directory:
+It lives in the repository's project-level skills directory (`.claude/skills/`), so Claude Code
+started in this repository finds it, and Pi does once its configuration includes that path. Ask
+the agent to add semantics to a croissant; it loads `SKILL.md` and the files in `reference/`.
+To use it elsewhere, link this directory into that project's or your own skills directory:
 
 ```bash
 ln -s "$PWD" ~/.claude/skills/croissant-semantics
 ```
-
-Then ask Claude Code to add semantics to a croissant; it loads `SKILL.md` and the files in
-`reference/`.
 
 ## Tests
 
