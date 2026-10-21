@@ -1,0 +1,146 @@
+{
+  "_about": "Named file dialects: how to read a table file. 'csvw' holds W3C CSV on the Web dialect properties (https://www.w3.org/TR/tabular-metadata/#dialect-descriptions). 'columns' is 'header' (the first non-comment row names the columns) or 'field_order' (no header row; columns are the croissant's fields in order). 'rest_column': true means the last column takes all remaining cells of a row as a list (GMT). 'header_in_comments': true means the last comment line before the data names the columns. 'spec' is the format's published definition, when there is one.",
+  "csv": {
+    "description": "Comma-separated values with a header row.",
+    "media_type": "text/csv",
+    "spec": "https://www.rfc-editor.org/rfc/rfc4180",
+    "edam": "http://edamontology.org/format_3752",
+    "csvw": {"delimiter": ",", "header": true, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "header"
+  },
+  "tsv": {
+    "description": "Tab-separated values with a header row.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
+    "edam": "http://edamontology.org/format_3475",
+    "csvw": {"delimiter": "\t", "header": true, "quoteChar": null},
+    "columns": "header"
+  },
+  "csv-noheader": {
+    "description": "Comma-separated values with no header row: columns are the croissant's fields in order.",
+    "media_type": "text/csv",
+    "spec": "https://www.rfc-editor.org/rfc/rfc4180",
+    "edam": "http://edamontology.org/format_3752",
+    "csvw": {"delimiter": ",", "header": false, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "field_order"
+  },
+  "tsv-noheader": {
+    "description": "Tab-separated values with no header row (UniProt idmapping files): columns are the croissant's fields in order.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
+    "edam": "http://edamontology.org/format_3475",
+    "csvw": {"delimiter": "\t", "header": false, "quoteChar": null},
+    "columns": "field_order"
+  },
+  "tsv-quoted": {
+    "description": "Tab-separated values with a header row, where fields (and names) may be double-quoted.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
+    "edam": "http://edamontology.org/format_3475",
+    "csvw": {"delimiter": "\t", "header": true, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "header"
+  },
+  "tsv-commented": {
+    "description": "Tab-separated values after a '#' comment block (release, date, notes), then an ordinary header row (Alliance downloads).",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
+    "edam": "http://edamontology.org/format_3475",
+    "csvw": {"delimiter": "\t", "commentPrefix": "#", "header": true, "quoteChar": null},
+    "columns": "header"
+  },
+  "tsv-comment-header": {
+    "description": "Tab-separated values after a '#' comment block whose last line names the columns ('#ID(s) interactor A\t...', Alliance MITAB files).",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
+    "edam": "http://edamontology.org/format_3475",
+    "csvw": {"delimiter": "\t", "commentPrefix": "#", "header": true, "quoteChar": null},
+    "columns": "header",
+    "header_in_comments": true
+  },
+  "vcf-4": {
+    "description": "Variant Call Format 4.x: '##' meta-information lines, then a '#CHROM POS ID REF ALT QUAL FILTER INFO ...' header row, then tab-separated records.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://samtools.github.io/hts-specs/VCFv4.3.pdf",
+    "edam": "http://edamontology.org/format_3016",
+    "csvw": {"delimiter": "\t", "commentPrefix": "##", "header": true, "quoteChar": null},
+    "columns": "header"
+  },
+  "mitab-2.7": {
+    "description": "PSI-MI TAB 2.7 molecular interactions: a tab-separated header row whose first name starts with '#' ('#ID(s) interactor A'), then records. '-' means no value.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://psicquic.github.io/MITAB27Format.html",
+    "csvw": {"delimiter": "\t", "header": true, "quoteChar": null, "null": "-"},
+    "columns": "header"
+  },
+  "gaf-2.2": {
+    "description": "GO Gene Association File 2.2: '!' header lines, no column-name row, 17 tab-separated columns in a fixed order.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://geneontology.org/docs/go-annotation-file-gaf-format-2.2/",
+    "csvw": {"delimiter": "\t", "commentPrefix": "!", "header": false, "quoteChar": null},
+    "columns": "field_order"
+  },
+  "gpad-2.0": {
+    "description": "GO Gene Product Association Data 2.0: '!' header lines, no column-name row, 12 tab-separated columns in a fixed order.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://github.com/geneontology/go-annotation/blob/master/specs/gpad-gpi-2-0.md",
+    "csvw": {"delimiter": "\t", "commentPrefix": "!", "header": false, "quoteChar": null},
+    "columns": "field_order"
+  },
+  "gpi-2.0": {
+    "description": "GO Gene Product Information 2.0: '!' header lines, no column-name row, 11 tab-separated columns in a fixed order.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://geneontology.org/docs/gene-product-information-gpi-format-2.0/",
+    "csvw": {"delimiter": "\t", "commentPrefix": "!", "header": false, "quoteChar": null},
+    "columns": "field_order"
+  },
+  "gmt": {
+    "description": "Gene Matrix Transposed (GSEA, MSigDB, Enrichr): one gene set per row, no header row; tab-separated name, description, then any number of genes. The last column takes all remaining cells as a list.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://docs.gsea-msigdb.org/#GSEA/Data_Formats/",
+    "csvw": {"delimiter": "\t", "header": false, "quoteChar": null},
+    "columns": "field_order",
+    "rest_column": true
+  },
+  "flybase-tsv": {
+    "description": "FlyBase precomputed file: '##' comment lines (title, date, notes), a header row starting with '#', tab-separated records, and a '## Finished' line at the end.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://wiki.flybase.org/wiki/FlyBase:Downloads_Overview",
+    "csvw": {"delimiter": "\t", "commentPrefix": "##", "header": true, "quoteChar": null},
+    "columns": "header"
+  },
+  "sssom-tsv": {
+    "description": "SSSOM mapping set (TSV): a '#'-prefixed YAML metadata block (curie_map, license, ...), then a header row (subject_id, predicate_id, object_id, mapping_justification, ...).",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://mapping-commons.github.io/sssom/dev/spec-formats-tsv/",
+    "csvw": {"delimiter": "\t", "commentPrefix": "#", "header": true, "quoteChar": null},
+    "columns": "header"
+  },
+  "robot-template-tsv": {
+    "description": "ROBOT template (TSV): a header row, then a template row of ROBOT strings (ID, LABEL, A rdfs:comment, SC %, ...) that says what each column means, then data rows.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://robot.obolibrary.org/template",
+    "csvw": {"delimiter": "\t", "header": true, "headerRowCount": 2, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "header"
+  },
+  "robot-template-csv": {
+    "description": "ROBOT template (CSV): a header row, then a template row of ROBOT strings that says what each column means, then data rows.",
+    "media_type": "text/csv",
+    "spec": "https://robot.obolibrary.org/template",
+    "csvw": {"delimiter": ",", "header": true, "headerRowCount": 2, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "header"
+  },
+  "ctd-csv": {
+    "description": "CTD comma-separated report: a '#' comment block (licence, then '# Fields:' and the column names on a commented line), no column-name row.",
+    "media_type": "text/csv",
+    "spec": "https://ctdbase.org/downloads/",
+    "csvw": {"delimiter": ",", "commentPrefix": "#", "header": false, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "field_order"
+  },
+  "ctd-tsv": {
+    "description": "CTD tab-separated report: a '#' comment block (licence, then '# Fields:' and the column names on a commented line), no column-name row.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://ctdbase.org/downloads/",
+    "csvw": {"delimiter": "\t", "commentPrefix": "#", "header": false, "quoteChar": null},
+    "columns": "field_order"
+  }
+}

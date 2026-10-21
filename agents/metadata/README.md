@@ -4,6 +4,12 @@
 
 Describe each source file and its columns as Croissant metadata. Purely descriptive; builds no graph.
 
+## Semantics
+
+[`semantics/`](semantics/) adds what the data means (Biolink classes and associations,
+identifier prefixes, units, code values, file dialects) to the Croissant files RoboCroissant
+produces, as a Claude Code skill with checking scripts. See its README.
+
 ## Run it alone
 
 ```bash
