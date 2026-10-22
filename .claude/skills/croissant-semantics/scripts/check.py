@@ -1114,11 +1114,28 @@ def plain_json(path: str, tmpdir: str) -> str:
     return str(target)
 
 
+MEMORY_CAP_MB = 4000  # check.py --memory-gb: per validator or record-load subprocess
+
+
+class MemoryExceeded(Exception):
+    """A subprocess's memory passed MEMORY_CAP_MB, so it was killed."""
+
+
+def _group_rss_mb(pgid: int) -> float:
+    """Resident memory of every process in the group (uv and the python it starts), in MB."""
+    out = subprocess.run(
+        ["ps", "-A", "-o", "pgid=,rss="], capture_output=True, text=True, check=True
+    ).stdout
+    kb = sum(int(rss) for g, rss in (ln.split() for ln in out.splitlines()) if int(g) == pgid)
+    return kb / 1024
+
+
 def run_bounded(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
-    """Run cmd in its own process group and kill the whole group on timeout. subprocess.run's
-    timeout kills only `uv`; the python it started keeps the output pipes open, so the call would
-    wait for it indefinitely. The timeout is wall-clock time: a monotonic clock stops while the
-    machine sleeps, and a 3-hour timeout then took 10 hours."""
+    """Run cmd in its own process group and kill the whole group on timeout or when its memory
+    passes MEMORY_CAP_MB. subprocess.run's timeout kills only `uv`; the python it started keeps the
+    output pipes open, so the call would wait for it indefinitely. The timeout is wall-clock time: a
+    monotonic clock stops while the machine sleeps, and a 3-hour timeout then took 10 hours. The
+    memory cap exists because two record loads once grew to 45 and 21 GB and hung the machine."""
     import os
     import signal
     import tempfile
@@ -1133,7 +1150,11 @@ def run_bounded(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
                     raise subprocess.TimeoutExpired(cmd, timeout)
-                time.sleep(2)
+                if (mb := _group_rss_mb(proc.pid)) > MEMORY_CAP_MB:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait()
+                    raise MemoryExceeded(f"used {mb / 1000:.1f} GB, over --memory-gb")
+                time.sleep(0.5)
         except KeyboardInterrupt:
             os.killpg(proc.pid, signal.SIGKILL)
             raise
@@ -1192,6 +1213,14 @@ def _run_validate(path: str, f: Findings, timeout: int) -> None:
         )
         VALIDATION["result"] = f"timed out after {timeout}s (unverified)"
         return
+    except MemoryExceeded as e:
+        f.warn(
+            "croissant",
+            f"mlcroissant validate {e} and was stopped, so the croissant's structure is "
+            "unverified; try --validate-reduced",
+        )
+        VALIDATION["result"] = f"stopped: {e} (unverified)"
+        return
     out = p.stdout + p.stderr
     if p.returncode != 0 or re.search(r"Found the following \d+ error", out):
         f.error("croissant", "mlcroissant validate failed:\n" + "\n".join(out.splitlines()[-25:]))
@@ -1232,6 +1261,8 @@ def _load(path: str, record_set_id: str, timeout: int) -> tuple[bool, str]:
         p = run_bounded(cmd, timeout)
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
+    except MemoryExceeded as e:
+        return False, f"mlcroissant {e} and was stopped"
     if p.returncode == 0:
         return True, (p.stdout.strip().splitlines() or [""])[0]
     lines = [
@@ -1640,6 +1671,14 @@ def load_records(
                 else:
                     f.note(where, f"loaded (from the first {head_mb:g} MB): {msg[:300]}")
                 break
+            if msg.endswith("was stopped"):  # loading the original would only do the same
+                f.warn(
+                    where,
+                    f"record loading {msg.removeprefix('mlcroissant ')}; records weren't tested "
+                    "for this layout. mlcroissant may be reading far more than the excerpt (a "
+                    "whole archive, or a file with no line breaks)",
+                )
+                break
             old_path = _excerpt_croissant(original, rs["@id"], files, tmpdir, "original")
             ok_old, old_msg = _load(old_path, rs["@id"], timeout)
             if ok_old:
@@ -1892,6 +1931,13 @@ def main() -> None:
     )
     ap.add_argument("--validate-timeout", type=int, default=3600)
     ap.add_argument(
+        "--memory-gb",
+        type=float,
+        default=4.0,
+        help="stop a validator or record-load subprocess whose memory passes this (default 4); "
+        "agents often run in parallel, so keep it well under the machine's memory",
+    )
+    ap.add_argument(
         "--validate-reduced",
         action="store_true",
         help="validate one record set per layout (with the record sets and files it references) "
@@ -1921,6 +1967,8 @@ def main() -> None:
     args = ap.parse_args()
     import sample as smp
 
+    global MEMORY_CAP_MB
+    MEMORY_CAP_MB = args.memory_gb * 1000
     smp.parse_url_maps(args.url_map)
 
     try:

@@ -200,6 +200,13 @@ dependencies). Use `--help` on any of them.
    from `check_report.findings.json`) and in `notes.md`. `apply_plan.py` also warns about plan
    keys it doesn't know.
 
+   The validator and each record load run with a memory cap (`--memory-gb`, default 4), since
+   agents run in parallel. A load stopped by the cap is a warning; the usual cause is a croissant
+   that reads a table as several `extract: {fileProperty: "lines"}` fields with regex transforms:
+   mlcroissant combines those per line pair, so its memory grows with the square of the lines
+   (2,000 lines take 1 GB). That's a generator problem to report; the sampled-data checks are the
+   evidence for those layouts.
+
    For a croissant too large for the validator to finish (thousands of record sets; it can
    take many hours), `--validate-reduced` validates one record set per layout and row type,
    with the record sets and files they reference; the report says it was reduced.

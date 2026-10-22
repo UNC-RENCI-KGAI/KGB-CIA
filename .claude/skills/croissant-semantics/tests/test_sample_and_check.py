@@ -775,3 +775,17 @@ def test_dump_prints_archive_members_and_sheets(tmp_path, capsys):
         assert "Alphavirus\tSindbis virus" in capsys.readouterr().out
     finally:
         sample.URL_MAP.clear()
+
+
+def test_run_bounded_stops_a_process_over_the_memory_cap(monkeypatch):
+    import sys
+
+    import check
+    import pytest
+
+    monkeypatch.setattr(check, "MEMORY_CAP_MB", 200)
+    grow = "b = []\nwhile True:\n    b.append(bytearray(50_000_000))\n"
+    with pytest.raises(check.MemoryExceeded, match="over --memory-gb"):
+        check.run_bounded([sys.executable, "-c", grow], timeout=60)
+    small = check.run_bounded([sys.executable, "-c", "print('ok')"], timeout=60)
+    assert small.stdout.strip() == "ok"
