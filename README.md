@@ -73,6 +73,46 @@ GitHub Project conventions, and the
 [tracking issues](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues?q=is%3Aissue+Tracking) for
 each team's Oct 27 checklist.
 
+## Agent skills
+
+Put shared skills in **`.agents/skills/<category>/<skill-name>/SKILL.md`**. Categories
+match the agent packages: `metadata`, `transformation`, `filter`, `augmentation`,
+`cleaning`, and `mcp_interface`. Keep each skill's supporting scripts, references,
+and assets inside its directory.
+
+For example:
+
+```text
+.agents/skills/transformation/biolink-mapping/SKILL.md
+```
+
+Start `SKILL.md` with frontmatter containing a `name` matching the leaf directory
+(`biolink-mapping` in this example) and a nonempty `description`. Skill names must be
+unique across all categories; category prefixes are not required. Remove the
+category's `.gitkeep` when adding its first skill.
+
+Pi discovers the grouped skills directly. For Claude Code, run the sync script to
+create flat, relative symlinks in `.claude/skills/` pointing to the shared originals:
+
+```bash
+# Preview new links and cleanup of broken links
+python3 scripts/sync_claude_skills.py --prune --dry-run
+
+# Create links and remove broken links targeting this project's shared skills
+python3 scripts/sync_claude_skills.py --prune
+```
+
+Run sync after adding, moving, renaming, or deleting skills. Edit the originals in
+`.agents/skills/`, not separate copies in `.claude/skills/`. The script rejects
+duplicate names and refuses to overwrite existing content; unrelated links and
+real files/directories are preserved.
+
+Both harnesses can preload a skill by its leaf name: Pi subagent frontmatter uses
+`skills: biolink-mapping`; Claude subagent frontmatter uses `skills: [biolink-mapping]`.
+Run `/reload` in Pi and restart Claude Code after changes, then verify discovery.
+See [the shared skills guide](.agents/skills/README.md) for a complete `SKILL.md`
+example, loader details, and pruning limitations.
+
 ## Data
 
 No data lives in this repo. TCRD dumps, Pharos exports, and generated graphs go under `data/`
