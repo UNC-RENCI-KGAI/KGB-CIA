@@ -641,12 +641,20 @@ def apply_dialects(croissant: dict, assignments: dict[str, dict]) -> int:
 # Croissant terms whose @context definition matters to mlcroissant: inline record-set data must be
 # JSON literals,
 # or the rows of code tables and local terms are read as graph nodes and the validator rejects them
-CONTEXT_REQUIRED = {"data": {"@id": "cr:data", "@type": "@json"}}
+# `value` too: constants are written with it, and mlcroissant reads sc:value; a croissant mapping
+# it to cr:value (FlyBase, Dark Kinase Knowledgebase) made every constant load as None
+CONTEXT_REQUIRED = {"data": {"@id": "cr:data", "@type": "@json"}, "value": "sc:value"}
 
 
 def update_context(croissant: dict, plan: dict) -> None:
     ctx = croissant.setdefault("@context", {})
     for key, definition in CONTEXT_REQUIRED.items():
+        if key in ctx and ctx[key] != definition:
+            print(
+                f"[apply_plan] warning: @context defined {key!r} as {ctx[key]!r}; replaced with "
+                f"{definition!r}, which the semantics need (a generator problem to report)",
+                file=sys.stderr,
+            )
         ctx[key] = definition
     wanted = {**CONTEXT_TERMS, **VOCAB, **(plan.get("prefixes") or {})}
     if "rdfs" not in ctx:

@@ -905,3 +905,16 @@ def test_entity_constant_value_map_column_description_and_no_id():
     assert [sf["value"] for sf in group["subField"] if sf["name"] == "taxon"] == ["NCBITaxon:10090"]
     symbol = next(sf for sf in group["subField"] if sf["name"] == "Gene Symbol")
     assert symbol["description"] == "From the file. Mouse symbols."
+
+
+def test_value_context_term_is_set_for_constants(capsys):
+    croissant = {
+        "@context": {"value": "cr:value"},
+        "recordSet": [{"@id": "rs", "field": [{"@id": "rs/a", "name": "a"}]}],
+    }
+    plan = {"layouts": []}
+    from apply_plan import update_context
+
+    update_context(croissant, plan)
+    assert croissant["@context"]["value"] == "sc:value"
+    assert "replaced" in capsys.readouterr().err

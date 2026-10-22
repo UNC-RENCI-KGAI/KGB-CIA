@@ -2027,6 +2027,12 @@ def main() -> None:
         for key in CONTEXT_TERMS:
             if key not in out.get("@context", {}):
                 f.error("croissant", f"@context lacks {key}")
+        if out.get("@context", {}).get("value", "sc:value") != "sc:value":
+            f.error(
+                "croissant",
+                f"@context maps value to {out['@context']['value']!r}, so every constant loads as "
+                "None in mlcroissant; re-run apply_plan.py, which sets it to sc:value",
+            )
         if args.plan_only:
             write_report(args, out, original, f, stage_note="Plan checks only (--plan-only).")
             sys.exit(1 if f.count("error") else 0)
