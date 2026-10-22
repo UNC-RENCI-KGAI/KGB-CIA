@@ -21,7 +21,8 @@ def discover_skills(source: Path) -> dict[str, Path]:
     for directory, children, files in os.walk(source, followlinks=False):
         current = Path(directory)
         children[:] = sorted(
-            child for child in children
+            child
+            for child in children
             if not child.startswith(".")
             and child not in {"node_modules", "__pycache__"}
             and not (current / child).is_symlink()
@@ -35,9 +36,7 @@ def discover_skills(source: Path) -> dict[str, Path]:
         children.clear()  # Bundled references/assets are not additional skills.
         name = current.name
         if name in skills:
-            raise SkillSyncError(
-                f"Duplicate skill name '{name}': {skills[name]} and {current}"
-            )
+            raise SkillSyncError(f"Duplicate skill name '{name}': {skills[name]} and {current}")
         skills[name] = current
     return dict(sorted(skills.items()))
 
@@ -97,14 +96,19 @@ def sync_skills(project_root: Path, *, dry_run: bool = False, prune: bool = Fals
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--project-root", type=Path, default=Path(__file__).resolve().parents[1],
+        "--project-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[1],
         help="Project root (defaults to the repository containing this script)",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="Validate and preview without changes",
+        "--dry-run",
+        action="store_true",
+        help="Validate and preview without changes",
     )
     parser.add_argument(
-        "--prune", action="store_true",
+        "--prune",
+        action="store_true",
         help="Remove broken destination links targeting this project's .agents/skills",
     )
     args = parser.parse_args()

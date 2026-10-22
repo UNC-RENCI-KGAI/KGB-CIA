@@ -17,7 +17,9 @@ def make_skill(root: Path, relative: str) -> Path:
 def run_sync(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--project-root", str(root), *args],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
