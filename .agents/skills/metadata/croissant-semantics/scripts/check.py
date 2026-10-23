@@ -1396,11 +1396,26 @@ def _load_cause(msg: str) -> str | None:
             "mlcroissant reads each row as one column: the file isn't separated the way its "
             "encodingFormat says (spaces, or another delimiter)"
         )
+    missing = re.search(r'Column "([^"]+)" does not exist', msg)
+    if missing and re.search(rf"Possible fields:.*'#\s*{re.escape(missing.group(1))}'", msg):
+        return (
+            "the file's header line starts with '#', which mlcroissant keeps in the column names "
+            "(the croissant names them without it); a comment-header dialect describes it, but "
+            "mlcroissant ignores dialects"
+        )
+    if re.search(r"Possible fields:[^\n]*'[^']*\w \w[^']*'", msg) and not re.search(
+        r"Possible fields: Index\(\[\d", msg
+    ):
+        return (
+            "mlcroissant reads each row as one column: the file isn't separated the way its "
+            "encodingFormat says (spaces, or another delimiter); mlcroissant ignores the dialect's "
+            "delimiter"
+        )
     if re.search(r"Possible fields: Index\(\[\d", msg):
         return (
-            "mlcroissant read no header: the file isn't read as a table (its encodingFormat is "
-            "text/plain or another non-table type; a plan's encoding_format fixes it), or it has "
-            "no header row"
+            "mlcroissant read no header row: the file isn't read as a table with a header (a "
+            "non-table encodingFormat such as text/plain or gzip alone, which a plan's "
+            "encoding_format can fix; a delimiter it doesn't expect; or no header row at all)"
         )
     if re.search(r'Column "column_\d+" does not exist|"column_\d+" does not exist in node', msg):
         return (

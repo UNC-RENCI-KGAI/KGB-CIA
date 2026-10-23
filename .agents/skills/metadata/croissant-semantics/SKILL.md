@@ -188,6 +188,8 @@ dependencies). Use `--help` on any of them.
      link the other things it mentions as entities with roles like `biolink:has_gene`. Many
      layouts sharing columns? Define specs once in `column_library`.
    - *Dialect*: for tables that aren't plain CSV/TSV with a header row, the layout's `dialect`.
+     When the croissant labels a file with a type mlcroissant can't read (`text/plain` for a TSV,
+     gzip alone, `application/parquet`), the layout's `encoding_format` corrects it.
    - *Other columns*: publications, evidence, scores, p-values, units, list separators, code
      tables. Leave columns you can't support untyped.
    - *Vocabulary*: Biolink if it truly fits → another established vocabulary → a local

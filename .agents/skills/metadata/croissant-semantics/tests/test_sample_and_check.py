@@ -970,3 +970,19 @@ def test_profile_per_file_counts_each_record_set_separately(tmp_path, capsys):
         sample._run_profile(croissant, [rs], args, None)
     out = capsys.readouterr().out
     assert out.count("        1  'A'") == 2  # once per file, not 2 for the files together
+
+
+def test_load_failure_causes():
+    from check import _load_cause
+
+    hash_header = (
+        "ValueError: Column \"taxon_id\" does not exist. Possible fields: '#taxon_id', "
+        "'STRING_name_compact'"
+    )
+    assert "starts with '#'" in _load_cause(hash_header)
+    spaces = "ValueError: Column \"group1\" does not exist. Possible fields: 'group1 group2 score'"
+    assert "one column" in _load_cause(spaces)
+    no_header = 'ValueError: Column "Disease" does not exist. Possible fields: Index([1, 3, 2])'
+    assert "no header row" in _load_cause(no_header)
+    positional = 'ValueError: Column "column_1" does not exist in node'
+    assert "column_1" in _load_cause(positional)

@@ -384,6 +384,7 @@ def cmd_detect(args) -> None:
     fields = file_columns(rs)
     positional = bool(fields) and all(re.fullmatch(r"column_\d+", f) for f in fields)
     header_like = _looks_like_header(lines)
+    commented = bool(lines) and lines[0].startswith(("#", "!"))
     # among equal fits, prefer a dialect named for this knowledge base or file type (flybase-tsv for
     # FlyBase files)
     name, home = text(croissant.get("name")), text(croissant.get("url"))
@@ -400,16 +401,22 @@ def cmd_detect(args) -> None:
         right_first_row = skips == (header_like and (positional or d.get("columns") != "header"))
         # names that all match beat reading columns by position
         by_names = d.get("columns") == "header" and why.startswith("100%")
-        results.append((round(score, 2), right_first_row, by_names, named, generic, name, why))
+        # a file that starts with '#' or '!' is best read by a dialect that knows comment lines
+        knows_comments = commented == bool(
+            d.get("csvw", {}).get("commentPrefix") or d.get("header_in_comments")
+        )
+        results.append(
+            (round(score, 2), right_first_row, knows_comments, by_names, named, generic, name, why)
+        )
     results.sort(reverse=True)
     print(f"File: {dist.get('contentUrl')}")
     print("Dialects, best fit first (* named for this knowledge base or file type):")
-    for score, _, _, named, _, name, why in results:
+    for score, _, _, _, named, _, name, why in results:
         print(f"  {score:4.2f} {'*' if named else ' '} {name:24}  {why}")
     best = results[0]
     print(
-        f"\nBest: {best[5]} ({best[0]:.2f})"
-        + (" — named for this knowledge base or file type" if best[3] else "")
+        f"\nBest: {best[6]} ({best[0]:.2f})"
+        + (" — named for this knowledge base or file type" if best[4] else "")
     )
     if header_like and positional:
         print(
