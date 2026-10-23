@@ -876,7 +876,11 @@ def check_data(
                 )
         rows = [r for _, _, rs_rows in got for r in rs_rows]
         if not rows:
-            f.note(lay["id"], "no data sampled; id and code checks skipped")
+            f.warn(
+                lay["id"],
+                "no data sampled, so its ids and codes weren't checked (the notes above say why); "
+                "check them another way and explain this warning, or say in notes.md why not",
+            )
             continue
         passed = []
         # ids of the entities a row is about (subject/object); linked extras (a variant an allele

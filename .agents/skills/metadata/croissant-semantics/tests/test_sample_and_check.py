@@ -936,3 +936,37 @@ def test_parquet_rows_and_first_member_of_a_zipped_fileset(tmp_path):
         sample.URL_MAP.clear()
     assert not errors
     assert got[0][2] == [{"gene": "MGI:1", "tags": ["a"]}, {"gene": "MGI:2", "tags": ["b", "c"]}]
+
+
+def test_profile_per_file_counts_each_record_set_separately(tmp_path, capsys):
+    import argparse
+
+    import sample
+
+    for i in (1, 2):
+        (tmp_path / f"f{i}.tsv").write_text("id\nA\nB\n")
+    croissant = {
+        "distribution": [
+            {"@id": f"f{i}", "contentUrl": f"file://{tmp_path}/f{i}.tsv"} for i in (1, 2)
+        ],
+        "recordSet": [
+            {
+                "@id": f"rs{i}",
+                "name": f"rs{i}",
+                "field": [
+                    {
+                        "name": "id",
+                        "source": {"fileObject": {"@id": f"f{i}"}, "extract": {"column": "id"}},
+                    }
+                ],
+            }
+            for i in (1, 2)
+        ],
+    }
+    args = argparse.Namespace(
+        profile="id", top=5, max_mb=1, by=None, split=None, stop_mb=None, prefixes=None, shapes=None
+    )
+    for rs in croissant["recordSet"]:
+        sample._run_profile(croissant, [rs], args, None)
+    out = capsys.readouterr().out
+    assert out.count("        1  'A'") == 2  # once per file, not 2 for the files together

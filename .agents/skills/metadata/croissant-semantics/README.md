@@ -62,7 +62,7 @@ dependencies. Run them from this directory:
 
 ```bash
 uv run --with pytest --with requests --with jsonpath-ng --with pyyaml --with bioregistry \
-    --with openpyxl --with truststore --with pypdf --with pyarrow pytest -q tests/
+    --with openpyxl --with truststore --with pypdf --with pyarrow --with xlrd pytest -q tests/
 ```
 
 ## Status

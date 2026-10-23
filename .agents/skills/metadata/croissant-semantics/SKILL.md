@@ -86,7 +86,7 @@ dependencies). Use `--help` on any of them.
      reports a bot challenge or an HTTP 403, stop sampling that host, don't try to get past it,
      and say in `notes.md` which checks couldn't run. The scripts then refuse that host for an
      hour, across runs, and work from cached files.
-   - Spreadsheets (xlsx), SQLite databases and parquet files are sampled and profiled too: the
+   - Spreadsheets (xlsx and legacy xls), SQLite databases and parquet files are sampled and profiled too: the
      sheet or table is the one the record set's name ends with ("file.xlsx — Sheet1",
      "file.xlsx: Sheet1"), and sampling fails rather than guess when it can't tell. They're read
      whole, so raise `--max-mb` if needed (on `check.py` as well). mlcroissant can't read
@@ -100,7 +100,8 @@ dependencies). Use `--help` on any of them.
      `all`) instead of naming each with `--record-set`. `--prefixes` counts each value's prefix
      or tag, for all profiled columns or only those listed (`--prefixes COL1,COL2`); `--by COL`
      cross-tabulates against another column (which object types each code occurs with);
-     `--split SEP` counts the items of list cells; `--stop-mb N` stops each file after N MB, for
+     `--split SEP` counts the items of list cells; `--per-file` profiles each record set on its
+     own (to check ids are unique per file); `--stop-mb N` stops each file after N MB, for
      files of many GB (the counts then cover only the start; in a file sorted by species or id
      that may be one group only, so say so).
    - **Profile id columns** of the main layouts (`--profile COL --shapes`) before trusting them:
@@ -128,7 +129,7 @@ dependencies). Use `--help` on any of them.
      reads whole files.
    - `inventory.py` lists documentation files shipped with the data (README.pdf inside a zip, a
      data dictionary) after the layouts. Read the relevant ones: `sample.py CROISSANT --dump
-     FILE` prints a file as text, `--member NAME` a member of an archive (it lists the members
+     FILE` prints a file as text, `--member NAME` a member of an archive (a zip is read whole, so raise `--max-mb` for a big one) (it lists the members
      of a zip when the name is wrong), `--sheet NAME` a sheet of a spreadsheet.
    - `sample.py` flags columns whose declared type doesn't fit the values (an `sc:Integer`
      column holding `27152464|29518214`) and files whose rows are wider or narrower than the

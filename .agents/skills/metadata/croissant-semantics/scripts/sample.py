@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["requests", "jsonpath-ng", "openpyxl", "truststore", "pypdf", "pyarrow"]
+# dependencies = ["requests", "jsonpath-ng", "openpyxl", "truststore", "pypdf", "pyarrow", "xlrd"]
 # ///
 """Show real values from a layout's files, so semantics are based on data, not column names.
 
@@ -755,12 +755,21 @@ def _named_rows(header_rows: list[list], columns: list[str], n: int) -> list[dic
 def xlsx_rows(data: bytes, sheet: str | None, columns: list[str], n: int) -> list[dict]:
     import openpyxl
 
-    if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
-        raise ValueError(
-            "a legacy Excel 97-2003 (.xls) workbook, which the scripts can't read; profile it by "
-            "hand "
-            "(OUT/work) if it matters"
+    if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":  # a legacy Excel 97-2003 (.xls)
+        import xlrd
+
+        try:
+            book = xlrd.open_workbook(file_contents=data)
+        except (xlrd.XLRDError, xlrd.compdoc.CompDocError) as e:
+            raise ValueError(f"not a readable legacy Excel (.xls) workbook ({e})") from e
+        names = book.sheet_names()
+        ws = (
+            book.sheet_by_name(_pick_part(sheet, names, "sheet"))
+            if sheet
+            else book.sheet_by_index(0)
         )
+        rows = [ws.row_values(i) for i in range(min(ws.nrows, n + 10))]
+        return _named_rows(rows, columns, n)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except (zipfile.BadZipFile, KeyError, OSError, ValueError) as e:
@@ -1631,33 +1640,41 @@ def main() -> None:
             if args.record_set
             else pick_record_sets(candidates, distribution_index(croissant), args.files)
         )
-        profile(
-            croissant,
-            chosen,
-            [c.strip() for c in args.profile.split(",")],
-            args.top,
-            dialect,
-            int(args.max_mb * 1e6),
-            by=args.by,
-            split=args.split,
-            stop_mb=args.stop_mb,
-            prefixes=True
-            if args.prefixes == "*"
-            else set(args.prefixes.split(","))
-            if args.prefixes
-            else None,
-            shapes=True
-            if args.shapes == "*"
-            else set(args.shapes.split(","))
-            if args.shapes
-            else None,
-        )
+        # --per-file: each record set profiled on its own (ids unique per file, codes per file)
+        for part in [[rs] for rs in chosen] if args.per_file else [chosen]:
+            if args.per_file:
+                print(f"\n== {text(part[0].get('name'))}")
+            _run_profile(croissant, part, args, dialect)
         return
     got, errors = sample_rows(
         croissant, candidates, args.n, int(args.max_mb * 1e6), args.files, dialect
     )
     if not got:
         sys.exit("Could not sample:\n  " + "\n  ".join(errors))
+    _show_sample(got, errors, args, candidates)
+
+
+def _run_profile(croissant: dict, chosen: list[dict], args, dialect) -> None:
+    profile(
+        croissant,
+        chosen,
+        [c.strip() for c in args.profile.split(",")],
+        args.top,
+        dialect,
+        int(args.max_mb * 1e6),
+        by=args.by,
+        split=args.split,
+        stop_mb=args.stop_mb,
+        prefixes=True
+        if args.prefixes == "*"
+        else set(args.prefixes.split(","))
+        if args.prefixes
+        else None,
+        shapes=True if args.shapes == "*" else set(args.shapes.split(",")) if args.shapes else None,
+    )
+
+
+def _show_sample(got: list, errors: list[str], args, candidates: list[dict]) -> None:
     if args.record_set_name:
         print(
             f"{len(candidates)} record set(s) match {args.record_set_name!r}; sampled {len(got)} "
@@ -1670,8 +1687,7 @@ def main() -> None:
         if wide or narrow:
             print(
                 f"  ({wide} of {total} rows have more cells than the header, {narrow} fewer: a "
-                "delimiter inside "
-                "values, shifted rows, or the wrong dialect)"
+                "delimiter inside values, shifted rows, or the wrong dialect)"
             )
     if len(got) > 1:
         sigs = [json.dumps(rows[:20], sort_keys=True, default=str) for _, _, rows in got]
