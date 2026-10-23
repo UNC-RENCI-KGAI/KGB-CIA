@@ -722,11 +722,29 @@ TABLE_SUFFIXES = (
 )
 
 
+# files that aren't tables, whatever their encodingFormat says: no dialect applies to them
+NON_TABLE_SUFFIXES = (
+    ".xml", ".owl", ".rdf", ".ttl", ".nt", ".nq", ".n3", ".jsonld", ".json", ".jsonl", ".fa",
+    ".fasta", ".faa", ".fna", ".cif", ".pdb", ".gpml", ".svg", ".h5", ".hdf5", ".parquet", ".obo",
+    ".sdf", ".sql", ".pdf", ".zip", ".png", ".html",
+)  # fmt: skip
+
+
+def _non_table(dist: dict) -> bool:
+    name = str(dist.get("contentUrl") or dist.get("name") or "").lower().removesuffix(".gz")
+    return name.endswith(NON_TABLE_SUFFIXES) or "readme" in name.rsplit("/", 1)[-1]
+
+
 def _table_like(dist: dict) -> bool:
     name = str(dist.get("contentUrl") or dist.get("name") or "").lower().removesuffix(".gz")
     formats = set(map(str, as_list(dist.get("encodingFormat"))))
-    return dist.get("@type") != "cr:FileSet" and (
-        bool(formats & {"text/csv", "text/tab-separated-values"}) or name.endswith(TABLE_SUFFIXES)
+    return (
+        dist.get("@type") != "cr:FileSet"
+        and not _non_table(dist)
+        and (
+            bool(formats & {"text/csv", "text/tab-separated-values"})
+            or name.endswith(TABLE_SUFFIXES)
+        )
     )
 
 
@@ -748,6 +766,8 @@ def check_formats(original: dict, plan: dict, f: "Findings") -> None:
             continue  # JSON
         for fid in record_set_files(rs):
             formats = set(as_list(dists.get(fid, {}).get("encodingFormat")))
+            if _non_table(dists.get(fid, {})):
+                continue  # XML, RDF, FASTA and the like: a table dialect doesn't apply
             if (
                 formats
                 and not formats & TABLE_TYPES
@@ -1904,6 +1924,15 @@ def classify(term: str) -> str:
     return "other"
 
 
+def _has_semantics(field: dict) -> bool:
+    """A field (or one nested in it) with a semantic term: a class or property beyond its atomic
+    type, or a code table. Nesting alone, as generators write XML and JSON, isn't semantics."""
+    terms = [t for t in as_list(field.get("dataType")) if t not in ATOMIC and t != "sc:Thing"]
+    if terms or field.get("equivalentProperty") or field.get("references"):
+        return True
+    return any(_has_semantics(sf) for sf in field.get("subField") or [])
+
+
 def coverage(out: dict) -> dict:
     level_rank = {"biolink": 0, "other": 1, "local": 2, "none": 3}
     fields_by = Counter()
@@ -1946,7 +1975,7 @@ def coverage(out: dict) -> dict:
         if any(t not in ("sc:Enumeration",) for t in as_list(rs.get("dataType"))):
             rs_rowtype += 1
         if any(t not in ("sc:Enumeration",) for t in as_list(rs.get("dataType"))) or any(
-            fl.get("subField") or fl.get("equivalentProperty") for fl in rs.get("field") or []
+            _has_semantics(fl) for fl in rs.get("field") or []
         ):
             rs_typed += 1
         for fl in rs.get("field") or []:
@@ -2000,10 +2029,17 @@ def write_report(args, out: dict, original: dict, f: "Findings", stage_note: str
         b = before["fields_by_kind"].get(kind, 0)
         lines.append(f"  - {kind}: {n} ({100 * n / max(cov['fields'], 1):.1f}%; before {b})")
     # only table files can have a dialect (not PDFs, spreadsheets, JSON or archives)
-    tables = [d for d in out.get("distribution") or [] if d.get("csvw:dialect") or _table_like(d)]
+    # files record sets read: a croissant may list thousands of files no record set uses
+    used = {i for rs in out.get("recordSet") or [] for i in record_set_files(rs)}
+    tables = [
+        d
+        for d in out.get("distribution") or []
+        if d.get("@id") in used and (d.get("csvw:dialect") or _table_like(d))
+    ]
     with_dialect = sum(1 for d in tables if d.get("csvw:dialect"))
     lines.append(
-        f"- Table files with a dialect (how to read them): {with_dialect} of {len(tables)}"
+        f"- Table files read by record sets with a dialect (how to read them): {with_dialect} of "
+        f"{len(tables)}"
     )
     lines.append(f"- MLCommons validator: {VALIDATION['result']}")
     lines.append(

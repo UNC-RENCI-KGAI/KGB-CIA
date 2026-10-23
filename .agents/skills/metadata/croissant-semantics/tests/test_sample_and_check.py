@@ -837,3 +837,102 @@ def test_enum_codes_must_be_enum_values():
     f = Findings()
     check_enum_codes(plan, f, model)
     assert f.count("error") == 1 and "biolink:guess" in f.items[0][2]
+
+
+def test_tar_members_read_through_double_gzip_and_bz2(tmp_path):
+    import bz2
+    import gzip as gz
+    import io
+    import tarfile
+
+    import sample
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as t:
+        data = b"a\tb\n1\t2\n"
+        info = tarfile.TarInfo("dir/table.tsv")
+        info.size = len(data)
+        t.addfile(info, io.BytesIO(data))
+    (tmp_path / "twice.tar.gz").write_bytes(gz.compress(gz.compress(buf.getvalue())))
+    (tmp_path / "once.tar.bz2").write_bytes(bz2.compress(buf.getvalue()))
+    for name in ("twice.tar.gz", "once.tar.bz2"):
+        got = sample.tar_member(f"file://{tmp_path / name}", "table.tsv", 1000)
+        assert got == b"a\tb\n1\t2\n"
+
+
+def test_a_larger_cached_copy_serves_a_smaller_request(tmp_path):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    import sample
+
+    hits = []
+    body = b"x" * 5000
+
+    class Plain(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server's name
+            hits.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Plain)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    cache_dir, indexed = sample.CACHE_DIR, sample._INDEXED
+    sample.CACHE_DIR, sample._INDEXED = tmp_path / "downloads", None
+    url = f"http://127.0.0.1:{server.server_port}/f.tsv"
+    try:
+        assert sample.fetch_bytes(url, 10_000, whole=False) == body
+        assert sample.fetch_bytes(url, 1000, whole=False) == body[:1000]
+        assert sample.fetch_bytes(url, 8000, whole=True) == body  # the copy is the whole file
+        assert hits == ["/f.tsv"]
+    finally:
+        sample.CACHE_DIR, sample._INDEXED = cache_dir, indexed
+        server.shutdown()
+
+
+def test_parquet_rows_and_first_member_of_a_zipped_fileset(tmp_path):
+    import io
+    import zipfile as zf
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import sample
+
+    buf = io.BytesIO()
+    pq.write_table(pa.table({"gene": ["MGI:1", "MGI:2"], "tags": [["a"], ["b", "c"]]}), buf)
+    with zf.ZipFile(tmp_path / "export.zip", "w") as z:
+        z.writestr("export/part-0001-abc.snappy.parquet", buf.getvalue())
+        z.writestr("export/_SUCCESS", "")
+    croissant = {
+        "distribution": [
+            {"@id": "zip", "@type": "cr:FileObject", "contentUrl": "http://kb.test/export.zip"},
+            {
+                "@id": "parts",
+                "@type": "cr:FileSet",
+                "containedIn": {"@id": "zip"},
+                "includes": "export/part-*.parquet",
+                "encodingFormat": "application/x-parquet",
+            },
+        ],
+        "recordSet": [
+            {
+                "@id": "rs",
+                "field": [
+                    {"name": n, "source": {"fileSet": {"@id": "parts"}, "extract": {"column": n}}}
+                    for n in ("gene", "tags")
+                ],
+            }
+        ],
+    }
+    sample.URL_MAP.append(("http://kb.test/", f"file://{tmp_path}/"))
+    try:
+        got, errors = sample.sample_rows(croissant, croissant["recordSet"], 5, 10**6, k=1)
+    finally:
+        sample.URL_MAP.clear()
+    assert not errors
+    assert got[0][2] == [{"gene": "MGI:1", "tags": ["a"]}, {"gene": "MGI:2", "tags": ["b", "c"]}]

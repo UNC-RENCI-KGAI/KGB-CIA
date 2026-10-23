@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["requests", "jsonpath-ng", "openpyxl", "truststore", "pypdf"]
+# dependencies = ["requests", "jsonpath-ng", "openpyxl", "truststore", "pypdf", "pyarrow"]
 # ///
 """Show real values from a layout's files, so semantics are based on data, not column names.
 
@@ -21,6 +21,7 @@ to Bioregistry prefixes."""
 import argparse
 import csv
 import gzip
+import http.client
 import io
 import itertools
 import json
@@ -33,6 +34,7 @@ from pathlib import Path
 
 import requests
 import truststore
+import urllib3
 from jsonpath_ng.ext import parse as jsonpath_parse
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -273,10 +275,42 @@ def _local_path(url: str) -> Path | None:
     return Path(url[len("file://") :]) if url.startswith("file://") else None
 
 
+def _cached_larger(url: str, max_bytes: int, whole: bool) -> bytes | None:
+    """A copy of url cached under a larger --max-mb that covers this request, so changing --max-mb
+    doesn't download again: its first max_bytes, or all of it when it's the whole file."""
+    index = CACHE_DIR / "index.tsv"
+    if not (USE_CACHE and not REFRESH and index.exists()):
+        return None
+    for line in index.read_text().splitlines():
+        path, _, key = line.partition("\t")
+        parts = key.split(" ")
+        if len(parts) != 4 or parts[0] != "fetch" or parts[1] != url:
+            continue
+        limit, was_whole = int(parts[2]), parts[3] == "True"
+        p = Path(path)
+        if limit < max_bytes or not p.exists():
+            continue
+        size = p.stat().st_size
+        complete = was_whole or size < limit  # a stream that ended before its limit is whole
+        if whole and not complete:
+            continue
+        if whole and size > max_bytes:
+            raise SystemExit(
+                f"{url} is larger than --max-mb ({max_bytes / 1e6:.0f} MB); it must be read "
+                "whole. Raise --max-mb (on check.py too)."
+            )
+        with p.open("rb") as fh:
+            return fh.read(max_bytes)
+    return None
+
+
 def fetch_bytes(url: str, max_bytes: int, whole: bool) -> bytes:
     """Download up to max_bytes (cached). If whole is set and the file is larger, fail rather than
     truncate."""
     url = mapped(url)
+    if not _local_path(url) and not _cache_path("fetch", url, max_bytes, whole).exists():
+        if (larger := _cached_larger(url, max_bytes, whole)) is not None:
+            return larger
     if (local := _local_path(url)) is not None:
         size = local.stat().st_size
         if whole and size > max_bytes:
@@ -355,24 +389,36 @@ class _Counted(io.RawIOBase):
         return len(data)
 
 
+def _tar_stream(raw) -> tarfile.TarFile:
+    """A streaming tar reader over raw bytes, peeling off however many gzip layers there are
+    (Harmonizome gzips some of its .tar.gz archives twice, which tarfile alone can't read)."""
+    import bz2
+    import lzma
+
+    stream = io.BufferedReader(raw) if not isinstance(raw, io.BufferedReader) else raw
+    while True:
+        magic = stream.peek(6)[:6]
+        if magic[:2] == b"\x1f\x8b":
+            stream = io.BufferedReader(gzip.GzipFile(fileobj=stream, mode="rb"))
+        elif magic[:3] == b"BZh":
+            stream = io.BufferedReader(bz2.BZ2File(stream))
+        elif magic == b"\xfd7zXZ\x00":
+            stream = io.BufferedReader(lzma.LZMAFile(stream))
+        else:
+            return tarfile.open(fileobj=stream, mode="r|")
+
+
 def tar_member(url: str, member: str, max_bytes: int) -> bytes:
     """Up to max_bytes of one tar member, streaming the archive and stopping once the member is read
     (cached)."""
     url = mapped(url)
     if (local := _local_path(url)) is not None:
-        with tarfile.open(local, mode="r:*") as t:
-            info = next(
-                (
-                    i
-                    for i in t
-                    if i.isfile() and (i.name == member or i.name.endswith("/" + member))
-                ),
-                None,
-            )
-            if info is None:
-                raise SystemExit(f"{member} not found in {local}")
-            f = t.extractfile(info)
-            return f.read(max_bytes) if f else b""
+        with local.open("rb") as fh, _tar_stream(fh) as t:
+            for info in t:
+                if info.isfile() and (info.name == member or info.name.endswith("/" + member)):
+                    f = t.extractfile(info)
+                    return f.read(max_bytes) if f else b""
+            raise SystemExit(f"{member} not found in {local}")
 
     for name in {
         member,
@@ -388,9 +434,7 @@ def tar_member(url: str, member: str, max_bytes: int) -> bytes:
             # otherwise be
             # decompressed by requests and the limit would apply to the (much larger) tar
             r.raw.decode_content = False
-            with tarfile.open(
-                fileobj=io.BufferedReader(_Counted(r.raw, max_bytes, url)), mode="r|*"
-            ) as t:
+            with _tar_stream(_Counted(r.raw, max_bytes, url)) as t:
                 for info in t:
                     if not info.isfile():
                         continue
@@ -456,6 +500,21 @@ def table_rows(
             "the file is JSON, but the croissant describes a table (CSV/TSV): the URL may need a "
             "format "
             "parameter or Accept header to return the table, which is a pipeline problem"
+        )
+    head = data.lstrip()[:400]
+    kind = (
+        "XML"
+        if head.startswith(b"<?xml") or re.match(rb"<[A-Za-z!]", head)
+        else "RDF (Turtle or N-Triples)"
+        if re.match(rb"(@prefix|@base|PREFIX|BASE)\s", head) or re.match(rb"<[^>]+>\s+<", head)
+        else "FASTA"
+        if head.startswith(b">") and b"\n" in head
+        else None
+    )
+    if kind:
+        raise ValueError(
+            f"the file is {kind}, not a table; the scripts can't sample it. Say so in notes.md "
+            "and check it another way if it matters (a small script in OUT/work/)"
         )
     if data[:4] == b"PK\x03\x04" or data[:16] == b"SQLite format 3\x00":
         raise ValueError(
@@ -564,7 +623,49 @@ def file_kind(dist: dict, fields: list[dict]) -> str:
         return "xlsx"
     if name.endswith((".db", ".sqlite", ".sqlite3")) or any(t in formats for t in SQLITE_TYPES):
         return "sqlite"
+    if name.endswith(".parquet") or "parquet" in formats:
+        return "parquet"
     return "table"
+
+
+def parquet_rows(data: bytes, n: int) -> list[dict]:
+    """Rows of a parquet file (read whole: its schema is at the end). List columns come back as
+    lists."""
+    import pyarrow.parquet as pq
+
+    try:
+        table = pq.read_table(io.BytesIO(data))
+    except Exception as e:  # noqa: BLE001 - pyarrow raises its own error types for bad files
+        raise ValueError(f"not a readable parquet file ({type(e).__name__}: {e})") from e
+    return table.slice(0, n).to_pylist()
+
+
+def first_member(dist: dict, dists: dict, max_bytes: int) -> dict | None:
+    """For a FileSet inside an archive with no member named by its fields, the first archive member
+    its `includes` glob matches, as a distribution entry: sampling one stands for the set."""
+    import fnmatch
+
+    parents = [p["@id"] for p in as_list(dist.get("containedIn")) if isinstance(p, dict)]
+    if not parents or parents[0] not in dists:
+        return None
+    archive = dists[parents[0]]
+    url = str(archive.get("contentUrl") or "")
+    if url.lower().endswith(TAR_SUFFIXES):
+        names = _tar_names(url, max_bytes)
+    else:
+        with zipfile.ZipFile(io.BytesIO(fetch_bytes(url, max_bytes, whole=True))) as z:
+            names = z.namelist()
+    globs = [str(g) for g in as_list(dist.get("includes"))] or ["*"]
+    hit = next((n for n in names if any(fnmatch.fnmatch(n, g) for g in globs)), None)
+    if hit is None:
+        return None
+    print(f"[sample] reading {hit}, the first member of FileSet {dist.get('@id')}", file=sys.stderr)
+    return {
+        "@id": f"{dist['@id']}#{hit}",
+        "contentUrl": hit,
+        "containedIn": dist.get("containedIn"),
+        "encodingFormat": dist.get("encodingFormat"),
+    }
 
 
 def source_file(rs: dict, dists: dict) -> tuple[dict | None, str]:
@@ -791,6 +892,9 @@ def shape(values: list, name: str = "") -> str:
         notes.append(f"JSON lists in {lists}/{len(vals)} values (no list_separator needed)")
     strs = [json.dumps(v) if isinstance(v, (dict, list)) else str(v) for v in flat]
     nulls = Counter(x for x in strs if x.strip().lower() in NULL_MARKERS)
+    if nulls.get("-") and {x.strip() for x in strs} <= {"+", "-", ".", ""}:
+        del nulls["-"]  # a strand column: '-' is the minus strand, not a missing value
+        notes.append("strand codes (+/-)")
     if nulls:
         notes.append(
             "null markers "
@@ -929,6 +1033,12 @@ def sample_rows(
             break
         fields = rs.get("field") or []
         dist, why = source_file(rs, dists)
+        if dist is None and "without naming a member" in why:
+            fs = dists.get(record_set_files(rs)[0]) if record_set_files(rs) else None
+            try:
+                dist = first_member(fs, dists, max_bytes) if fs else None
+            except (requests.RequestException, zipfile.BadZipFile, tarfile.TarError) as e:
+                why += f" (and its archive couldn't be listed: {e})"
         if dist is None:
             errors.append(f"{rs.get('@id')}: {why}; can't sample it directly")
             failures += 1
@@ -962,6 +1072,8 @@ def sample_rows(
             file_dialect = dialects.for_file(dialect, dist) if dialect else None
             if kind in ("json", "jsonl"):
                 rows = json_rows(data, fields, n, lines=kind == "jsonl")
+            elif kind == "parquet":
+                rows = by_field_name(parquet_rows(data, n), rs)
             elif kind == "xlsx":
                 rows = by_field_name(xlsx_rows(data, part_name(rs), file_columns(rs), n), rs)
             elif kind == "sqlite":
@@ -1122,6 +1234,12 @@ def profile(
     for rs in record_sets:
         try:
             _profile_one(rs, dists, columns, dialect, max_bytes, count, stop_mb)
+        except (http.client.HTTPException, urllib3.exceptions.HTTPError) as e:
+            # the server closed a long stream: what was counted so far stands
+            print(
+                f"(connection dropped while reading {text(rs.get('name'))} ({type(e).__name__}); "
+                "its counts cover only the part read)"
+            )
         except (
             SystemExit,
             ValueError,
@@ -1166,6 +1284,8 @@ def _profile_one(
 ) -> None:
     """Count one record set's file into `count`."""
     dist, why = source_file(rs, dists)
+    if dist is None and "without naming a member" in why and record_set_files(rs):
+        dist = first_member(dists[record_set_files(rs)[0]], dists, max_bytes)
     if dist is None:
         raise ValueError(f"can't profile it: it {why}")
     fields = rs.get("field") or []
@@ -1180,10 +1300,12 @@ def _profile_one(
 
     kind = file_kind(dist, fields)
     total = 0
-    if kind in ("xlsx", "sqlite", "json"):
+    if kind in ("xlsx", "sqlite", "json", "parquet"):
         data = file_bytes(dist, dists, max_bytes, whole=True)
         if kind == "json":
             recs = json_rows(data, fields, 10**9)
+        elif kind == "parquet":
+            recs = parquet_rows(data, 10**9)
         else:
             recs = (xlsx_rows if kind == "xlsx" else sqlite_rows)(data, part_name(rs), names, 10**9)
         for rec in recs:
@@ -1265,14 +1387,12 @@ def _tar_names(url: str, max_bytes: int) -> list[str]:
     url = mapped(url)
     names = []
     if (local := _local_path(url)) is not None:
-        with tarfile.open(local, mode="r:*") as t:
+        with local.open("rb") as fh, _tar_stream(fh) as t:
             return [i.name for i in t if i.isfile()][:500]
     with _get(url) as r:
         r.raw.decode_content = False
         try:
-            with tarfile.open(
-                fileobj=io.BufferedReader(_Counted(r.raw, max_bytes, url)), mode="r|*"
-            ) as t:
+            with _tar_stream(_Counted(r.raw, max_bytes, url)) as t:
                 for info in t:
                     if info.isfile():
                         names.append(info.name)
@@ -1590,7 +1710,9 @@ def show_columns(got: list, n_examples: int) -> None:
         }
         if declared:
             numeric = re.compile(
-                r"-?\d+" if "sc:Integer" in declared else r"-?\d*\.?\d+([eE][-+]?\d+)?"
+                r"-?\d+"
+                if "sc:Integer" in declared
+                else r"-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?"  # 5, 5., .5, 5.0, 5e-3
             )
             if "sc:Boolean" in declared:
                 numeric = re.compile(r"(?i)true|false|0|1")

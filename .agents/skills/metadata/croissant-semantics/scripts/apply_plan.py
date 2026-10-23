@@ -636,9 +636,26 @@ def apply_dialects(croissant: dict, assignments: dict[str, dict]) -> int:
                     "different orders"
                 )
             given[file_id] = (lay["id"], dialect, columns)
-    for file_id, (_, dialect, columns) in given.items():
+    read_by_lines = {
+        d
+        for rs in croissant.get("recordSet") or []
+        for f in rs.get("field") or []
+        for _, d, ex in [field_source(f)]
+        if ex.get("fileProperty") == "lines"
+    }
+    for file_id, (lay_id, dialect, columns) in given.items():
         dist = dists[file_id]
-        dist["encodingFormat"] = dialects.encoding_formats(dist, dialect)
+        if file_id in read_by_lines:
+            # fields that read raw lines need the file's own format; a table type would make
+            # mlcroissant parse it as a table and the line fields would find nothing
+            print(
+                f"[apply_plan] warning: layout {lay_id}: {dist.get('name') or file_id} is read as "
+                "raw lines (fileProperty: lines); its encodingFormat is left as it is, and the "
+                "dialect only describes the file",
+                file=sys.stderr,
+            )
+        else:
+            dist["encodingFormat"] = dialects.encoding_formats(dist, dialect)
         dist.update(dialects.to_croissant(dialect, columns))
     return len(given)
 
@@ -668,6 +685,13 @@ def update_context(croissant: dict, plan: dict) -> None:
         if key in ctx and ctx[key] != iri:
             if key in CONTEXT_TERMS:
                 continue  # an existing definition of a Croissant term wins
+            if str(ctx[key]).startswith(("cr:", "sc:", "dct:")) or isinstance(ctx[key], dict):
+                raise PlanError(
+                    f"prefix {key}: the data's ids use {key}: as a prefix, but {key} is a "
+                    f"Croissant term in @context ({ctx[key]!r}), so it can't also be declared as "
+                    f"one. Leave it out of prefixes, mark the id columns id_form native, and say "
+                    f"in pattern_note what {key}: ids are"
+                )
             raise PlanError(f"prefix {key} is already in @context as {ctx[key]!r}, not {iri!r}")
         ctx[key] = iri
 
