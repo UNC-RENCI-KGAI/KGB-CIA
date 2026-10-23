@@ -40,6 +40,7 @@ VOCAB = {
     "qudt": "http://qudt.org/schema/qudt/",
     "unit": "http://qudt.org/vocab/unit/",
     "rcv": "https://roboboulangerie.github.io/vocab/",
+    "infores": "https://w3id.org/biolink/infores/",
     "csvw": "http://www.w3.org/ns/csvw#",
 }
 # Croissant 1.1 terms our older croissants' @context lacks. mlcroissant reads `value` as
@@ -220,13 +221,18 @@ def apply_column(
             # the other column holds namespace keys ("protein_xref_omim"), not prefixes: a code
             # table maps each key
             # to its namespace (the prefix's expansion)
-            missing = [v for v in spec["prefix_codes"].values() if v not in PLAN_PREFIXES]
+            # a key mapped to null is deliberately unmapped (its values aren't ids in a namespace)
+            missing = [
+                v for v in spec["prefix_codes"].values() if v is not None and v not in PLAN_PREFIXES
+            ]
             if missing:
                 raise PlanError(
                     f"column {column}: prefix_codes uses prefixes not in the plan's prefixes: "
                     f"{missing}"
                 )
-            mapping = {k: PLAN_PREFIXES[v] for k, v in spec["prefix_codes"].items()}
+            mapping = {
+                k: PLAN_PREFIXES[v] for k, v in spec["prefix_codes"].items() if v is not None
+            }  # fmt: skip
             note["references"] = {
                 "field": {
                     "@id": register_codes(enums, mapping, spec["prefix_column"], layout_key)

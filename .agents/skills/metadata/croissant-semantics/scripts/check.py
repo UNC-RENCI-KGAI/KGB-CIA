@@ -1011,6 +1011,8 @@ def check_data(
                         if pre and pre not in prefix_codes:
                             bad.append(f"{pre} (no entry in prefix_codes)")
                             continue
+                        if pre and prefix_codes[pre] is None:
+                            continue  # deliberately unmapped: not ids in a namespace
                         pre = prefix_codes.get(pre, "")
                     local = v[len(pre) + 1 :] if v.startswith(pre + ":") else v
                     pattern = bioregistry.get_pattern(pre) if pre else None

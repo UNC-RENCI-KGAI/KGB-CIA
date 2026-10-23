@@ -232,6 +232,51 @@ def main() -> None:
             )
         if len(docs) > 20:
             print(f"  … {len(docs) - 20} more")
+    # files no record set reads: what the croissant lists but doesn't describe (often the large
+    # main files a generator skipped); a big share is a generator gap to report in notes.md
+    used = {i for rs in croissant.get("recordSet") or [] for i in record_set_files(rs)}
+    files = [
+        d
+        for d in croissant.get("distribution") or []
+        if d.get("@type") in ("cr:FileObject", "cr:FileSet") and d.get("@id") not in used
+    ]
+    files = [
+        d for d in files if not any(d.get("@id") == x.get("@id") for x in docs)
+    ]  # documentation is listed above
+    containers = {
+        x["@id"]
+        for d in croissant.get("distribution") or []
+        for x in as_list(d.get("containedIn"))
+        if isinstance(x, dict) and "@id" in x
+    }
+    files = [d for d in files if d.get("@id") not in containers]  # archives holding used members
+    if files:
+        biggest = sorted(files, key=lambda d: -(content_size(d) or 0))[:8]
+        print(
+            f"\nFiles no record set reads: {len(files)} of "
+            f"{len(croissant.get('distribution') or [])} listed. If the source's main data is "
+            "among them, the croissant doesn't describe it: say so in notes.md (a generator "
+            "problem). Largest:"
+        )
+        for d in biggest:
+            size = content_size(d)
+            print(
+                f"  - {d.get('contentUrl') or d.get('name')}"
+                + (f"  ({size / 1e6:,.0f} MB)" if size else "")
+            )
+    positional = [
+        s["layout"]
+        for s in summary
+        if s["columns"] and all(re.fullmatch(r"column_\d+", c) for c in s["columns"])
+    ]
+    if positional:
+        print(
+            f"\nLayouts whose columns are named column_1, column_2, …: {', '.join(positional[:10])}"
+            + (" …" if len(positional) > 10 else "")
+            + ". The generator found no header (or ignored one), and layouts group files only by "
+            "column count, so unrelated files can share one: plan them by record_sets or "
+            "record_set_name, and check each file's first row (dialects.py detect --record-set)"
+        )
     top10 = sum(s["record_sets"] for s in summary[:10])
     if len(summary) > 30 and top10 < 0.3 * total_rs:
         # only worth it when record sets really share columns (versions of one table), not when

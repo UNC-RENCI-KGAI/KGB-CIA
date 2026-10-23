@@ -36,6 +36,9 @@ the spec URL and the EDAM format where there is one.
 | `tsv-commented` | A `#` comment block (release, date), then an ordinary header row (Alliance downloads) |
 | `tsv-comment-header` | A `#` comment block whose last line names the columns (Alliance MITAB) |
 | `tsv-commented-noheader` | A `#` comment block, then rows with no header row: columns in the croissant's field order |
+| `tsv-skip-header`, `csv-skip-header` | A header row the croissant doesn't use (fields named `column_1`, `column_2`, …, or differing from the header): the row is skipped and columns are the croissant's fields in order |
+| `tsv-quoted-noheader` | No header row, double-quoted fields |
+| `ssv` | Space-separated values with a header row (STRING's COG files) |
 | `sssom-tsv` | SSSOM mapping sets: a `#`-prefixed YAML block, then a header row |
 | `robot-template-tsv`, `robot-template-csv` | ROBOT templates: a header row, then a template row (`ID`, `LABEL`, `A rdfs:comment`, …), then data |
 | `gmt` | Gene Matrix Transposed (GSEA, MSigDB, Enrichr): name, description, then any number of genes; no header row |
@@ -82,6 +85,11 @@ Two things the CSVW properties can't say, which named dialects handle:
 - **A header in the comment block**: `"header_in_comments": true` (written as
   `rcv:headerInComments`) reads the last comment line before the data as the header row. Blank
   comment lines and rules (`#`, `#-----`) after it don't count.
+- **A header the croissant didn't use.** Generators sometimes name a file's fields `column_1`,
+  `column_2`, … although the file has a real header row (or drop a `#` from the header names).
+  Reading by position then takes the header as data. Use a skip-header dialect (or
+  `"skipRows": 1` inline), put each column's header name in its description, and report it.
+  `dialects.py detect` says when the first row looks like such a header.
 - **Backslash escapes**: `"doubleQuote": false` means a backslash escapes the quote character
   (`\"`), as CSVW defines it (PhenX exports).
 - **A last column that takes the rest of the row** (GMT's genes): `"rest_column": true` in the
@@ -108,7 +116,8 @@ A layout's `dialect` takes one of three forms:
   an error.
 - **An inline dialect** for a one-off format. `based_on` starts from a named one; `csvw` keys
   override its properties; `columns` is required without `based_on`. If you write the same
-  inline dialect twice, add it to `dialects.json` instead.
+  inline dialect twice, note it in `notes.md` for the skill's maintainers (don't edit the skill
+  during a run).
 
 Set a dialect on every table layout whose files aren't plain CSV/TSV with a header row. That
 means any file with comment lines, no header row, a commented header, a non-standard null, or a

@@ -82,19 +82,31 @@ dependencies). Use `--help` on any of them.
      per knowledge base, never many in parallel: hosts block bursts with a bot challenge, and then
      every later request fails. The scripts pace their own requests and cache downloads (in
      `~/.cache/croissant-semantics/downloads`; `--refresh` downloads again), so re-running is
-     cheap (the cache key includes `--max-mb`, so keep it the same between runs). If a script
+     cheap (a copy cached under a larger `--max-mb` serves a smaller one). If a script
      reports a bot challenge or an HTTP 403, stop sampling that host, don't try to get past it,
      and say in `notes.md` which checks couldn't run. The scripts then refuse that host for an
      hour, across runs, and work from cached files.
-   - Spreadsheets (xlsx) and SQLite databases are sampled and profiled too: the sheet or table is
-     the part of the record set's name after " — ". They're read whole, so raise `--max-mb` if
-     needed (on `check.py` as well). mlcroissant can't read them, so their records aren't loaded.
+   - Spreadsheets (xlsx), SQLite databases and parquet files are sampled and profiled too: the
+     sheet or table is the one the record set's name ends with ("file.xlsx — Sheet1",
+     "file.xlsx: Sheet1"), and sampling fails rather than guess when it can't tell. They're read
+     whole, so raise `--max-mb` if needed (on `check.py` as well). mlcroissant can't read
+     spreadsheets or databases, so their records aren't loaded.
+   - XML, RDF (Turtle, RDF/XML, OWL), FASTA and other files that aren't tables can't be sampled:
+     the scripts say so. If a layout matters, check its ids with a small script in `OUT/work/`
+     (`uv run --with rdflib` for RDF; stream XML with `xml.etree.ElementTree.iterparse`), and say
+     how in `notes.md`. Their fields usually have no `extract`, so no tool can read them: a
+     generator problem to report.
    - `--profile` with `--layout` profiles `--files` record sets of the layout (default 3, or
      `all`) instead of naming each with `--record-set`. `--prefixes` counts each value's prefix
      or tag, for all profiled columns or only those listed (`--prefixes COL1,COL2`); `--by COL`
      cross-tabulates against another column (which object types each code occurs with);
      `--split SEP` counts the items of list cells; `--stop-mb N` stops each file after N MB, for
-     files of many GB (the counts then cover only the start).
+     files of many GB (the counts then cover only the start; in a file sorted by species or id
+     that may be one group only, so say so).
+   - **Profile id columns** of the main layouts (`--profile COL --shapes`) before trusting them:
+     the data check reads the first rows of a few files, so a column whose later rows lack ids, or
+     hold another id family, passes it. Several knowledge bases had 20–30% of rows without an id
+     after hundreds of rows that all had one.
    - A `match.has_columns` entry that covers many layouts is sampled by `check.py` on only a few
      of its files. Sample the layouts it spans that differ (`--record-set-name`, `--files`)
      before trusting it.
@@ -152,7 +164,13 @@ dependencies). Use `--help` on any of them.
      values (the croissant's `url`, the file descriptions, a README or data dictionary). Follow
      links from the downloads page rather than guessing URLs (a site whose pages are `#` routes,
      like `docs.example.org/#Section`, usually also has the real page paths; use those). Cite
-     what you used.
+     what you used. Help pages that render in the browser (a fetch returns an empty shell) often
+     come from a public repository: look for it (`gh search repos`), and read the docs there.
+   - **Check that the croissant describes the source's main data.** `inventory.py` lists the files
+     no record set reads. When the source's own download page names main files (STRING's network
+     files, UniProt's Swiss-Prot) and they're among those, or missing altogether, the plan can't
+     add them: say in `notes.md`, near the top, which main files the croissant leaves out (a
+     generator problem), and plan what's there.
    - Check whether record sets in the layout differ in meaning (species, ontology aspect,
      direction). If so, split with `match.record_set_name`.
 
@@ -190,9 +208,19 @@ dependencies). Use `--help` on any of them.
    several minutes, sometimes over an hour (`--validate-timeout` is in seconds, default 3600;
    a timeout is reported as unverified, not as a failure; a croissant identical to one already
    validated reuses the result). Run the full check as a background task and wait for its
-   completion notification. Don't poll: `sleep` is blocked, `timeout` isn't on macOS, a
+   completion notification (run it with your harness's background option, redirecting stderr to
+   `OUT/work/check.log`). Don't poll: `sleep` is blocked, `timeout` isn't on macOS, a
    `pgrep -f check.py` loop matches its own command line, and the report is only written at the
-   end. The last line on stderr is a summary (`done: N errors, ...`).
+   end. The last line on stderr is a summary, `[check] done: N errors, ...` (with the prefix).
+   `check_report.md` from an earlier `--plan-only` run stays on disk until the full check
+   finishes; don't read it as the result.
+
+   The validator and each record load run with a memory cap (`--memory-gb`, default 4). Record
+   loading tests one record set per plan entry and set of columns, at most `--load-per-entry`
+   (default 3) per entry; a load that times out is retried once, then reported as unverified.
+   Croissants whose columns are named `column_1`, `column_2`, … (headerless files, or headers the
+   generator ignored) always fail to load in mlcroissant, from the input croissant too, because
+   it ignores dialects: the report says so, and the sampled-data checks are the evidence.
 
    Fix every **error** (wrong prefix, values that don't fit the declared form, unknown Biolink
    term, validator failure) by changing the plan, then re-run both. Read every **warning** and

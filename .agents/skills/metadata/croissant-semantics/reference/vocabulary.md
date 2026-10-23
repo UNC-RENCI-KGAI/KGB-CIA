@@ -210,12 +210,31 @@ the type only reaches option 3 or 4.
 - **Gene sets** (MSigDB, GMT files, Enrichr): Biolink has no gene-set class. A local class
   (`rcv:<kb>/GeneSet`, `close_match` `biolink:GeneGroupingMixin`) for the row, with the members
   as a Gene entity when they're ids (NCBIGene) and a local property when they're symbols.
-- **RDF triple dumps** (a SPARQL export with subject, predicate, object columns): rows are
-  `rdf:Statement`, with the columns as `rdf:subject`, `rdf:predicate`, `rdf:object`. Subjects and
-  predicates are `id_form: url`; objects mix IRIs, literals and blank nodes (`_:b1`), so leave
-  their form unset. Biolink types don't apply row by row (a triple isn't a disease), so the
+- **RDF triple dumps** (a SPARQL export with subject, predicate, object columns, or Turtle and
+  RDF/XML files described as triples): rows are `rdf:Statement`, with the columns as
+  `rdf:subject`, `rdf:predicate`, `rdf:object`. Predicates are `id_form: url`; objects mix IRIs,
+  literals and blank nodes (`_:b1`), so leave their form unset. Subjects are IRIs in a SPARQL
+  export, but in OWL files about half are blank nodes (restrictions), so leave theirs unset too. Biolink types don't apply row by row (a triple isn't a disease), so the
   plan stays thin; say in `notes.md` that the ontology's own release files would describe it
   better.
+- **Registry or catalog tables**, where each row describes a source database (Pathway Commons'
+  data sources, a KB's list of imported resources): rows are `biolink:Dataset` (or a local class
+  when a release is meant), the source's key mapped to infores ids with a derived field
+  (`biolink:provided_by`), its publication `sc:citation`, its download URL `dcat:accessURL`.
+- **GEO accessions**: `GSM`/`GSE`/`GPL` ids use Bioregistry's `geo` prefix. Some sources strip the
+  letters (ARCHS4's sample ids are the GSM number alone); then the column is `native`, and its
+  description says to prepend `GSM`. Don't invent a prefix.
+- **Database-tagged ids** (KEGG's `path:map00010`, `ko:K00001`, `hsa:7157`): the tag is part of
+  the id KEGG writes. Keep the data's form: `id_form: native` with a description, or declare
+  the tag as a prefix with KEGG's entry URL when it isn't a Croissant term (`path` is one).
+- **Species given as names** (`Homo sapiens` in a column): `biolink:in_taxon_label`, not
+  `in_taxon`, which takes NCBITaxon ids.
+- **Gene type columns** (`protein-coding`, `ncRNA`, `pseudo`): map the values to Sequence Ontology
+  classes with `codes` (SO:0001217 protein_coding_gene, …), with no `property`; Biolink has no
+  gene-biotype slot.
+- **RefSeq**: Bioregistry's `refseq` URI format points at NCBI's protein pages, which is wrong
+  for nucleotide accessions (`NM_`, `NC_`); for those use `https://www.ncbi.nlm.nih.gov/nuccore/`
+  and say why.
 - **Pathway relations** (BioPAX-like: reaction, catalysis, control): Bioregistry and Biolink
   don't cover BioPAX, so `vocab.py prefix biopax` finds nothing. Use the BioPAX namespace
   (`bp: http://www.biopax.org/release/biopax-level3.owl#`) for classes and relations, or SBO
@@ -262,6 +281,15 @@ say so in `basis`.
   the column holds GO terms of one aspect, use
   `biolink:BiologicalProcess`, `MolecularActivity` or `CellularComponent` instead; when it
   mixes aspects, keep OntologyClass and leave the warning, explained in `notes.md`.
+
+- **`ICD10` expands to an ICD-9-CM site** (`https://icd.codes/icd9cm/`) in Biolink's prefix map.
+  For ICD-10 codes, declare `ICD10` with Bioregistry's WHO URL and say why in `basis`.
+- **`DruggableGeneCategoryEnum` swaps two descriptions**: `tbio`'s text is Tchem's definition
+  (activities in ChEMBL, Guide to Pharmacology or DrugCentral above thresholds) and `tchem`'s is
+  Tbio's. The values themselves are right; map IDG's TDL codes by name.
+- **Slots mentioned but not defined**: the model refers to `diseases confidence score` and
+  `stringdb … score` slots (combined, coexpression, experimental) that aren't defined as slots, so
+  `vocab.py slot` can't find them. Use `biolink:has_confidence_score` or a local property.
 
 - **`biolink:NamedThing` lists slots Biolink never defines**: `equivalent_identifiers` and
   `information_content` appear among NamedThing's slots, but `vocab.py slot` finds neither
