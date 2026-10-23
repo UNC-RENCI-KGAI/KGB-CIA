@@ -918,3 +918,31 @@ def test_value_context_term_is_set_for_constants(capsys):
     update_context(croissant, plan)
     assert croissant["@context"]["value"] == "sc:value"
     assert "replaced" in capsys.readouterr().err
+
+
+def test_derived_fields_inherit_list_handling_and_list_format_parses():
+    from apply_plan import resolve_plan
+    from check import _values
+
+    plan = resolve_plan(
+        {
+            "layouts": [
+                {
+                    "id": "l",
+                    "columns": {
+                        "Annotation": {
+                            "list_separator": "; ",
+                            "derived": [{"name": "kl", "property": "biolink:knowledge_level"}],
+                        }
+                    },
+                }
+            ]
+        }
+    )
+    assert plan["layouts"][0]["columns"]["Annotation"]["derived"][0]["list_separator"] == "; "
+    rows = [{"pubs": "['PMID:1', 'PMID:2']"}, {"pubs": '["PMID:3"]'}]
+    assert [v for v, _ in _values(rows, "pubs", {"list_format": "python"})] == [
+        "PMID:1",
+        "PMID:2",
+        "PMID:3",
+    ]

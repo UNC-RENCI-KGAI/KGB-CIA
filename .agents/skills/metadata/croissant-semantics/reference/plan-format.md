@@ -54,12 +54,19 @@ the plan itself is kept next to the result as the record of what was asserted an
   each with a reason. Not used by `apply_plan.py`; it documents the gaps.
 - `explained`: warnings you checked and that stand, so the report doesn't keep raising them:
   `[{"where": "disease_annotations", "message": "biomarker_for", "reason": "a cross-tab of the whole file shows these codes only on gene rows"}]`.
-  `where` and `message` are substrings of the warning's location and text; a matching warning
-  becomes a note carrying the reason. Only for warnings you verified (with the evidence in the
-  reason), never to hide one you didn't look into. Entries that match nothing are reported, and
-  so are entries that match more than one warning. The location is the bold text before the
-  colon in the report (a layout id, often followed by a column name): make `where` long enough
-  to name the one place you checked, and write one entry per place.
+  - `where` and `message` are substrings of the warning's location and text; a matching warning
+    becomes a note carrying the reason. Copy them from `check_report.findings.json`, which has
+    each finding's own location. The report merges identical warnings into one line
+    ("A, B"); a `where` copied from such a line matches each of its places.
+  - When several entries match, the most specific one (longest `where` and `message`) wins, so
+    an entry for `X column_6 -> knowledge_level` beats one for `X column_6`.
+  - One entry per place you checked: an entry that matches more than one warning is reported,
+    because a loose entry can hide a new warning somewhere else.
+  - Only for warnings you verified, with the evidence in the reason; never to hide one you didn't
+    look into. Entries that match nothing are reported.
+  - An error can be explained only by an entry with `"level": "error"`, and only when the error
+    is false because of a limit of the scripts (they read the wrong sheet, can't read the format)
+    and you checked the data another way; say how in the reason.
 
 ## Layouts
 

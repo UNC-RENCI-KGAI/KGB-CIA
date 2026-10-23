@@ -30,8 +30,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from common import (
     as_list,
-    column_names,
+    by_field_name,
     distribution_index,
+    file_columns,
     layouts,
     load_croissant,
     record_set_files,
@@ -54,6 +55,10 @@ GENERIC = {
     "tsv-commented",
     "tsv-comment-header",
     "tsv-commented-noheader",
+    "tsv-skip-header",
+    "csv-skip-header",
+    "tsv-quoted-noheader",
+    "ssv",
 }
 # ROBOT template strings (https://robot.obolibrary.org/template): a row of these under the header is
 # not data
@@ -336,15 +341,49 @@ def cmd_show(args) -> None:
     print(json.dumps(resolve(args.name), indent=1))
 
 
-def cmd_detect(args) -> None:
-    croissant = load_croissant(args.croissant)
+def _looks_like_header(lines: list[str]) -> bool:
+    """Whether the first non-comment line names columns rather than holding data: its cells are
+    all text, and some column below it holds numbers."""
+    body = [ln for ln in lines if ln.strip() and not ln.startswith(("#", "!"))][:50]
+    if len(body) < 3:
+        return False
+    delim = "\t" if body[0].count("\t") >= body[0].count(",") and "\t" in body[0] else ","
+    rows = list(csv.reader(body, delimiter=delim))
+    first, rest = rows[0], rows[1:]
+    if not first or any(re.fullmatch(r"-?[\d.,]+(e-?\d+)?", c.strip()) for c in first if c.strip()):
+        return False
+    numeric = re.compile(r"-?\d+(\.\d+)?(e-?\d+)?")
+    return any(
+        sum(bool(len(r) > i and numeric.fullmatch(r[i].strip())) for r in rest) > len(rest) / 2
+        for i in range(len(first))
+    )
+
+
+def _pick_record_set(croissant: dict, args) -> dict:
+    if args.record_set:
+        rs = next(
+            (
+                r
+                for r in croissant.get("recordSet") or []
+                if args.record_set in (r["@id"], text(r.get("name")))
+            ),
+            None,
+        )
+        return rs or sys.exit(f"No record set {args.record_set}")
     sets = layouts(croissant).get(args.layout) or sys.exit(f"No layout {args.layout}")
-    rs = sets[0]
+    return sets[0]
+
+
+def cmd_detect(args) -> None:
+    import sample as smp
+
+    smp.parse_url_maps(args.url_map)
+    croissant = load_croissant(args.croissant)
+    rs = _pick_record_set(croissant, args)
     dist, lines = _head(croissant, rs, int(args.max_mb * 1e6))
-    fields = column_names(rs)
-    print(f"File: {dist.get('contentUrl')}\nFirst lines:")
-    for ln in lines[:4]:
-        print(f"  {ln[:150]!r}")
+    fields = file_columns(rs)
+    positional = bool(fields) and all(re.fullmatch(r"column_\d+", f) for f in fields)
+    header_like = _looks_like_header(lines)
     # among equal fits, prefer a dialect named for this knowledge base or file type (flybase-tsv for
     # FlyBase files)
     name, home = text(croissant.get("name")), text(croissant.get("url"))
@@ -356,30 +395,42 @@ def cmd_detect(args) -> None:
         score, why = fit(rows, fields, d)
         generic = name in GENERIC
         named = not generic and name.split("-")[0] in context
-        # among equal fits: named for this knowledge base first, then generic ones before other
-        # databases' formats
-        results.append((round(score, 2), named, generic, name, why))
+        skips = int(d.get("csvw", {}).get("skipRows", 0) or 0) > 0
+        # a first row that names columns is skipped, not read as data; one that's data isn't
+        right_first_row = skips == (header_like and (positional or d.get("columns") != "header"))
+        # names that all match beat reading columns by position
+        by_names = d.get("columns") == "header" and why.startswith("100%")
+        results.append((round(score, 2), right_first_row, by_names, named, generic, name, why))
     results.sort(reverse=True)
-    print("\nDialects, best fit first (* named for this knowledge base or file type):")
-    for score, named, _, name, why in results:
-        print(f"  {score:4.2f} {'*' if named else ' '} {name:12}  {why}")
-    if len([r for r in results if r[0] == results[0][0]]) > 1:
-        print(
-            "\nSeveral dialects read the file equally well. Pick the one whose spec describes this "
-            "file "
-            "(the knowledge base's own format, or the file type), not just one that parses it."
-        )
+    print(f"File: {dist.get('contentUrl')}")
+    print("Dialects, best fit first (* named for this knowledge base or file type):")
+    for score, _, _, named, _, name, why in results:
+        print(f"  {score:4.2f} {'*' if named else ' '} {name:24}  {why}")
     best = results[0]
     print(
-        f"\nBest: {best[3]} ({best[0]:.2f})"
-        + (" — named for this knowledge base or file type" if best[1] else "")
+        f"\nBest: {best[5]} ({best[0]:.2f})"
+        + (" — named for this knowledge base or file type" if best[3] else "")
     )
+    if header_like and positional:
+        print(
+            "\nThe first row looks like a header, but the croissant names the fields column_1, "
+            "column_2, …: the generator didn't use the header. Use a skip-header dialect "
+            "(tsv-skip-header, csv-skip-header, or skipRows: 1 inline), report it as a generator "
+            "problem, and put each column's header name in its description."
+        )
+    if len([r for r in results if r[0] == best[0]]) > 1:
+        print(
+            "\nSeveral dialects read the file equally well. Pick the one whose spec describes this "
+            "file (the knowledge base's own format, or the file type), not just one that parses it."
+        )
     if best[0] < 0.9:
         print(
             "\nNo named dialect fits well. Describe one inline in the plan (see "
-            "reference/dialects.md), "
-            "and consider adding it to dialects.json."
+            "reference/dialects.md), and note it for the skill's maintainers."
         )
+    print("\nFirst lines:")
+    for ln in lines[:4]:
+        print(f"  {ln[:150]!r}")
 
 
 def cmd_read(args) -> None:
@@ -398,7 +449,7 @@ def cmd_read(args) -> None:
     if not dialect:
         sys.exit("The file has no csvw:dialect in this croissant.")
     _, lines = _head(croissant, rs)
-    rows = parse(lines, dialect, column_names(rs), limit=args.n)
+    rows = by_field_name(parse(lines, dialect, file_columns(rs), limit=args.n), rs)
     for r in rows:
         print(json.dumps(r, ensure_ascii=False)[:600])
 
@@ -414,7 +465,15 @@ def main() -> None:
     p.set_defaults(fn=cmd_show)
     p = sub.add_parser("detect")
     p.add_argument("croissant")
-    p.add_argument("--layout", required=True)
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--layout")
+    g.add_argument("--record-set", help="one record set (@id or name), for layouts that mix files")
+    p.add_argument(
+        "--url-map",
+        action="append",
+        metavar="OLD=NEW",
+        help="replace OLD with NEW in data URLs, as in sample.py",
+    )
     p.add_argument(
         "--max-mb",
         type=float,

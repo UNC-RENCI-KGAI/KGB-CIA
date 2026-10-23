@@ -109,6 +109,7 @@ KNOWN = {
         "id_form",
         "prefix_column",
         "list_separator",
+        "list_format",
         "unit",
         "codes",
         "null_values",
@@ -246,6 +247,10 @@ def apply_column(
         notes.append(annotation(fid, f"true_value_{i}", "rcv:trueValue", val))
     if spec.get("list_separator"):
         notes.append(annotation(fid, "list_separator", "rcv:listSeparator", spec["list_separator"]))
+    if spec.get("list_format"):
+        if spec["list_format"] not in ("json", "python"):
+            raise PlanError(f"list_format is json or python, not {spec['list_format']!r}")
+        notes.append(annotation(fid, "list_format", "rcv:listFormat", spec["list_format"]))
     if notes:
         field["annotation"] = [
             a for a in as_list(field.get("annotation")) if a["@id"] not in {n["@id"] for n in notes}
@@ -820,6 +825,9 @@ def merge_answers(plan: dict, croissant: dict, answers: list[dict]) -> tuple[dic
     return plan, report
 
 
+INHERITED = ("list_separator", "list_format", "null_values")  # derived fields take these
+
+
 def resolve_plan(plan: dict) -> dict:
     """Expand references to the plan's column_library: a column spec {"use": NAME, ...overrides}."""
     library = plan.get("column_library") or {}
@@ -834,11 +842,23 @@ def resolve_plan(plan: dict) -> dict:
             k: v for k, v in merged.items() if v is not None
         }  # an override of null removes a key
 
+    def inherit(spec):
+        """A derived field reads the same cells, so it splits and skips them the same way unless
+        it says otherwise."""
+        if isinstance(spec, dict) and spec.get("derived"):
+            shared = {k: spec[k] for k in INHERITED if k in spec}
+            spec["derived"] = [{**shared, **d} for d in spec["derived"]]
+        return spec
+
     plan = copy.deepcopy(plan)
     for lay in plan.get("layouts") or []:
-        lay["columns"] = {c: resolve(sp) for c, sp in (lay.get("columns") or {}).items()}
+        lay["columns"] = {
+            c: inherit(resolve(sp)) for c, sp in (lay.get("columns") or {}).items()
+        }  # fmt: skip
         for ent in lay.get("entities") or []:
-            ent["columns"] = {c: resolve(sp) for c, sp in (ent.get("columns") or {}).items()}
+            ent["columns"] = {
+                c: inherit(resolve(sp)) for c, sp in (ent.get("columns") or {}).items()
+            }  # fmt: skip
     return plan
 
 

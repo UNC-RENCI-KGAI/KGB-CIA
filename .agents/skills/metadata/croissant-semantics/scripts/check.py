@@ -82,26 +82,43 @@ SOURCES = {"agent", "data_dictionary", "documentation", "maintainer"}
 class Findings:
     def __init__(self, explained: list[dict] | None = None):
         self.items: list[tuple[str, str, str]] = []
-        # the plan's "explained": warnings checked by hand, given as {"where": ..., "message": ...,
-        # "reason": ...}
-        # (substrings); a matching warning becomes a note carrying the reason
+        # the plan's "explained": findings checked by hand, given as {"where": ..., "message": ...,
+        # "reason": ...} (substrings); a matching warning becomes a note carrying the reason. An
+        # error is explained only by an entry that says "level": "error"
         self.explained = explained or []
-        self.used: dict[int, list[str]] = {}  # explained entry -> where each warning it took was
+        self.used: dict[int, list[str]] = {}  # explained entry -> where each finding it took was
+
+    def _explain(self, level: str, where, msg) -> bool:
+        """Turn the finding into a note if an explained entry matches it: the entry's `where` (or,
+        copied from a report line that merged several places, any one of its comma-separated
+        places) is in the finding's location, and its `message` is in the text. The most specific
+        matching entry wins."""
+        best = None
+        for i, e in enumerate(self.explained):
+            if not e.get("reason") or (level == "error") != (e.get("level") == "error"):
+                continue
+            ew = str(e.get("where", ""))
+            places = [ew] + [p.strip() for p in ew.split(", ")] if ", " in ew else [ew]
+            hit = next((p for p in places if p in str(where)), None)
+            if hit is None or str(e.get("message", "")) not in str(msg):
+                continue
+            score = len(hit) + len(str(e.get("message", "")))
+            if best is None or score > best[0]:
+                best = (score, i, e)
+        if best is None:
+            return False
+        _, i, e = best
+        self.used.setdefault(i, []).append(str(where))
+        self.items.append(("note", where, f"{msg} (explained in the plan: {e['reason']})"))
+        return True
 
     def error(self, where, msg):
-        self.items.append(("error", where, msg))
+        if not self._explain("error", where, msg):
+            self.items.append(("error", where, msg))
 
     def warn(self, where, msg):
-        for i, e in enumerate(self.explained):
-            if (
-                str(e.get("where", "")) in str(where)
-                and str(e.get("message", "")) in str(msg)
-                and e.get("reason")
-            ):
-                self.used.setdefault(i, []).append(str(where))
-                self.items.append(("note", where, f"{msg} (explained in the plan: {e['reason']})"))
-                return
-        self.items.append(("warning", where, msg))
+        if not self._explain("warning", where, msg):
+            self.items.append(("warning", where, msg))
 
     def note(self, where, msg):
         self.items.append(("note", where, msg))
@@ -400,6 +417,34 @@ MARKERS = re.compile(
 )
 
 
+def check_enum_codes(plan: dict, f: "Findings", model: dict | None) -> None:
+    """Codes and constants that are biolink: values of an enum-ranged slot (knowledge_level,
+    agent_type, qualifiers) must be values of that enum."""
+    if not model:
+        return
+    import vocab
+
+    for lay in plan.get("layouts") or []:
+        for where, spec, _ in iter_assertions(lay):
+            prop = str(spec.get("property") or "")
+            if not prop.startswith("biolink:"):
+                continue
+            enum = vocab.slot_enum(model, prop)
+            if not enum:
+                continue
+            allowed = {v.lower() for v in vocab.enum_values(model, enum)[1]}
+            used = [str(v) for v in (spec.get("codes") or {}).values()]
+            used += [str(spec["value"])] if spec.get("value") else []
+            bad = sorted(
+                {v for v in used if v.startswith("biolink:") and v[8:].lower() not in allowed}
+            )
+            if bad:
+                f.error(
+                    where,
+                    f"{bad} aren't values of {enum}, the range of {prop}; see vocab.py enum {enum}",
+                )
+
+
 def check_code_merges(plan: dict, f: "Findings") -> None:
     """Negated or inferred codes mapped to the same target as direct ones make them
     indistinguishable."""
@@ -512,6 +557,17 @@ def progress(msg: str) -> None:
     print(f"[check] {msg}", file=sys.stderr, flush=True)
 
 
+def _list_items(cell: str, list_format: str) -> list[str]:
+    """Items of a cell written as a JSON array or a Python list literal (Monarch's ['PMID:1'])."""
+    import ast
+
+    try:
+        items = json.loads(cell) if list_format == "json" else ast.literal_eval(cell)
+    except (ValueError, SyntaxError):
+        return [cell]  # not a list after all: checked as one value, so a misfit shows
+    return [str(i) for i in items] if isinstance(items, (list, tuple)) else [str(items)]
+
+
 def _values(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
     """(value, row) pairs for a column: lists split, empties, nulls and true-values dropped."""
     skip = set(as_list(spec.get("null_values"))) | set(as_list(spec.get("true_values")))
@@ -521,7 +577,12 @@ def _values(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
         for x in v if isinstance(v, list) else [v]:
             if x in (None, ""):
                 continue
-            parts = str(x).split(spec["list_separator"]) if spec.get("list_separator") else [str(x)]
+            if spec.get("list_format"):
+                parts = _list_items(str(x), spec["list_format"])
+            elif spec.get("list_separator"):
+                parts = str(x).split(spec["list_separator"])
+            else:
+                parts = [str(x)]
             out += [(p.strip(), r) for p in parts if p.strip() and p.strip() not in skip]
     return out
 
@@ -1278,6 +1339,44 @@ def _load(path: str, record_set_id: str, timeout: int) -> tuple[bool, str]:
     )[0]
 
 
+def _environment_failure(msg: str) -> bool:
+    """A load that failed before reading anything: uv couldn't fetch mlcroissant, or no network."""
+    return bool(
+        re.search(
+            r"Failed to fetch|error sending request|dns error|No solution found when resolving|"
+            r"Could not connect|ENOTFOUND|Temporary failure in name resolution",
+            msg,
+        )
+    )
+
+
+def _load_cause(msg: str) -> str | None:
+    """What a load failure from the original croissant means, from mlcroissant's error."""
+    if "string pattern on a bytes-like object" in msg:
+        return (
+            "fields read the file's lines with regex transforms (fileProperty: lines), which "
+            "mlcroissant applies to bytes, so they never load"
+        )
+    if "Possible fields" in msg and re.search(r"Possible fields: '[^']* [^']*'", msg):
+        return (
+            "mlcroissant reads each row as one column: the file isn't separated the way its "
+            "encodingFormat says (spaces, or another delimiter)"
+        )
+    if re.search(r'Column "[^"]+" does not exist|does not exist in node', msg) and "column_" in msg:
+        return (
+            "the croissant's column names (column_1, column_2, …) aren't in the file: a header "
+            "row it didn't use, or no header row; mlcroissant ignores csvw:dialect"
+        )
+    if "None of the provided encoding formats" in msg:
+        return (
+            "the file's encodingFormat isn't one mlcroissant reads (gzip only, text/plain for a "
+            "table, text/turtle, application/parquet, XML)"
+        )
+    if "All arrays must be of the same length" in msg:
+        return "JSON keys only some records have, which mlcroissant can't line up"
+    return None
+
+
 def _hint(msg: str) -> str:
     """What to try for a few common load failures."""
     if re.search(r"could not convert|invalid literal|Unable to parse string|cannot convert", msg):
@@ -1494,6 +1593,7 @@ def load_records(
     whole_mb: float = 20,
     timeout: int = 300,
     archive_mb: float = 40,
+    per_entry: int = 3,
 ) -> None:
     """Read a few records of one record set per layout through mlcroissant, using the first complete
     lines of each file (JSON files must be read whole, so only small ones are used; archive members
@@ -1503,9 +1603,11 @@ def load_records(
     tmpdir = Path(tmp)
     dists = distribution_index(original)
     assignments = match_record_sets(original, plan)
-    # one record set per original layout (files with the same columns), however many plan entries
-    # cover it
-    best: dict[str, tuple[float, dict]] = {}
+    # one record set per plan entry and original layout (files with the same columns): entries
+    # split by record_set_name are each tested; at most per_entry layouts per entry (a knowledge
+    # base with hundreds of releases of one table would otherwise take most of a day)
+    best: dict[tuple, tuple[float, dict]] = {}
+    too_big: set[str] = set()
     alternates: dict[str, list[dict]] = {}
     unreadable: dict[str, str] = {}
     for rs in original.get("recordSet") or []:
@@ -1530,6 +1632,7 @@ def load_records(
             else [content_size(dists.get(i, {})) for i in ids]
         )
         if whole and any(s is not None and s > whole_mb * 1e6 for s in sizes):
+            too_big.add(lay["id"])
             continue
         if any(
             dists.get(i, {}).get("@type") == "cr:FileSet" and dists[i].get("containedIn")
@@ -1537,10 +1640,19 @@ def load_records(
         ):
             continue  # a set of archive members: left to mlcroissant, too slow to test here
         cost = sum(s or 0 for s in sizes) if whole else len(ids)
-        key = layout_id(column_names(rs))
+        key = (lay["id"], layout_id(column_names(rs)))
         alternates.setdefault(key, []).append(rs)
         if key not in best or cost < best[key][0]:
             best[key] = (cost, rs)
+    capped: dict[str, int] = {}
+    if per_entry:
+        by_entry: dict[str, list] = {}
+        for key, _item in sorted(best.items(), key=lambda kv: kv[1][0]):
+            by_entry.setdefault(key[0], []).append(key)
+        for entry, keys in by_entry.items():
+            for key in keys[per_entry:]:
+                del best[key]
+                capped[entry] = capped.get(entry, 0) + 1
     for kind, lay_id in unreadable.items():
         f.note(
             "records",
@@ -1581,6 +1693,7 @@ def load_records(
         tries = [first] + others[-1:]
         for attempt, rs in enumerate(tries):
             where = f"{lay_id} records ({text(rs.get('name'))})"
+            retried = False
             src, _ = smp.source_file(rs, dists)
             from urllib.parse import urlparse
 
@@ -1614,7 +1727,7 @@ def load_records(
                         if data is None:
                             raise ValueError(
                                 f"{member.get('contentUrl')} must be read whole and is over "
-                                f"{whole_mb} MB"
+                                f"{whole_mb} MB (--load-json-mb)"
                             )
                         files[i] = data
                         continue
@@ -1629,7 +1742,8 @@ def load_records(
                     data = _excerpt(d, dists, whole, int(head_mb * 1e6), int(whole_mb * 1e6))
                     if data is None:
                         raise ValueError(
-                            f"{d.get('contentUrl')} must be read whole and is over {whole_mb} MB"
+                            f"{d.get('contentUrl')} must be read whole and is over {whole_mb} MB "
+                            "(--load-json-mb)"
                         )
                     files[i] = data
             except (smp.BotCheck, smp.AccessDenied) as e:
@@ -1648,6 +1762,9 @@ def load_records(
             try:
                 new_path = _excerpt_croissant(out, rs["@id"], files, tmpdir, "new")
                 ok, msg = _load(new_path, rs["@id"], timeout)
+                if not ok and msg.startswith("timed out") and not retried:
+                    retried = True  # often the machine is busy (other agents): once more
+                    ok, msg = _load(new_path, rs["@id"], timeout)
             except (
                 OSError,
                 ValueError,
@@ -1670,6 +1787,20 @@ def load_records(
                     )
                 else:
                     f.note(where, f"loaded (from the first {head_mb:g} MB): {msg[:300]}")
+                break
+            if msg.startswith("timed out"):
+                f.warn(
+                    where,
+                    f"record loading {msg} twice, so records weren't tested for this layout (a "
+                    "busy machine, or a slow file); re-run this layout alone with --layouts",
+                )
+                break
+            if _environment_failure(msg):
+                f.warn(
+                    where,
+                    "record loading failed in the environment, not the croissant (uv couldn't "
+                    f"fetch mlcroissant, or the network is down): {msg[:200]}; re-run when online",
+                )
                 break
             if msg.endswith("was stopped"):  # loading the original would only do the same
                 f.warn(
@@ -1695,12 +1826,15 @@ def load_records(
                 for i in record_set_files(rs)
                 if i in dists and dists[i].get("@type") != "cr:FileSet"
             )
+            cause = _load_cause(old_msg)
+            if cause:
+                PREEXISTING.setdefault(cause, []).append(where)
+                break
             if needs_dialect or ("encoding formats" in old_msg and "encoding formats" not in msg):
                 PREEXISTING.setdefault(
                     "the files have comment lines or no header row, which mlcroissant can't skip "
-                    "(it ignores "
-                    "csvw:dialect); the sampled-data checks, which use the dialect, are the "
-                    "evidence",
+                    "(it ignores csvw:dialect); the sampled-data checks, which use the dialect, "
+                    "are the evidence",
                     [],
                 ).append(where)
                 break
@@ -1740,12 +1874,22 @@ def load_records(
         )
     tested = {assignments[item[1]["@id"]]["id"] for _, item in chosen}
     skipped = [lay["id"] for lay in plan.get("layouts") or [] if lay["id"] not in tested]
+    reasons = {
+        e: f"JSON over {whole_mb:g} MB (--load-json-mb)" for e in too_big if e in skipped
+    }  # fmt: skip
     if skipped:
         f.note(
             "records",
-            f"not loaded for {len(skipped)} plan layout(s) (one record set is tested per set of "
-            f"columns; also limit --load-layouts {max_layouts}, JSON files over {whole_mb} MB, "
-            f"spreadsheets and databases): {', '.join(skipped[:10])}",
+            f"not loaded for {len(skipped)} plan layout(s): "
+            + ", ".join(f"{e} ({reasons[e]})" if e in reasons else e for e in skipped[:12])
+            + ". Other reasons: --load-layouts, spreadsheets and databases (no mlcroissant "
+            "reader), sets of archive members, or no file the scripts can read",
+        )
+    for entry, n in capped.items():
+        f.note(
+            "records",
+            f"{entry}: {n} more set(s) of columns not loaded (--load-per-entry {per_entry}; the "
+            "cheapest are tested)",
         )
 
 
@@ -1926,6 +2070,18 @@ def main() -> None:
         "--load-layouts", type=int, default=0, help="layouts to load records for (default 0: all)"
     )
     ap.add_argument(
+        "--load-per-entry",
+        type=int,
+        default=3,
+        help="sets of columns to load records for per plan entry (default 3; 0: all)",
+    )
+    ap.add_argument(
+        "--load-json-mb",
+        type=float,
+        default=20,
+        help="largest JSON file to load records from; JSON is read whole (default 20)",
+    )
+    ap.add_argument(
         "--skip-layouts",
         help="comma-separated plan layout ids to leave out of the data and record checks",
     )
@@ -2022,6 +2178,7 @@ def main() -> None:
         check_formats(original, plan, f)
         check_roles(plan, f, model)
         check_code_merges(plan, f)
+        check_enum_codes(plan, f, model)
         check_prefix_twins(plan, f)
         check_local_term_links(plan, f)
         for key in CONTEXT_TERMS:
@@ -2077,7 +2234,15 @@ def main() -> None:
             if args.load_records:
                 stage = "record loading"
                 load_records(
-                    original, out, data_plan, f, args.load_layouts, tmp, archive_mb=args.max_mb
+                    original,
+                    out,
+                    data_plan,
+                    f,
+                    args.load_layouts,
+                    tmp,
+                    whole_mb=args.load_json_mb,
+                    archive_mb=args.max_mb,
+                    per_entry=args.load_per_entry,
                 )
     except KeyboardInterrupt:
         write_report(args, out, original, f, stage_note=f"Incomplete: interrupted during {stage}.")

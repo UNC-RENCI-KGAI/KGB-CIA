@@ -7,6 +7,7 @@
 
     vocab.py class Gene                 # a Biolink class: definition, parents, id prefixes, slots
     vocab.py slot has_evidence          # a Biolink slot: definition, domain, range
+    vocab.py enum knowledge_level       # a Biolink enum's values, by enum or slot name
     vocab.py search "evidence"          # Biolink classes and slots whose name or definition matches
     vocab.py search RO:0002331          # ... or that are mapped to this term (GO's RO relations)
     vocab.py prefix FB                  # a CURIE prefix: Biolink's expansion, Bioregistry record
@@ -82,7 +83,7 @@ def to_key(name: str) -> str:
     """Biolink YAML keys have spaces: 'GeneToDiseaseAssociation' -> 'gene to disease association',
     'RNAProduct' -> 'rna product' (matched case-insensitively)."""
     name = name.removeprefix("biolink:")
-    if " " in name or name.islower():
+    if " " in name or "_" in name or name.islower():  # slot names: has_phenotype, FDA_..._level
         return name.replace("_", " ").lower()
     name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
     return re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", name).lower()
@@ -692,6 +693,38 @@ def cmd_infores(args) -> None:
         )
 
 
+def enum_values(model: dict, name: str) -> tuple[str, dict] | None:
+    """(enum name, permissible values) for an enum, by name with or without 'Enum'."""
+    want = name.removeprefix("biolink:").lower().removesuffix("enum")
+    for k, v in (model.get("enums") or {}).items():
+        if k.lower().removesuffix("enum") == want:
+            return k, v.get("permissible_values") or {}
+    return None
+
+
+def slot_enum(model: dict, slot: str) -> str | None:
+    """The enum a slot's range is, if it is one (knowledge_level -> KnowledgeLevelEnum)."""
+    hit = find(model, "slots", slot)
+    rng = (hit[1].get("range") if hit else None) or ""
+    return rng if rng in (model.get("enums") or {}) else None
+
+
+def cmd_enum(args) -> None:
+    model = biolink()
+    name = args.name
+    if not enum_values(model, name) and find(model, "slots", name):
+        name = slot_enum(model, name) or sys.exit(f"Slot {name}'s range isn't an enum.")
+    hit = enum_values(model, name)
+    if not hit:
+        close = [k for k in model.get("enums") or {} if args.name.lower() in k.lower()]
+        sys.exit(f"No Biolink enum {args.name}." + (f" Close: {', '.join(close)}" if close else ""))
+    key, values = hit
+    print(f"{key}  ({BIOLINK_VERSION}); use values as codes with the biolink: prefix")
+    for v, d in values.items():
+        desc = ((d or {}).get("description") or "").strip().replace("\n", " ")
+        print(f"  biolink:{v}" + (f"  — {desc[:160]}" if desc else ""))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -710,6 +743,11 @@ def main() -> None:
     p.add_argument("--object")
     p.add_argument("--limit", type=int, default=12)
     p.set_defaults(fn=cmd_associations)
+    p = sub.add_parser(
+        "enum", help="a Biolink enum's values, by enum name or by a slot whose range it is"
+    )
+    p.add_argument("name")
+    p.set_defaults(fn=cmd_enum)
     p = sub.add_parser("search")
     p.add_argument("text")
     p.add_argument("--limit", type=int, default=15)

@@ -24,6 +24,14 @@
     "csvw": {"delimiter": ",", "header": false, "quoteChar": "\"", "doubleQuote": true},
     "columns": "field_order"
   },
+  "csv-skip-header": {
+    "description": "Comma-separated values whose header row the croissant doesn't use (fields named column_1, column_2, …): the first row is skipped and columns are the croissant's fields in order.",
+    "media_type": "text/csv",
+    "spec": "https://www.rfc-editor.org/rfc/rfc4180",
+    "edam": "http://edamontology.org/format_3752",
+    "csvw": {"delimiter": ",", "header": false, "skipRows": 1, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "field_order"
+  },
   "tsv-noheader": {
     "description": "Tab-separated values with no header row (UniProt idmapping files): columns are the croissant's fields in order.",
     "media_type": "text/tab-separated-values",
@@ -32,12 +40,35 @@
     "csvw": {"delimiter": "\t", "header": false, "quoteChar": null},
     "columns": "field_order"
   },
+  "tsv-skip-header": {
+    "description": "Tab-separated values whose header row the croissant doesn't use (its fields are named column_1, column_2, …, or differ from the header): the first row is skipped and columns are the croissant's fields in order.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
+    "edam": "http://edamontology.org/format_3475",
+    "csvw": {"delimiter": "\t", "header": false, "skipRows": 1, "quoteChar": null},
+    "columns": "field_order"
+  },
+  "tsv-quoted-noheader": {
+    "description": "Tab-separated values with no header row, where fields may be double-quoted: columns are the croissant's fields in order.",
+    "media_type": "text/tab-separated-values",
+    "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
+    "edam": "http://edamontology.org/format_3475",
+    "csvw": {"delimiter": "\t", "header": false, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "field_order"
+  },
   "tsv-quoted": {
     "description": "Tab-separated values with a header row, where fields (and names) may be double-quoted.",
     "media_type": "text/tab-separated-values",
     "spec": "https://www.iana.org/assignments/media-types/text/tab-separated-values",
     "edam": "http://edamontology.org/format_3475",
     "csvw": {"delimiter": "\t", "header": true, "quoteChar": "\"", "doubleQuote": true},
+    "columns": "header"
+  },
+  "ssv": {
+    "description": "Space-separated values with a header row (STRING's COG files).",
+    "media_type": "text/plain",
+    "spec": "https://www.w3.org/TR/tabular-metadata/#dialect-descriptions",
+    "csvw": {"delimiter": " ", "header": true, "quoteChar": null},
     "columns": "header"
   },
   "tsv-commented": {

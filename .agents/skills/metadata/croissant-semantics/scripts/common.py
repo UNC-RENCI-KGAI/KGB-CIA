@@ -52,6 +52,26 @@ def column_names(record_set: dict) -> list[str]:
     return [text(f.get("name")) for f in record_set.get("field") or []]
 
 
+def file_columns(record_set: dict) -> list[str]:
+    """The columns a record set's fields read from its file: `extract.column` where a field gives
+    one (generators name fields `column_1` while extracting the real header name, or the reverse),
+    else the field's name."""
+    out = []
+    for f in record_set.get("field") or []:
+        col = ((f.get("source") or {}).get("extract") or {}).get("column")
+        out.append(text(col) if col else text(f.get("name")))
+    return out
+
+
+def by_field_name(rows: list[dict], record_set: dict) -> list[dict]:
+    """Rows keyed by file column, re-keyed by field name (plans refer to fields by name)."""
+    pairs = zip(file_columns(record_set), column_names(record_set), strict=True)
+    rename = {c: n for c, n in pairs if c != n}
+    if not rename:
+        return rows
+    return [{rename.get(k, k): v for k, v in r.items()} for r in rows]
+
+
 def layout_id(columns: list[str]) -> str:
     """Stable short id for a set of column names (order ignored)."""
     key = "\x1f".join(sorted(columns))

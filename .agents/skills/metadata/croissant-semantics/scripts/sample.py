@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["requests", "jsonpath-ng", "openpyxl", "truststore"]
+# dependencies = ["requests", "jsonpath-ng", "openpyxl", "truststore", "pypdf"]
 # ///
 """Show real values from a layout's files, so semantics are based on data, not column names.
 
@@ -40,10 +40,12 @@ import dialects  # noqa: E402
 from common import (  # noqa: E402
     CURIE,
     as_list,
+    by_field_name,
     column_names,
     content_size,
     distribution_index,
     field_source,
+    file_columns,
     layouts,
     load_croissant,
     record_set_files,
@@ -594,10 +596,27 @@ def source_file(rs: dict, dists: dict) -> tuple[dict | None, str]:
     }, ""
 
 
-def part_name(rs: dict) -> str | None:
-    """The sheet or table a record set reads, from names like 'file.xlsx — Sheet1'."""
-    name = text(rs.get("name"))
-    return name.split(" — ", 1)[1].strip() if " — " in name else None
+def part_name(rs: dict) -> str:
+    """The record set's name, from which the sheet or table it reads is found: generators write
+    'file.xlsx — Sheet1', 'file.xlsx: Sheet1' and the like (see _pick_part)."""
+    return text(rs.get("name"))
+
+
+def _pick_part(hint: str, parts: list[str], kind: str) -> str:
+    """The sheet or table named by a record set name: the name itself, or the longest part name the
+    record set name ends with. With several parts and no match, fail rather than guess: reading
+    the wrong sheet gives plausible-looking but wrong samples."""
+    if hint in parts:
+        return hint
+    ends = [p for p in parts if hint.rstrip().endswith(p.strip())]
+    if ends:
+        return max(ends, key=len)
+    if len(parts) == 1:
+        return parts[0]
+    raise ValueError(
+        f"can't tell which {kind} the record set {hint!r} reads (its name doesn't end with one of "
+        f"{parts[:20]}); sample it with --dump FILE --sheet NAME, and report the croissant's naming"
+    )
 
 
 def _header_name(cell, columns: list[str]) -> str:
@@ -620,7 +639,12 @@ def _named_rows(header_rows: list[list], columns: list[str], n: int) -> list[dic
         return []
     names = [_header_name(c, columns) for c in header_rows[best]]
     if not want & set(names):
-        names, best = list(columns), -1  # no header row: by position
+        if not all(re.fullmatch(r"column_\d+", c) for c in columns):
+            raise ValueError(
+                "no row among the sheet's first 10 names the croissant's columns "
+                f"({columns[:6]}); it may be the wrong sheet, or the header is elsewhere"
+            )
+        names, best = list(columns), -1  # no header row, fields named by position
     return [
         dict(zip(names, ["" if v is None else str(v) for v in row], strict=False))
         for row in header_rows[best + 1 : best + 1 + n]
@@ -640,9 +664,7 @@ def xlsx_rows(data: bytes, sheet: str | None, columns: list[str], n: int) -> lis
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except (zipfile.BadZipFile, KeyError, OSError, ValueError) as e:
         raise ValueError(f"not a readable xlsx workbook ({e})") from e
-    if sheet and sheet not in wb.sheetnames:
-        raise ValueError(f"no sheet {sheet!r} (sheets: {wb.sheetnames})")
-    ws = wb[sheet] if sheet else wb.worksheets[0]
+    ws = wb[_pick_part(sheet, wb.sheetnames, "sheet")] if sheet else wb.worksheets[0]
     rows = []
     for row in ws.iter_rows(values_only=True):
         rows.append(list(row))
@@ -666,7 +688,9 @@ def sqlite_rows(data: bytes, table: str | None, columns: list[str], n: int) -> l
                     "select name from sqlite_master where type in ('table', 'view')"
                 )
             ]
-            if not table:
+            try:
+                table = _pick_part(table or "", tables, "table")
+            except ValueError:  # by columns, for databases whose record sets don't name tables
                 table = max(
                     tables,
                     key=lambda t: len(
@@ -939,11 +963,11 @@ def sample_rows(
             if kind in ("json", "jsonl"):
                 rows = json_rows(data, fields, n, lines=kind == "jsonl")
             elif kind == "xlsx":
-                rows = xlsx_rows(data, part_name(rs), column_names(rs), n)
+                rows = by_field_name(xlsx_rows(data, part_name(rs), file_columns(rs), n), rs)
             elif kind == "sqlite":
-                rows = sqlite_rows(data, part_name(rs), column_names(rs), n)
+                rows = by_field_name(sqlite_rows(data, part_name(rs), file_columns(rs), n), rs)
             else:
-                rows = table_rows(data, dist, column_names(rs), n, file_dialect)
+                rows = by_field_name(table_rows(data, dist, file_columns(rs), n, file_dialect), rs)
         except (
             BotCheck,
             AccessDenied,
@@ -1060,6 +1084,18 @@ def profile(
     together with another column's value (a cross-tab). split: a list separator, so each item of a
     joined cell is counted. stop_mb: stop streaming each file after this many MB of text."""
     dists = distribution_index(croissant)
+    # columns by their field names; a name the croissant writes with trailing spaces matches its
+    # stripped form, and an unknown name is an error rather than a column of empty values
+    known = {n for rs in record_sets for n in column_names(rs)}
+    resolved = []
+    for c in columns:
+        match = c if c in known else next((n for n in known if n.strip() == c.strip()), None)
+        if match is None:
+            sys.exit(f"--profile: no column {c!r} in these record sets; they have {sorted(known)}")
+        resolved.append(match)
+    columns = resolved
+    if by and by not in known:
+        sys.exit(f"--by: no column {by!r} in these record sets")
     counts = {c: Counter() for c in columns}
 
     def count(rec: dict) -> None:
@@ -1067,7 +1103,9 @@ def profile(
             v = rec.get(c)
             items = v if isinstance(v, list) else [v]
             if split:
-                items = [p.strip() for i in items for p in (str(i).split(split) if i else [i])]
+                items = [
+                    p.strip() for i in items if i not in (None, "") for p in str(i).split(split)
+                ] or [None]
             for item in items:
                 key = "" if item is None else str(item)
                 if key and (prefixes is True or (prefixes and c in prefixes)):
@@ -1132,7 +1170,14 @@ def _profile_one(
         raise ValueError(f"can't profile it: it {why}")
     fields = rs.get("field") or []
     file_dialect = dialects.for_file(dialect, dist) if dialect else dialects.from_croissant(dist)
-    names = column_names(rs)
+    names = file_columns(rs)  # read by the columns the fields extract, counted by field name
+    to_name = dict(zip(names, column_names(rs), strict=True))
+    columns = [next((c2 for c2, n in to_name.items() if n == c), c) for c in columns]
+    field_count = count
+
+    def count(rec: dict) -> None:  # noqa: F811 - re-keys rows, then counts
+        field_count({to_name.get(k, k): v for k, v in rec.items()})
+
     kind = file_kind(dist, fields)
     total = 0
     if kind in ("xlsx", "sqlite", "json"):
@@ -1215,8 +1260,37 @@ def _profile_one(
     )
 
 
-def dump(croissant: dict, which: str, member: str | None, sheet: str | None, max_bytes: int):
-    """Print a distribution (or a member of an archive distribution, or a sheet) as text."""
+def _tar_names(url: str, max_bytes: int) -> list[str]:
+    """Member names of a tar archive, read as far as max_bytes allows."""
+    url = mapped(url)
+    names = []
+    if (local := _local_path(url)) is not None:
+        with tarfile.open(local, mode="r:*") as t:
+            return [i.name for i in t if i.isfile()][:500]
+    with _get(url) as r:
+        r.raw.decode_content = False
+        try:
+            with tarfile.open(
+                fileobj=io.BufferedReader(_Counted(r.raw, max_bytes, url)), mode="r|*"
+            ) as t:
+                for info in t:
+                    if info.isfile():
+                        names.append(info.name)
+        except SystemExit:
+            names.append(f"(listing stopped at --max-mb {max_bytes / 1e6:g})")
+    return names[:500]
+
+
+def dump(
+    croissant: dict,
+    which: str,
+    member: str | None,
+    sheet: str | None,
+    max_bytes: int,
+    out: str | None = None,
+):
+    """Print a distribution (or a member of an archive distribution, or a sheet) as text, or write
+    it to `out` (a path in OUT/work/, for reading with other tools)."""
     dists = distribution_index(croissant)
     dist = dists.get(which) or next(
         (d for d in dists.values() if which in (text(d.get("name")), d.get("contentUrl"))), None
@@ -1230,10 +1304,31 @@ def dump(croissant: dict, which: str, member: str | None, sheet: str | None, max
         data = file_bytes(dist, dists, max_bytes, whole=False)
     except SystemExit as e:
         url = str(dists[dist["containedIn"]["@id"]]["contentUrl"]) if member else ""
-        if member and not url.lower().endswith(TAR_SUFFIXES):
+        if member and url.lower().endswith(TAR_SUFFIXES):
+            sys.exit(f"{e}. Members: {', '.join(_tar_names(url, max_bytes)[:200])}")
+        if member:
             with zipfile.ZipFile(io.BytesIO(fetch_bytes(url, max_bytes, whole=True))) as z:
                 sys.exit(f"{e}. Members: {', '.join(z.namelist()[:200])}")
         raise
+    if out:
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(data)
+        print(
+            f"Wrote {len(data):,} bytes to {out}"
+            + (" (cut at --max-mb)" if len(data) >= max_bytes else "")
+        )
+        return
+    if data[:5] == b"%PDF-":
+        import pypdf
+
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(data))
+        except Exception as e:  # noqa: BLE001 - pypdf raises many types for damaged files
+            sys.exit(f"A PDF that couldn't be read ({type(e).__name__}: {e}); raise --max-mb?")
+        for i, page in enumerate(reader.pages):
+            print(f"--- page {i + 1}")
+            print(page.extract_text() or "")
+        return
     if data[:4] == b"PK\x03\x04" and not member:
         import openpyxl
 
@@ -1249,6 +1344,8 @@ def dump(croissant: dict, which: str, member: str | None, sheet: str | None, max
         if not sheet:
             print("Sheets:", ", ".join(book.sheetnames))
             return
+        if sheet not in book.sheetnames:
+            sys.exit(f"No sheet {sheet!r}. Sheets: {', '.join(book.sheetnames)}")
         for row in book[sheet].iter_rows(values_only=True):
             print("\t".join("" if v is None else str(v) for v in row))
         return
@@ -1285,6 +1382,12 @@ def main() -> None:
     )
     ap.add_argument("--member", help="with --dump: the archive member to print (zip or tar)")
     ap.add_argument("--sheet", help="with --dump: the spreadsheet sheet to print, tab-separated")
+    ap.add_argument(
+        "-o",
+        "--out",
+        metavar="PATH",
+        help="with --dump: write the file's bytes here (in OUT/work/) instead of printing them",
+    )
     ap.add_argument("-n", type=int, default=200, help="rows to read per file (default 200)")
     ap.add_argument(
         "--files",
@@ -1379,7 +1482,7 @@ def main() -> None:
 
     croissant = load_croissant(args.croissant)
     if args.dump:
-        dump(croissant, args.dump, args.member, args.sheet, int(args.max_mb * 1e6))
+        dump(croissant, args.dump, args.member, args.sheet, int(args.max_mb * 1e6), args.out)
         return
     if args.record_set_name:
         candidates = [

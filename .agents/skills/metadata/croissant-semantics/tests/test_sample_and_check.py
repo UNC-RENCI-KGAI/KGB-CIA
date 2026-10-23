@@ -789,3 +789,51 @@ def test_run_bounded_stops_a_process_over_the_memory_cap(monkeypatch):
         check.run_bounded([sys.executable, "-c", grow], timeout=60)
     small = check.run_bounded([sys.executable, "-c", "print('ok')"], timeout=60)
     assert small.stdout.strip() == "ok"
+
+
+def test_explained_matching_merged_places_specific_entries_and_errors():
+    from check import Findings
+
+    f = Findings(
+        [
+            {"where": "x column_6", "message": "unmapped", "reason": "general"},
+            {"where": "x column_6 -> knowledge_level", "message": "unmapped", "reason": "derived"},
+            {"where": "a layout, b layout", "message": "prefix", "reason": "merged copy"},
+            {"where": "s1 matrix", "message": "pattern", "reason": "wrong sheet", "level": "error"},
+        ]
+    )
+    f.warn("x column_6 -> knowledge_level", "values with no code mapping: unmapped")
+    f.warn("b layout id", "prefix not listed")
+    f.error("s1 matrix id", "values don't fit the pattern")
+    f.error("other", "values don't fit the pattern")
+    notes = [m for lv, _, m in f.items if lv == "note"]
+    assert any("derived" in m for m in notes)
+    assert any("merged copy" in m for m in notes)
+    assert any("wrong sheet" in m for m in notes)
+    assert f.count("error") == 1 and f.count("warning") == 0
+
+
+def test_enum_codes_must_be_enum_values():
+    from check import Findings, check_enum_codes
+
+    model = {
+        "classes": {},
+        "slots": {"knowledge level": {"range": "KnowledgeLevelEnum"}},
+        "enums": {"KnowledgeLevelEnum": {"permissible_values": {"prediction": {}}}},
+    }
+    plan = {
+        "layouts": [
+            {
+                "id": "l",
+                "columns": {
+                    "ev": {
+                        "property": "biolink:knowledge_level",
+                        "codes": {"IEA": "biolink:prediction", "X": "biolink:guess"},
+                    }
+                },
+            }
+        ]
+    }
+    f = Findings()
+    check_enum_codes(plan, f, model)
+    assert f.count("error") == 1 and "biolink:guess" in f.items[0][2]
