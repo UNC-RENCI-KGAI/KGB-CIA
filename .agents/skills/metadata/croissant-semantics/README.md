@@ -51,17 +51,9 @@ Every script has `--help`. Downloads are cached in `~/.cache/croissant-semantics
 
 ## Use it as a skill
 
-It lives in the repository's project-level skills directory (`.claude/skills/`), so Claude Code
-started in this repository finds it, and Pi does once its configuration includes that path. Ask
-the agent to add semantics to a croissant; it loads `SKILL.md` and the files in `reference/`.
-To use it elsewhere, link this directory into that project's or your own skills directory.
-`ln -s` takes the directory being linked to first and the new link second; from the
-repository root:
-
-```bash
-ln -s "$PWD/.claude/skills/croissant-semantics" ~/.claude/skills/croissant-semantics
-ln -s "$PWD/.claude/skills/croissant-semantics" /path/to/project/.pi/skills/croissant-semantics
-```
+It lives with the repository's shared skills, in `.agents/skills/metadata/` (see
+[`.agents/skills/README.md`](../../README.md) for how Pi and Claude Code find them). Ask the
+agent to add semantics to a croissant; it loads `SKILL.md` and the files in `reference/`.
 
 ## Tests
 
