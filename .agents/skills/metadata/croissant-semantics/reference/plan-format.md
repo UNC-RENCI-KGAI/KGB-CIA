@@ -116,6 +116,12 @@ the plan itself is kept next to the result as the record of what was asserted an
   A local class (`rcv:<kb>/EvidenceItem`) is allowed as a row type when no established class
   fits, for example a knowledge base's core curated record. Define it in `local_terms`, linked
   to the nearest class (`broad_match: biolink:Association`).
+- `encoding_format`: replaces the encodingFormat of the layout's files, content type first
+  (`["text/tab-separated-values", "application/gzip"]`, `["application/json", "application/gzip"]`,
+  `"application/x-parquet"`). For files the generator labelled wrongly (`text/plain` for a TSV,
+  gzip alone for JSON, `application/parquet`), which mlcroissant then can't read. Say why in the
+  layout's `summary`, and report it. A dialect also sets the content type for tables; use this for
+  the rest, or to override it.
 - `dialect`: how to read the layout's files. A layout with only a dialect (and `atomic` fixes)
   is worth having: it makes files readable even where nothing else is typed. The report counts
   files with a dialect separately from record sets with semantics. The value is a name from
@@ -182,6 +188,7 @@ Used both in `columns` and in an entity's `columns`.
 | `id_prefix` | The CURIE prefix of the identifiers in the column. |
 | `id_form` | `bare` (values like `4524`, prefix must be added), `curie` (values like `MESH:D003920`), `obo` (OBO short forms like `MONDO_0004989`: prefix, underscore, local id; every prefix must be in `prefixes`), `mixed` (some of each), `url` (full IRIs, possibly from many namespaces), or `native` (the source's own tagged strings that look like CURIEs but aren't: MITAB `entrez gene/locuslink:613`, `psi-mi:"MI:0018"(two hybrid)`, HGVS `NC_000017.11:g.43044295del`). Default `bare` when `id_prefix` is set. `url`, `mixed`, `native` and `obo` are recorded in an annotation; `native` columns aren't checked for undeclared prefixes, and their tags shouldn't be declared as prefixes. |
 | `list_separator` | The text joining several values in one cell (`"\|"`, `";"`, `", "`: several characters are fine; items are trimmed). |
+| `item_pattern` | A regular expression for compound list items (`HP:0001250\|Seizure`, `TP53\|7157\|SRC`) whose first group is the id: the checks check that group (prefixes, patterns, codes). Use with `list_separator` or `list_format`; an item the pattern doesn't fit is checked whole, so it shows as a misfit. |
 | `list_format` | `json` or `python` for cells written as list literals (`["a", "b"]`, Monarch's `['PMID:1', 'PMID:2']`); the checks parse each cell and check its items. Use instead of `list_separator`. |
 | `unit` | Unit of measure for the whole column: a QUDT unit CURIE (`unit:NanoMOL-PER-L`), (`unit:BasePair` for genomic distances), or a UO term where QUDT has none. Find QUDT units with `vocab.py unit "nanomolar"`. The check confirms it exists. When the unit differs by row (a column of unit labels or UCUM codes), map that column with `codes` to `unit:` CURIEs instead; those are checked too. |
 | `codes` | `{ "value in the data": "CURIE or URL" }` for columns that hold a small set of codes. With `list_separator`, the codes apply to each item of the list. An empty cell can't be mapped: it means no value. |

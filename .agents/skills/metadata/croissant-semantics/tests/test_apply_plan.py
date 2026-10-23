@@ -946,3 +946,51 @@ def test_derived_fields_inherit_list_handling_and_list_format_parses():
         "PMID:2",
         "PMID:3",
     ]
+
+
+def test_encoding_format_and_item_pattern():
+    from apply_plan import apply_plan
+    from check import _values
+
+    croissant = {
+        "@context": {},
+        "distribution": [
+            {"@id": "f", "@type": "cr:FileObject", "contentUrl": "x.txt",
+             "encodingFormat": "text/plain"}
+        ],
+        "recordSet": [
+            {
+                "@id": "rs",
+                "name": "x",
+                "field": [
+                    {"@id": "rs/genes", "name": "genes", "dataType": "sc:Text",
+                     "source": {"fileObject": {"@id": "f"}, "extract": {"column": "genes"}}}
+                ],
+            }
+        ],
+    }  # fmt: skip
+    plan = {
+        "layouts": [
+            {
+                "id": "l",
+                "match": {"record_sets": ["rs"]},
+                "encoding_format": ["text/tab-separated-values"],
+                "columns": {
+                    "genes": {
+                        "id_prefix": "NCBIGene",
+                        "list_separator": ";",
+                        "item_pattern": r"^[^|]*\|(\d+)",
+                        "basis": "b",
+                        "source": "agent",
+                        "confidence": "high",
+                    }
+                },
+            }
+        ],
+        "prefixes": {"NCBIGene": "http://identifiers.org/ncbigene/"},
+    }
+    out, _ = apply_plan(croissant, plan)
+    assert out["distribution"][0]["encodingFormat"] == ["text/tab-separated-values"]
+    rows = [{"genes": "TP53|7157|SRC;BRCA1|672|SRC;odd"}]
+    spec = plan["layouts"][0]["columns"]["genes"]
+    assert [v for v, _ in _values(rows, "genes", spec)] == ["7157", "672", "odd"]

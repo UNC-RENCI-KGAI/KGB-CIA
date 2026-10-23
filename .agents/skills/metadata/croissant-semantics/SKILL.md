@@ -215,8 +215,7 @@ dependencies). Use `--help` on any of them.
    `check_report.md` from an earlier `--plan-only` run stays on disk until the full check
    finishes; don't read it as the result.
 
-   The validator and each record load run with a memory cap (`--memory-gb`, default 4). Record
-   loading tests one record set per plan entry and set of columns, at most `--load-per-entry`
+   Record loading tests one record set per plan entry and set of columns, at most `--load-per-entry`
    (default 3) per entry; a load that times out is retried once, then reported as unverified.
    Croissants whose columns are named `column_1`, `column_2`, … (headerless files, or headers the
    generator ignored) always fail to load in mlcroissant, from the input croissant too, because

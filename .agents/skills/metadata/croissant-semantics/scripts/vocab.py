@@ -722,7 +722,8 @@ def cmd_enum(args) -> None:
     print(f"{key}  ({BIOLINK_VERSION}); use values as codes with the biolink: prefix")
     for v, d in values.items():
         desc = ((d or {}).get("description") or "").strip().replace("\n", " ")
-        print(f"  biolink:{v}" + (f"  — {desc[:160]}" if desc else ""))
+        value = str(v).removeprefix("biolink:")  # some enums write their values as CURIEs
+        print(f"  biolink:{value}" + (f"  — {desc[:160]}" if desc else ""))
 
 
 def main() -> None:

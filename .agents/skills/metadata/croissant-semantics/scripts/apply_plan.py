@@ -84,6 +84,7 @@ KNOWN = {
         "match",
         "summary",
         "dialect",
+        "encoding_format",
         "row",
         "entities",
         "columns",
@@ -111,6 +112,7 @@ KNOWN = {
         "prefix_column",
         "list_separator",
         "list_format",
+        "item_pattern",
         "unit",
         "codes",
         "null_values",
@@ -253,6 +255,13 @@ def apply_column(
         notes.append(annotation(fid, f"true_value_{i}", "rcv:trueValue", val))
     if spec.get("list_separator"):
         notes.append(annotation(fid, "list_separator", "rcv:listSeparator", spec["list_separator"]))
+    if spec.get("item_pattern"):
+        try:
+            if re.compile(spec["item_pattern"]).groups < 1:
+                raise PlanError(f"item_pattern {spec['item_pattern']!r} needs a group for the id")
+        except re.error as e:
+            raise PlanError(f"item_pattern {spec['item_pattern']!r}: {e}") from e
+        notes.append(annotation(fid, "item_pattern", "rcv:itemPattern", spec["item_pattern"]))
     if spec.get("list_format"):
         if spec["list_format"] not in ("json", "python"):
             raise PlanError(f"list_format is json or python, not {spec['list_format']!r}")
@@ -601,6 +610,24 @@ def apply_layout(rs: dict, lay: dict, enums: dict) -> None:
             )
 
 
+def apply_encoding_formats(croissant: dict, assignments: dict[str, dict]) -> int:
+    """A layout's encoding_format replaces its files' encodingFormat: for files the generator
+    labelled wrongly (text/plain for a TSV, application/gzip alone for gzipped JSON), which
+    mlcroissant then can't read. The content type goes first, as mlcroissant picks its reader from
+    it. Runs after apply_dialects, so it wins."""
+    dists = distribution_index(croissant)
+    done = set()
+    for rs in croissant.get("recordSet") or []:
+        lay = assignments.get(rs["@id"])
+        if not lay or not lay.get("encoding_format"):
+            continue
+        for file_id in record_set_files(rs):
+            if file_id in dists and file_id not in done:
+                dists[file_id]["encodingFormat"] = as_list(lay["encoding_format"])
+                done.add(file_id)
+    return len(done)
+
+
 def apply_dialects(croissant: dict, assignments: dict[str, dict]) -> int:
     """Describe how to read each file used by a layout with a dialect: csvw:dialect,
     rcv:columnOrder, rcv:dialect, the column names in file order for files without a header row, and
@@ -916,6 +943,7 @@ def apply_plan(croissant: dict, plan: dict) -> tuple[dict, dict]:
         "codes_tables": 0,
         "local_terms": 0,
         "dialect_files": apply_dialects(out, assignments),
+        "format_files": apply_encoding_formats(out, assignments),
     }
     for rs in out.get("recordSet") or []:
         lay = assignments.get(rs["@id"])

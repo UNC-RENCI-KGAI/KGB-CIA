@@ -432,7 +432,9 @@ def check_enum_codes(plan: dict, f: "Findings", model: dict | None) -> None:
             enum = vocab.slot_enum(model, prop)
             if not enum:
                 continue
-            allowed = {v.lower() for v in vocab.enum_values(model, enum)[1]}
+            allowed = {
+                str(v).removeprefix("biolink:").lower() for v in vocab.enum_values(model, enum)[1]
+            }  # fmt: skip
             used = [str(v) for v in (spec.get("codes") or {}).values()]
             used += [str(spec["value"])] if spec.get("value") else []
             bad = sorted(
@@ -583,7 +585,13 @@ def _values(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
                 parts = str(x).split(spec["list_separator"])
             else:
                 parts = [str(x)]
-            out += [(p.strip(), r) for p in parts if p.strip() and p.strip() not in skip]
+            parts = [p.strip() for p in parts if p.strip() and p.strip() not in skip]
+            if spec.get("item_pattern"):
+                # compound items (`HP:0001250|Seizure`, `TP53|7157|SRC`): the id is the first group;
+                # an item the pattern doesn't fit is kept whole, so it shows as a misfit
+                pat = re.compile(spec["item_pattern"])
+                parts = [m.group(1) if (m := pat.match(p)) and m.group(1) else p for p in parts]
+            out += [(p, r) for p in parts]
     return out
 
 
@@ -757,7 +765,7 @@ def check_formats(original: dict, plan: dict, f: "Findings") -> None:
     bare: dict[str, list[str]] = {}
     for rs in original.get("recordSet") or []:
         lay = assignments.get(rs["@id"])
-        if not lay or lay.get("dialect"):
+        if not lay or lay.get("dialect") or lay.get("encoding_format"):
             continue
         if any(
             "jsonPath" in ((fl.get("source") or {}).get("extract") or {})
@@ -1384,7 +1392,13 @@ def _load_cause(msg: str) -> str | None:
             "mlcroissant reads each row as one column: the file isn't separated the way its "
             "encodingFormat says (spaces, or another delimiter)"
         )
-    if re.search(r'Column "[^"]+" does not exist|does not exist in node', msg) and "column_" in msg:
+    if re.search(r"Possible fields: Index\(\[\d", msg):
+        return (
+            "mlcroissant read no header: the file isn't read as a table (its encodingFormat is "
+            "text/plain or another non-table type; a plan's encoding_format fixes it), or it has "
+            "no header row"
+        )
+    if re.search(r'Column "column_\d+" does not exist|"column_\d+" does not exist in node', msg):
         return (
             "the croissant's column names (column_1, column_2, …) aren't in the file: a header "
             "row it didn't use, or no header row; mlcroissant ignores csvw:dialect"
