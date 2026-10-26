@@ -1,0 +1,60 @@
+flowchart TD
+    PHAROS["Pharos exports<br/>(CSV / GraphQL)"]
+    TCRD["TCRD dump<br/>(MySQL)"]
+
+    RC["1a. RoboCroissant<br/>(existing)"]
+    CS["1b. croissant-semantics skill<br/>(PR #17)"]
+
+    T["2. Transformation agent<br/>columns to Biolink classes / predicates<br/>writes + runs transform code<br/>calls NodeNorm<br/>per-source output<br/>STATUS: stub - build next"]
+
+    GOAL["TODAY'S GOAL (Oct 27)<br/>stages 1-2, through the ORION merge:<br/>a person can build a graph"]
+
+    ORION["ORION merge<br/>(not agentic - existing tool)<br/>merges per-source, NodeNorm'd files<br/>edge-merging happens here"]
+
+    Q1["OPEN QUESTION #23<br/>Filter before or after<br/>Transformation?"]
+
+    F["3. Filter &amp; integration agent<br/>defaults: affinity cutoffs, edge types<br/>merges into one connected graph<br/>(not in scope for Oct 27)"]
+
+    LC["LitCoin<br/>(literature tool)"]
+
+    A["4. Augmentation agent<br/>extra datasets + PubMed evidence<br/>(not in scope for Oct 27)"]
+
+    Q2["OPEN QUESTION #24<br/>Cleaning before, after, or both<br/>around Augmentation?<br/>(garbage in -&gt; augmented -&gt; garbage out)"]
+
+    C["5. Cleaning agent<br/>conflict resolution, pruning<br/>(not in scope for Oct 27)"]
+
+    M["6. MCP interface<br/>neighbors, paths, edge lineage<br/>(not in scope for Oct 27)"]
+
+    EVAL["Evaluation pipeline<br/>GNN link prediction vs Pharos baseline<br/>(not an agent, outside the pipeline)"]
+
+    PHAROS --> RC
+    TCRD --> RC
+    RC -->|"croissant.json<br/>(one per source)"| CS
+    CS -->|"croissant.semantic.json<br/>semantics_plan.json<br/>check_report.md"| T
+    T -->|"nodes.jsonl<br/>edges.jsonl<br/>(per source, NodeNorm'd)"| ORION
+    ORION -->|"nodes.jsonl<br/>edges.jsonl<br/>(merged across sources)"| F
+    T -.-> Q1
+    F -.-> Q1
+    F -->|"baseline graph<br/>nodes_filtered.jsonl<br/>edges_filtered.jsonl"| A
+    A <-.-> LC
+    A -->|"nodes_augmented.jsonl<br/>edges_augmented.jsonl<br/>(edges: has_confidence_score)"| C
+    A -.-> Q2
+    C -.-> Q2
+    C -->|"final graph"| M
+    C -->|"final graph"| EVAL
+
+    classDef done fill:#d4edda,stroke:#2e7d32,color:#1b1b1b;
+    classDef priority fill:#fff3cd,stroke:#e6a700,color:#1b1b1b;
+    classDef later fill:#eceff1,stroke:#90a4ae,color:#1b1b1b;
+    classDef eval fill:#dbe9fb,stroke:#1565c0,color:#1b1b1b;
+    classDef question fill:#fff8e1,stroke:#f9a825,stroke-dasharray: 4 2,color:#1b1b1b;
+    classDef tool fill:#ffffff,stroke:#555,color:#1b1b1b;
+    classDef goal fill:#ffffff,stroke:#1b1b1b,color:#1b1b1b;
+
+    class PHAROS,TCRD,RC,CS done;
+    class T,ORION priority;
+    class F,A,C,M later;
+    class EVAL eval;
+    class Q1,Q2 question;
+    class LC tool;
+    class GOAL goal;
