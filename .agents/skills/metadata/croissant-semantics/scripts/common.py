@@ -120,7 +120,7 @@ def record_set_files(record_set: dict) -> list[str]:
     return ids
 
 
-_SIZE = re.compile(r"^\s*([\d.]+)\s*([KMGT]?i?B)?\s*$", re.I)
+_SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([KMGT]?i?B)?\s*$", re.I)
 _UNITS = {
     "": 1,
     "b": 1,

@@ -1340,7 +1340,7 @@ def _profile_one(
             where += (
                 f" (only the member's first {max_bytes / 1e6:.0f} MB; raise --max-mb for all of it)"
             )
-        r = None
+        r = fh = None
     elif (local := _local_path(mapped(str(dist.get("contentUrl"))))) is not None:
         fh = local.open("rb")
         stream = gzip.GzipFile(fileobj=fh) if local.name.endswith(".gz") else fh
@@ -1350,6 +1350,7 @@ def _profile_one(
             None,
         )
     else:
+        fh = None
         url = mapped(str(dist.get("contentUrl")))
         r = _get(url)
         raw = r.raw
@@ -1391,6 +1392,8 @@ def _profile_one(
     finally:
         if r is not None:
             r.close()
+        if fh is not None:
+            fh.close()
     print(
         f"Profiled {total} rows of {where}"
         + (f" (stopped after {stop_mb:g} MB: counts cover only the start)" if stopped else "")

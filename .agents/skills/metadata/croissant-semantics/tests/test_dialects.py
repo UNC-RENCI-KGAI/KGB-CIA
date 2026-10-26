@@ -423,3 +423,12 @@ def test_rows_by_field_name_keep_a_column_read_twice():
         },
         {"Qualifier": "a", "negated": "a"},
     ]
+
+
+def test_lines_keeps_the_last_line_of_a_fully_read_file():
+    # a file read in full that happens to lack a trailing newline is not truncated: nothing to drop
+    data = b"a\nb\nc"
+    assert dialects._lines(data) == ["a", "b", "c"]
+    assert dialects._lines(data, limit=100) == ["a", "b", "c"]
+    # a read that actually hit the byte cap may have cut the last line off mid-way: drop it
+    assert dialects._lines(data, limit=len(data)) == ["a", "b"]

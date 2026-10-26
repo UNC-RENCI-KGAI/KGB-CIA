@@ -317,10 +317,13 @@ def fit(rows: list[dict], field_names: list[str], dialect: dict) -> tuple[float,
     return score, why
 
 
-def _lines(data: bytes) -> list[str]:
+def _lines(data: bytes, limit: int | None = None) -> list[str]:
+    """Lines of a capped read. The last line is dropped only when `data` actually hit `limit`
+    (so it may be a partial line); a file read in full, even one lacking a trailing newline,
+    keeps its last line."""
     text_ = data.decode("utf-8", errors="replace")
     lines = text_.splitlines()
-    if lines and not text_.endswith("\n"):
+    if lines and not text_.endswith("\n") and limit is not None and len(data) >= limit:
         lines = lines[:-1]
     return lines
 
@@ -330,7 +333,7 @@ def _head(croissant: dict, rs: dict, max_bytes: int = 4_000_000) -> tuple[dict, 
 
     dists = distribution_index(croissant)
     dist = dists[record_set_files(rs)[0]]
-    return dist, _lines(smp.file_bytes(dist, dists, max_bytes, whole=False))
+    return dist, _lines(smp.file_bytes(dist, dists, max_bytes, whole=False), limit=max_bytes)
 
 
 def cmd_list(args) -> None:

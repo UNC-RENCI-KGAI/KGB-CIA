@@ -543,6 +543,34 @@ def test_round7_check_fixes():
     assert time.time() - t < 10
 
 
+def test_validate_timeout_or_memory_cap_is_an_error_not_a_warning(monkeypatch):
+    """A croissant whose structural validity couldn't be checked must fail the run (exit 1), not
+    pass silently: check.py's exit code only looks at errors, not warnings."""
+    import subprocess
+
+    import check
+
+    monkeypatch.setattr(
+        check,
+        "run_bounded",
+        lambda cmd, timeout: (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd, timeout)),
+    )
+    f = Findings()
+    check._run_validate("croissant.json", f, 60)
+    assert f.count("error") == 1
+    assert "unverified" in check.VALIDATION["result"]
+
+    monkeypatch.setattr(
+        check,
+        "run_bounded",
+        lambda cmd, timeout: (_ for _ in ()).throw(check.MemoryExceeded("used 5.0 GB")),
+    )
+    f = Findings()
+    check._run_validate("croissant.json", f, 60)
+    assert f.count("error") == 1
+    assert "unverified" in check.VALIDATION["result"]
+
+
 def test_sampling_stops_at_the_first_refusal():
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -711,6 +739,40 @@ def test_profile_splits_lists_and_stops_early(tmp_path, capsys):
     sample.profile(croissant, croissant["recordSet"], ["genes"], 5, None, 10**6, stop_mb=0.001)
     out = capsys.readouterr().out
     assert "stopped after 0.001 MB" in out and "Profiled 1000 rows" not in out
+
+
+def test_profile_closes_the_local_file_handle(tmp_path, monkeypatch, capsys):
+    """_profile_one's local file:// branch must close its own file handle, not just the HTTP
+    response it tracks for the remote branch, or profiling many local files leaks a descriptor
+    per call."""
+    import sample
+
+    path = tmp_path / "data.tsv"
+    path.write_text("a\tb\n1\t2\n")
+    opened = []
+    real_open = Path.open
+
+    def tracking_open(self, *args, **kwargs):
+        fh = real_open(self, *args, **kwargs)
+        opened.append(fh)
+        return fh
+
+    monkeypatch.setattr(Path, "open", tracking_open)
+    croissant = {
+        "distribution": [{"@id": "f", "contentUrl": f"file://{path}"}],
+        "recordSet": [
+            {
+                "@id": "rs",
+                "field": [
+                    {"name": n, "source": {"fileObject": {"@id": "f"}, "extract": {"column": n}}}
+                    for n in ("a", "b")
+                ],
+            }
+        ],
+    }
+    sample.profile(croissant, croissant["recordSet"], ["b"], 5, None, 10**6)
+    capsys.readouterr()
+    assert opened and all(fh.closed for fh in opened)
 
 
 def test_reduced_croissant_keeps_one_record_set_per_layout_and_its_references():

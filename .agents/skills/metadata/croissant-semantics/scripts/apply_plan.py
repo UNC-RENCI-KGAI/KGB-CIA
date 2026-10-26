@@ -46,6 +46,16 @@ VOCAB = {
 # Croissant 1.1 terms our older croissants' @context lacks. mlcroissant reads `value` as
 # schema.org/value.
 CONTEXT_TERMS = {"annotation": "cr:annotation", "value": "sc:value"}
+# Also documented as built in (reference/plan-format.md) and accepted by check.py's BUILTIN, but
+# kept out of VOCAB: update_context already special-cases rdfs, and sc/cr are Croissant's own
+# @context terms that a valid input croissant defines itself, so neither needs writing into
+# @context here. PLAN_PREFIXES still needs them, so prefix_codes can map to them like any other
+# built-in prefix.
+PREFIXES = {
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "sc": "https://schema.org/",
+    "cr": "http://mlcommons.org/croissant/",
+}
 ATOMIC = {
     "sc:Text",
     "sc:Integer",
@@ -937,7 +947,7 @@ def resolve_plan(plan: dict) -> dict:
 def apply_plan(croissant: dict, plan: dict) -> tuple[dict, dict]:
     WARNINGS.clear()
     PLAN_PREFIXES.clear()
-    PLAN_PREFIXES.update({**VOCAB, **(plan.get("prefixes") or {})})
+    PLAN_PREFIXES.update({**VOCAB, **PREFIXES, **(plan.get("prefixes") or {})})
     check_keys(plan)
     plan = resolve_plan(plan)
     out = copy.deepcopy(croissant)

@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 from apply_plan import PlanError, apply_plan  # noqa: E402
-from common import column_names, layout_id, layouts  # noqa: E402
+from common import column_names, content_size, layout_id, layouts  # noqa: E402
 
 
 def field(fid, name, dtype="sc:Text"):
@@ -67,6 +67,13 @@ def croissant():
             },
         ],
     }
+
+
+def test_content_size_rejects_a_malformed_number_instead_of_crashing():
+    assert content_size({"contentSize": "1.2.3B"}) is None
+    assert content_size({"contentSize": "5 MB"}) == 5_000_000
+    assert content_size({"contentSize": "not a size"}) is None
+    assert content_size({}) is None
 
 
 LAYOUT = layout_id(["GeneID", "Symbol", "DiseaseID", "Evidence", "PMIDs"])
@@ -721,6 +728,63 @@ def test_prefix_codes_map_namespace_keys_to_prefixes():
     plan["layouts"][0]["columns"]["xref_id"]["prefix_codes"] = {"protein_xref_omim": "MIM"}
     with pytest.raises(PlanError, match="not in the plan's prefixes"):
         apply_plan(c, plan)
+
+
+def test_prefix_codes_accept_the_documented_built_ins_without_declaring_them():
+    """rdfs, sc and cr are documented as built in (reference/plan-format.md) and accepted by
+    check.py's BUILTIN; apply_plan.py must accept a plan that maps prefix_codes to them too,
+    without the plan declaring them under "prefixes"."""
+    c = {
+        "@context": {},
+        "distribution": [],
+        "recordSet": [
+            {
+                "@id": "rs",
+                "name": "rs",
+                "field": [
+                    {
+                        "@id": f"rs/{n}",
+                        "name": n,
+                        "dataType": "sc:Text",
+                        "source": {"fileObject": {"@id": "f"}, "extract": {"column": n}},
+                    }
+                    for n in ("xref_key", "xref_id")
+                ],
+            }
+        ],
+    }
+    plan = {
+        "layouts": [
+            {
+                "id": "l",
+                "match": {"record_sets": ["rs"]},
+                "columns": {
+                    "xref_id": {
+                        "property": "biolink:xref",
+                        "id_form": "bare",
+                        "prefix_column": "xref_key",
+                        "prefix_codes": {"protein_xref_rdfs": "rdfs"},
+                    }
+                },
+            }
+        ],
+    }
+    out, _counts = apply_plan(c, plan)  # must not raise
+    note = next(
+        a
+        for f in out["recordSet"][0]["field"]
+        for a in f.get("annotation", [])
+        if a["name"] == "id_prefix"
+    )
+    table = next(
+        r for r in out["recordSet"] if r["@id"] == note["references"]["field"]["@id"].split("/")[0]
+    )
+    assert table["data"] == [
+        {
+            f"{table['@id']}/name": "protein_xref_rdfs",
+            f"{table['@id']}/url": "http://www.w3.org/2000/01/rdf-schema#",
+        }
+    ]
 
 
 def test_maintainer_answers_override_add_and_skip():

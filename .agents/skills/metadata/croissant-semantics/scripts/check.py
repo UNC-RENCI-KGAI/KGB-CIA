@@ -1304,7 +1304,9 @@ def _run_validate(path: str, f: Findings, timeout: int) -> None:
     try:
         p = run_bounded(cmd, timeout)
     except subprocess.TimeoutExpired:
-        f.warn(
+        # an error, not a warning: the croissant's structural validity was never checked, so the
+        # run must not report success (exit 0) as if it had been
+        f.error(
             "croissant",
             f"mlcroissant validate timed out after {timeout}s, so the croissant's structure is "
             "unverified; re-run with a larger --validate-timeout on an idle machine",
@@ -1312,7 +1314,7 @@ def _run_validate(path: str, f: Findings, timeout: int) -> None:
         VALIDATION["result"] = f"timed out after {timeout}s (unverified)"
         return
     except MemoryExceeded as e:
-        f.warn(
+        f.error(
             "croissant",
             f"mlcroissant validate {e} and was stopped, so the croissant's structure is "
             "unverified; try --validate-reduced",
