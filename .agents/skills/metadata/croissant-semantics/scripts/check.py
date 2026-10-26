@@ -930,7 +930,10 @@ def check_data(
                 empty = sum(
                     1
                     for r in rows
-                    if all(str(r.get(c) or "").strip() in ("", *nulls) for c in alternatives)
+                    if all(
+                        r.get(c) is None or str(r.get(c)).strip() in ("", *nulls)
+                        for c in alternatives
+                    )
                 )
                 if empty > 0.05 * len(rows):
                     f.warn(

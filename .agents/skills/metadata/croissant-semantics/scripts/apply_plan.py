@@ -378,8 +378,8 @@ def match_record_sets(croissant: dict, plan: dict) -> dict[str, dict]:
                 continue
             if (
                 m.get("record_sets")
-                and rs["@id"] not in m["record_sets"]
-                and text(rs.get("name")) not in m["record_sets"]
+                and rs["@id"] not in as_list(m["record_sets"])
+                and text(rs.get("name")) not in as_list(m["record_sets"])
             ):
                 continue
             if m.get("record_set_name") and not re.search(
@@ -669,10 +669,16 @@ def apply_dialects(croissant: dict, assignments: dict[str, dict]) -> int:
                     "different orders"
                 )
             given[file_id] = (lay["id"], dialect, columns)
+
+    def all_fields(fields):
+        for f in fields:
+            yield f
+            yield from all_fields(f.get("subField") or [])
+
     read_by_lines = {
         d
         for rs in croissant.get("recordSet") or []
-        for f in rs.get("field") or []
+        for f in all_fields(rs.get("field") or [])
         for _, d, ex in [field_source(f)]
         if ex.get("fileProperty") == "lines"
     }
@@ -770,11 +776,20 @@ def ensure_field_ids(croissant: dict) -> int:
     """Give every field (and sub-field) that lacks an @id one built from its record set and name,
     cleaned so the validator accepts it (names like ' #skip' have spaces and marks). Returns how
     many were added."""
+
+    def existing_ids(fields):
+        ids = set()
+        for fl in fields:
+            if "@id" in fl:
+                ids.add(fl["@id"])
+            ids |= existing_ids(fl.get("subField") or [])
+        return ids
+
     added = 0
     for rs in croissant.get("recordSet") or []:
         if "@id" not in rs:
             raise PlanError(f"record set {text(rs.get('name'))!r} has no @id")
-        taken = {f["@id"] for f in rs.get("field") or [] if "@id" in f}
+        taken = existing_ids(rs.get("field") or [])
 
         def fill(fields, parent, taken=taken):
             nonlocal added

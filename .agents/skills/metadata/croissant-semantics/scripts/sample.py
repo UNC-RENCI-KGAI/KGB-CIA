@@ -485,12 +485,18 @@ def file_bytes(dist: dict, dists: dict, max_bytes: int, whole: bool) -> bytes:
 
 
 def table_rows(
-    data: bytes, dist: dict, columns: list[str], n: int, dialect: dict | None = None
+    data: bytes,
+    dist: dict,
+    columns: list[str],
+    n: int,
+    dialect: dict | None = None,
+    whole: bool = False,
 ) -> list[dict]:
     """Rows of a table file. With a dialect (given, or the file's own csvw:dialect) the file is read
-    exactly as the dialect says; without one, the delimiter and header are guessed."""
+    exactly as the dialect says; without one, the delimiter and header are guessed. `whole` says the
+    data is the complete file (never truncated), so its last line is never dropped as cut off."""
     lines = data.decode("utf-8", errors="replace").splitlines()
-    if lines and not data.endswith(b"\n"):
+    if lines and not whole and not data.endswith(b"\n"):
         lines = lines[:-1]  # last line may be cut off
     # JSON opens with { "key" or [ followed by a value; a table header like "[class]" doesn't
     if re.match(rb'\s*(\{\s*["}]|\[\s*[\[{"\]\d-])', data[:200]) and not str(
@@ -763,18 +769,14 @@ def xlsx_rows(data: bytes, sheet: str | None, columns: list[str], n: int) -> lis
         except (xlrd.XLRDError, xlrd.compdoc.CompDocError) as e:
             raise ValueError(f"not a readable legacy Excel (.xls) workbook ({e})") from e
         names = book.sheet_names()
-        ws = (
-            book.sheet_by_name(_pick_part(sheet, names, "sheet"))
-            if sheet
-            else book.sheet_by_index(0)
-        )
+        ws = book.sheet_by_name(_pick_part(sheet, names, "sheet"))
         rows = [ws.row_values(i) for i in range(min(ws.nrows, n + 10))]
         return _named_rows(rows, columns, n)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except (zipfile.BadZipFile, KeyError, OSError, ValueError) as e:
         raise ValueError(f"not a readable xlsx workbook ({e})") from e
-    ws = wb[_pick_part(sheet, wb.sheetnames, "sheet")] if sheet else wb.worksheets[0]
+    ws = wb[_pick_part(sheet, wb.sheetnames, "sheet")]
     rows = []
     for row in ws.iter_rows(values_only=True):
         rows.append(list(row))
@@ -832,10 +834,12 @@ def _record_root(paths: list[str]) -> str | None:
     return root if all(p.startswith(root) for p in paths) else None
 
 
-def json_rows(data: bytes, fields: list[dict], n: int, lines: bool = False) -> list[dict]:
+def json_rows(
+    data: bytes, fields: list[dict], n: int, lines: bool = False, whole: bool = False
+) -> list[dict]:
     """Rows from JSON or JSON Lines. Fields are read per record, so a record missing a key gives
     None for that field instead of shifting the other records' values. JSON Lines may be cut off:
-    the last, partial line is dropped."""
+    the last, partial line is dropped, unless `whole` says the data is the complete file."""
     text_ = data.decode("utf-8", errors="replace")
     named = [
         (text(f.get("name")), (f.get("source") or {}).get("extract", {}).get("jsonPath"))
@@ -848,7 +852,7 @@ def json_rows(data: bytes, fields: list[dict], n: int, lines: bool = False) -> l
         except json.JSONDecodeError:
             lines = True
     if lines:
-        complete = text_.splitlines()[: -1 if not text_.endswith("\n") else None]
+        complete = text_.splitlines()[: -1 if not whole and not text_.endswith("\n") else None]
         docs = [json.loads(ln) for ln in complete[:n] if ln.strip().startswith(("{", "["))]
         if docs and _record_root([path for _, path in named]) is None:
             # each line is one record, and the paths are relative to it ($.subject)
@@ -1080,7 +1084,7 @@ def sample_rows(
             data = file_bytes(dist, dists, limit, whole=whole)
             file_dialect = dialects.for_file(dialect, dist) if dialect else None
             if kind in ("json", "jsonl"):
-                rows = json_rows(data, fields, n, lines=kind == "jsonl")
+                rows = json_rows(data, fields, n, lines=kind == "jsonl", whole=whole)
             elif kind == "parquet":
                 rows = by_field_name(parquet_rows(data, n), rs)
             elif kind == "xlsx":
@@ -1088,7 +1092,9 @@ def sample_rows(
             elif kind == "sqlite":
                 rows = by_field_name(sqlite_rows(data, part_name(rs), file_columns(rs), n), rs)
             else:
-                rows = by_field_name(table_rows(data, dist, file_columns(rs), n, file_dialect), rs)
+                rows = by_field_name(
+                    table_rows(data, dist, file_columns(rs), n, file_dialect, whole=whole), rs
+                )
         except (
             BotCheck,
             AccessDenied,
@@ -1312,7 +1318,7 @@ def _profile_one(
     if kind in ("xlsx", "sqlite", "json", "parquet"):
         data = file_bytes(dist, dists, max_bytes, whole=True)
         if kind == "json":
-            recs = json_rows(data, fields, 10**9)
+            recs = json_rows(data, fields, 10**9, whole=True)
         elif kind == "parquet":
             recs = parquet_rows(data, 10**9)
         else:
