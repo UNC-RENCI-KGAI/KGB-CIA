@@ -64,12 +64,17 @@ def file_columns(record_set: dict) -> list[str]:
 
 
 def by_field_name(rows: list[dict], record_set: dict) -> list[dict]:
-    """Rows keyed by file column, re-keyed by field name (plans refer to fields by name)."""
-    pairs = zip(file_columns(record_set), column_names(record_set), strict=True)
-    rename = {c: n for c, n in pairs if c != n}
-    if not rename:
+    """Rows keyed by file column, re-keyed by field name (plans refer to fields by name). Several
+    fields can read one column (a derived field and the column it's derived from); each gets the
+    value. Cells no field reads keep their column name."""
+    pairs = list(zip(file_columns(record_set), column_names(record_set), strict=True))
+    if all(c == n for c, n in pairs):
         return rows
-    return [{rename.get(k, k): v for k, v in r.items()} for r in rows]
+    read = {c for c, _ in pairs}
+    return [
+        {**{k: v for k, v in r.items() if k not in read}, **{n: r[c] for c, n in pairs if c in r}}
+        for r in rows
+    ]
 
 
 def layout_id(columns: list[str]) -> str:

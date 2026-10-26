@@ -78,9 +78,10 @@ def test_wrong_dialect_fits_badly():
 def test_croissant_round_trip_and_encoding_formats():
     d = dialects.resolve("vcf-4")
     props = dialects.to_croissant(d)
+    # quoteChar null (no quoting) is written, not dropped, so a reader doesn't fall back to '"'
     assert (
         props["csvw:dialect"]["csvw:commentPrefix"] == "##"
-        and "csvw:quoteChar" not in props["csvw:dialect"]
+        and props["csvw:dialect"]["csvw:quoteChar"] is None
     )
     back = dialects.from_croissant(props)
     assert (
@@ -88,6 +89,10 @@ def test_croissant_round_trip_and_encoding_formats():
         and back["columns"] == "header"
         and back["name"] == "vcf-4"
     )
+    # read back from the croissant alone, a cell starting with a quote is kept as it is
+    gaf = dialects.from_croissant(dialects.to_croissant(dialects.resolve("gaf-2.2"), GAF_COLS))
+    row = dialects.parse(['UniProtKB\tP1\t"x\tY'], gaf, GAF_COLS)[0]
+    assert row[GAF_COLS[2]] == '"x'
     gz = {"contentUrl": "https://x.org/a.vcf.gz", "encodingFormat": "application/gzip"}
     assert dialects.encoding_formats(gz, d) == [
         "text/tab-separated-values",
@@ -395,3 +400,26 @@ def test_header_names_keep_spaces_the_croissant_keeps():
         ["Genus ,Species", "Alphavirus,Sindbis virus"], dialects.resolve("csv"), cols
     )
     assert rows == [{"Genus ": "Alphavirus", "Species": "Sindbis virus"}]
+
+
+def test_rows_by_field_name_keep_a_column_read_twice():
+    # a derived field reads the same column as the field it's derived from: both get the value
+    from common import by_field_name
+
+    rs = {
+        "field": [
+            {"name": "Qualifier", "source": {"extract": {"column": "Qualifier"}}},
+            {"name": "negated", "source": {"extract": {"column": "Qualifier"}}},
+            {"name": "column_2", "source": {"extract": {"column": "GO ID"}}},
+        ]
+    }
+    rows = [{"Qualifier": "NOT|enables", "GO ID": "GO:1", "__extra__": ["x"]}, {"Qualifier": "a"}]
+    assert by_field_name(rows, rs) == [
+        {
+            "__extra__": ["x"],
+            "Qualifier": "NOT|enables",
+            "negated": "NOT|enables",
+            "column_2": "GO:1",
+        },
+        {"Qualifier": "a", "negated": "a"},
+    ]

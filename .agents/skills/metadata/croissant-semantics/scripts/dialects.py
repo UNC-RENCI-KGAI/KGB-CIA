@@ -129,10 +129,11 @@ def to_croissant(dialect: dict, columns: list[str] | None = None) -> dict:
     """The properties written onto a FileObject. For a file without a header row, `columns` (the
     column names in file order) is written as rcv:columnNames, since grouping fields changes the
     croissant's order."""
+    # a null is kept: CSVW's "quoteChar": null means no quoting, and leaving it out would mean the
+    # default '"' to a reader working from the croissant
     props = {"@type": "csvw:Dialect"}
     for k, v in dialect.get("csvw", {}).items():
-        if v is not None:
-            props[f"csvw:{k}"] = v
+        props[f"csvw:{k}"] = v
     out = {"csvw:dialect": props, "rcv:columnOrder": dialect["columns"]}
     if dialect.get("header_in_comments"):
         out["rcv:headerInComments"] = True
