@@ -949,6 +949,9 @@ def apply_plan(croissant: dict, plan: dict) -> tuple[dict, dict]:
         lay = assignments.get(rs["@id"])
         if lay:
             apply_layout(rs, lay, enums)
+            # which plan entry describes this record set, so the plan and the croissant link
+            # directly (a layout fingerprint can't be recomputed once columns are grouped)
+            rs["rcv:planLayout"] = lay["id"]
             counts["record_sets"] += 1
     for enum_id, info in enums.items():
         out["recordSet"].append(enumeration_record_set(enum_id, info))

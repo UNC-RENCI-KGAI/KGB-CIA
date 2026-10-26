@@ -994,3 +994,25 @@ def test_encoding_format_and_item_pattern():
     rows = [{"genes": "TP53|7157|SRC;BRCA1|672|SRC;odd"}]
     spec = plan["layouts"][0]["columns"]["genes"]
     assert [v for v, _ in _values(rows, "genes", spec)] == ["7157", "672", "odd"]
+
+
+def test_record_sets_name_their_plan_entry():
+    from apply_plan import apply_plan
+
+    croissant = {
+        "@context": {},
+        "distribution": [{"@id": "f", "@type": "cr:FileObject", "contentUrl": "x.tsv"}],
+        "recordSet": [
+            {
+                "@id": "rs",
+                "name": "x",
+                "field": [
+                    {"@id": "rs/a", "name": "a", "dataType": "sc:Text",
+                     "source": {"fileObject": {"@id": "f"}, "extract": {"column": "a"}}}
+                ],
+            }
+        ],
+    }  # fmt: skip
+    plan = {"layouts": [{"id": "things", "match": {"record_sets": ["rs"]}, "columns": {}}]}
+    out, _ = apply_plan(croissant, plan)
+    assert out["recordSet"][0]["rcv:planLayout"] == "things"

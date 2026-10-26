@@ -87,7 +87,8 @@ the plan itself is kept next to the result as the record of what was asserted an
 }
 ```
 
-- `id`: short, unique in the plan, snake_case.
+- `id`: short, unique in the plan, snake_case. `apply_plan.py` writes it on every record set
+  the layout matches, as `rcv:planLayout`.
 - `match` (required): `layout` is the id from `inventory.py`, or `layouts` a list of them (one entry for
   the same kind of file whose columns changed across releases); or `has_columns`, a list of column
   names, to match every record set that has all of them (for knowledge bases with hundreds of

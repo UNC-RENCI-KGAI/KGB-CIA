@@ -20,6 +20,7 @@ whose prefix is in `@context`; validators check structure, not meaning.
 | `codes` | A record set `codes_<hash>` typed `sc:Enumeration` with inline `data` (`name` → `url`), shared by every column (in any layout) with the same mapping, and `references` from the column to its `name` field |
 | `local_terms` | A record set `rc_local_terms` typed `sc:DefinedTerm`, with inline rows: id, label, definition, SKOS matches, see-also |
 | `prefixes` | Added to `@context` |
+| layout `id` | `rcv:planLayout` on each record set the layout matched, so the croissant names its plan entry |
 
 Example: an entity, as written into the croissant.
 
@@ -58,6 +59,10 @@ Tools that don't know them still read the file; they just don't act on them.
   `rcv:dialect` for what CSVW can't say. See `dialects.md`.
 - **`rcv:headerInComments`** on a file: the last comment line before the data names the columns.
 - **`rcv:restColumn`** on a file: the named column takes the rest of each row as a list (GMT).
+- **`rcv:planLayout`** on a record set: the `id` of the plan layout that described it. A
+  layout's `match.layout` fingerprint is computed from the original croissant's columns and
+  can't be recomputed from the semantic one (columns move into entities), so this is the link
+  from a record set back to its plan entry. Record sets no layout matched have none.
 - **`rcv:` namespace** (`https://roboboulangerie.github.io/vocab/`): terms defined for one
   knowledge base, in `rc_local_terms`. Provisional; the namespace may move.
 
