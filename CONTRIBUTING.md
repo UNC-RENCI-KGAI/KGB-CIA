@@ -49,8 +49,10 @@ the rule, decline.
   `uv.lock` stay in sync.
 - Each agent directory is a package with a `cli.py` exposing `main()` and a `README.md` saying
   how to run it alone. Inputs and outputs between agents use the record types in `shared/schema.py`.
-- Keep provenance on every edge (source file, columns, evidence). Explainability is 20% of the
-  score and the MCP interface has to answer "why does A connect to B?".
+- Every edge carries Biolink provenance: `primary_knowledge_source`, `knowledge_level` and
+  `agent_type`, plus aggregators and publications where known. Which file and columns produced
+  it goes in the transformation agent's `TransformReport`. Explainability is 20% of the score
+  and the MCP interface has to answer "why does A connect to B?".
 - `ruff` for lint and format (`make lint`), `pytest` for tests (`make test`). Small tests on toy
   data beat none.
 - No data files in git. `data/` is ignored except for its README.
