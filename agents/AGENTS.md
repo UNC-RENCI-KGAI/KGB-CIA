@@ -18,8 +18,10 @@ Replace the stub body freely, but keep both names and that signature. Put the re
 other modules in the package and keep `cli.py` thin. Adding or renaming a stage means updating
 `STAGES` in `shared/pipeline.py` and `[project.scripts]` in `pyproject.toml` together.
 
-Read and write the records in `shared/schema.py`. Every `Edge` gets a `Provenance` naming the
-source, file and columns it came from; augmentation adds to `evidence` rather than replacing it.
+Read and write the records in `shared/schema.py`. Every `Edge` names its Biolink
+knowledge sources, knowledge level and agent type; augmentation adds to `publications` rather
+than replacing them. The transformation agent also writes a `TransformReport` per source: which
+Croissant files and columns it used to make which nodes and edges.
 
 When the CLI's flags or its input/output files change, update the stage's `README.md` ("Run it
 alone" and "Input / output").
@@ -42,4 +44,5 @@ From `docs/agent_plan.md`, which has the reasoning:
 - **cleaning**: resolves conflicts between sources and prunes to the final graph. No design yet;
   check the team's tracking issue before building.
 - **mcp_interface**: an MCP server modeled on the OKN MCP that lets any local agent query the
-  final graph: neighbors, paths, and edge lineage from `Provenance`.
+  final graph: neighbors, paths, and edge lineage from the edge's knowledge
+  sources and publications and the `TransformReport`.
