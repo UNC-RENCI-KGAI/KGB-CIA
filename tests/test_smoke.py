@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from shared.pipeline import STAGES, main
-from shared.schema import ColumnRef, Edge, Graph, Mapping, Node, TransformReport
+from shared.schema import ColumnRef, Edge, Graph, Mapping, Node, Skipped, TransformReport
 
 
 def test_dry_run_lists_every_stage(capsys):
@@ -69,12 +69,14 @@ def test_transform_report_round_trip():
     report = TransformReport(
         source="infores:tcrd",
         source_version="6.13.4",
-        croissant="data/tcrd/croissant.semantic.json",
+        croissant="data/tcrd/croissant.json",
+        semantic_croissant="data/tcrd/croissant.semantic.json",
         mappings=[
             Mapping(
                 id="tcrd.cmpd_activity.interacts",
                 file="cmpd_activity.tsv",
                 record_set="record_cmpd_activity",
+                plan_layout="compound_activity",
                 produces="edge",
                 subject_category="biolink:SmallMolecule",
                 predicate="biolink:directly_physically_interacts_with",
@@ -89,6 +91,6 @@ def test_transform_report_round_trip():
                 records_written=8,
             )
         ],
-        unused_columns=[ColumnRef(field="field_d4", name="nhash")],
+        skipped=[Skipped(ref="field_d4", name="nhash", reason="internal hash, no meaning")],
     )
     assert TransformReport.model_validate_json(report.model_dump_json()) == report

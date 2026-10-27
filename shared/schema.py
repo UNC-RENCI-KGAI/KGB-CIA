@@ -122,10 +122,11 @@ class Graph(BaseModel):
 
 
 class ColumnRef(BaseModel):
-    """A column in a source file, as its Croissant metadata names it."""
+    """A column in a source file, as its Croissant metadata names it. Field `@id`s are the same
+    in the original and the semantic croissant."""
 
-    field: str = Field(description="The cr:Field @id in the croissant")
-    name: str = Field(description="Column name in the file, e.g. 'lig'")
+    field: str = Field(description="The cr:Field @id")
+    name: str = Field(description="Column name in the file: the field's source.extract.column")
 
 
 class Mapping(BaseModel):
@@ -135,6 +136,9 @@ class Mapping(BaseModel):
     id: str = Field(description="Unique within the report, e.g. 'tcrd.cmpd_activity.interacts'")
     file: str = Field(description="The cr:FileObject or cr:FileSet @id the rows came from")
     record_set: str | None = Field(default=None, description="The cr:RecordSet @id, if any")
+    plan_layout: str | None = Field(
+        default=None, description="The record set's rcv:planLayout in the semantic croissant"
+    )
     produces: Literal["node", "edge"]
     category: str | None = Field(default=None, description="Biolink class, for node mappings")
     subject_category: str | None = Field(default=None, description="For edge mappings")
@@ -150,11 +154,26 @@ class Mapping(BaseModel):
         description="Slots set to a fixed value, e.g. {'knowledge_level': 'knowledge_assertion'}",
     )
     conditions: list[str] = Field(
-        default_factory=list, description="Row filters applied, in words, e.g. 'act_type == Ki'"
+        default_factory=list,
+        description="Rows dropped because they can't make a valid record, in words, "
+        "e.g. 'target_id is empty'",
+    )
+    flags: list[str] = Field(
+        default_factory=list,
+        description="Possible improvements to the semantic croissant, for the metadata team. "
+        "The mapping still follows the semantic croissant as written.",
     )
     code: str | None = Field(default=None, description="Path of the transform code that ran it")
     rows_read: int | None = None
     records_written: int | None = None
+
+
+class Skipped(BaseModel):
+    """A file, record set or column deliberately not used."""
+
+    ref: str = Field(description="@id of the cr:FileObject, cr:FileSet, cr:RecordSet or cr:Field")
+    name: str | None = None
+    reason: str
 
 
 class TransformReport(BaseModel):
@@ -163,8 +182,9 @@ class TransformReport(BaseModel):
 
     source: str = Field(description="infores CURIE of the source, e.g. 'infores:tcrd'")
     source_version: str | None = None
-    croissant: str = Field(description="Path or URL of the Croissant metadata used")
-    mappings: list[Mapping] = Field(default_factory=list)
-    unused_columns: list[ColumnRef] = Field(
-        default_factory=list, description="Columns looked at and deliberately not mapped"
+    croissant: str = Field(description="Path or URL of the source's RoboCroissant metadata")
+    semantic_croissant: str | None = Field(
+        default=None, description="Path or URL of its croissant.semantic.json"
     )
+    mappings: list[Mapping] = Field(default_factory=list)
+    skipped: list[Skipped] = Field(default_factory=list)
