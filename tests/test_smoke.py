@@ -11,12 +11,20 @@ def test_dry_run_lists_every_stage(capsys):
 
 def test_schema_round_trip():
     g = Graph(
-        nodes=[Node(id="NCBIGene:1017", category="biolink:Gene", name="CDK2")],
+        nodes=[
+            Node(
+                id="NCBIGene:1017",
+                category="biolink:Gene",
+                name="CDK2",
+                properties={"xref": ["HGNC:1771", "UniProtKB:P24941"]},
+            )
+        ],
         edges=[
             Edge(
                 subject="CHEBI:45783",
                 predicate="biolink:binds",
                 object="NCBIGene:1017",
+                properties={"measurements": [1, 2.5], "flags": [True, False]},
                 provenance=Provenance(source="TCRD", file="tdl_info", columns=["lig", "prot"]),
             )
         ],

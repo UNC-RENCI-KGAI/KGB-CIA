@@ -24,14 +24,18 @@ class Node(BaseModel):
     category: str = Field(description="Biolink class, e.g. 'biolink:Gene'")
     name: str | None = None
     original_ids: list[str] = Field(default_factory=list, description="IDs before NodeNorm")
-    properties: dict[str, str | float | int | bool | None] = Field(default_factory=dict)
+    properties: dict[str, str | float | int | bool | list[str | float | int | bool] | None] = Field(
+        default_factory=dict
+    )
 
 
 class Edge(BaseModel):
     subject: str = Field(description="Node.id")
     predicate: str = Field(description="Biolink predicate, e.g. 'biolink:binds'")
     object: str = Field(description="Node.id")
-    properties: dict[str, str | float | int | bool | None] = Field(default_factory=dict)
+    properties: dict[str, str | float | int | bool | list[str | float | int | bool] | None] = Field(
+        default_factory=dict
+    )
     provenance: Provenance
 
 
