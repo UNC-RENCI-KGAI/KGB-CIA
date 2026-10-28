@@ -23,6 +23,14 @@ knowledge sources, knowledge level and agent type; augmentation adds to `publica
 than replacing them. The transformation agent also writes a `TransformReport` per source: which
 Croissant files and columns it used to make which nodes and edges.
 
+Extra keys on a `Node` or `Edge` are Biolink slots, with one exception: every `Edge` the
+transformation agent writes carries `kgbcia_source_records: list[str]`, the MCP interface's
+pointer from the edge back to its `TransformReport`. Each entry is
+`{Mapping.id}#{source record key}`, using the source's primary key where it has one and the row
+number only as a fallback. Keep it a list even with one entry: ORION concatenates lists when it
+merges duplicate edges, so every contributing record survives. Later stages carry it through
+untouched.
+
 When the CLI's flags or its input/output files change, update the stage's `README.md` ("Run it
 alone" and "Input / output").
 
