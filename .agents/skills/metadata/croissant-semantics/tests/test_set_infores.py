@@ -89,6 +89,31 @@ def test_the_plans_own_constants_spellings_and_parent_names_find_registered_ids(
     assert choice["infores"] == "infores:ensembl-gene" and not choice["proposed"]
 
 
+def test_only_the_infores_lines_of_a_plan_change():
+    raw = '{\n  "kb": "eram",\n  "prefixes": {"HP": "x"},\n  "layouts": [\n    {"id": "a"}\n  ]\n}'
+    plan = {"kb": "eram", "infores": "infores:eram", "prefixes": {"HP": "x"},
+            "layouts": [{"id": "a"}]}  # fmt: skip
+    written = set_infores.plan_text(raw, plan)
+    assert written == raw.replace('"eram",\n', '"eram",\n  "infores": "infores:eram",\n')
+    # set again, now proposed: the old lines are replaced, not repeated
+    again = {**plan, "infores": "infores:x", "infores_proposed": True}
+    rewritten = set_infores.plan_text(written, again)
+    assert json.loads(rewritten) == again and rewritten.count('"infores"') == 1
+    assert '  "infores_proposed": true,\n' in rewritten
+    # an "infores" key deeper in the plan (a prefix declaration) is left alone
+    nested = '{\n "kb": "c",\n "prefixes": {\n  "HP": "x",\n  "infores": "https://i/"\n }\n}'
+    with_id = {
+        "kb": "c",
+        "infores": "infores:clinvar",
+        "prefixes": {"HP": "x", "infores": "https://i/"},
+    }
+    assert json.loads(set_infores.plan_text(nested, with_id)) == with_id
+    # a plan written on one line can't take a line: rewritten whole
+    assert json.loads(set_infores.plan_text(json.dumps({"kb": "eram"}), {"kb": "eram"})) == {
+        "kb": "eram"
+    }
+
+
 def test_every_proposed_id_under_root_is_listed_for_registering(tmp_path, monkeypatch):
     monkeypatch.setattr(vocab, "infores", lambda: CATALOG)
     bundle(tmp_path, "bioplex", "bioplex", "BioPlex", infores="infores:bioplex",

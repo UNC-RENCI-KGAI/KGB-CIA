@@ -127,10 +127,34 @@ def choose(bundle: Path, override: str | None = None) -> dict:
     return {"infores": proposed, "proposed": True, "why": why}
 
 
+def plan_text(raw: str, plan: dict) -> str:
+    """The plan's file with only its infores lines changed: written after the "kb" line in that
+    line's indentation, so the rest of a hand- or tool-formatted plan keeps its layout. Falls back
+    to rewriting the whole file when that doesn't give exactly the plan."""
+    lines = raw.split("\n")
+    kb = next((i for i, ln in enumerate(lines) if re.match(r'\s*"kb":.*,\s*$', ln)), None)
+    if kb is not None:
+        indent = re.match(r"\s*", lines[kb]).group()
+        # only the plan's own lines, at the kb line's depth (prefixes declare "infores" too)
+        own = re.compile(rf'{indent}"infores(_proposed)?":')
+        added = [f'{indent}"infores": {json.dumps(plan["infores"])},']
+        if plan.get("infores_proposed"):
+            added.append(f'{indent}"infores_proposed": true,')
+        rest = [ln for ln in lines[kb + 1 :] if not own.match(ln)]
+        text_ = "\n".join(lines[: kb + 1] + added + rest)
+        try:
+            if json.loads(text_) == plan:
+                return text_
+        except json.JSONDecodeError:
+            pass
+    return json.dumps(plan, indent=1, ensure_ascii=False) + "\n"
+
+
 def apply(bundle: Path, choice: dict, catalog: dict) -> list[tuple[str, str]]:
     """Write the id into the bundle's plan and croissant; the infores check's findings."""
     plan_path, croissant_path = bundle / PLAN, semantic_croissant(bundle)
-    plan = json.loads(plan_path.read_text())
+    raw = plan_path.read_text(encoding="utf-8")
+    plan = json.loads(raw)
     ids = {"infores": choice["infores"]}
     if choice["proposed"]:
         ids["infores_proposed"] = True
@@ -138,7 +162,7 @@ def apply(bundle: Path, choice: dict, catalog: dict) -> list[tuple[str, str]]:
     plan = {**({"kb": plan["kb"]} if "kb" in plan else {}), **ids, **rest}
     croissant = load_croissant(croissant_path)
     apply_infores(croissant, plan)
-    plan_path.write_text(json.dumps(plan, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    plan_path.write_text(plan_text(raw, plan), encoding="utf-8")
     save_croissant(croissant, croissant_path)
     f = Findings()
     check_source_infores(plan, croissant, f, catalog)
