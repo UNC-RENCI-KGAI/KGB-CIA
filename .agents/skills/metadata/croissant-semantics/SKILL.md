@@ -40,7 +40,6 @@ dependencies). Use `--help` on any of them.
 | `dialects.py list/show/detect/read` | Known file formats (VCF, GAF, MITAB, CTD, ...) as computable dialects; which one reads a layout's files; read records using only what a croissant says about the file |
 | `vocab.py class/slot/search/associations/prefix/identify/term/ols/infores` | Look up Biolink classes and slots (with near-miss suggestions), association classes for a subject/object pair, identifier prefixes (Biolink + Bioregistry), which prefixes fit bare ids, ontology terms by id or text, and infores ids for source names |
 | `apply_plan.py CROISSANT PLAN OUT` | Write the plan into a new croissant |
-| `set_infores.py ROOT [BUNDLE ...]` | For bundles finished before plans named their infores id: sets each one's id (a catalog match, else a proposed one) in its plan and croissant without redoing anything else, and lists proposed ids to register in `ROOT/infores_to_register.yaml`. `--dry-run` reports, `--ids` overrides |
 | `check.py CROISSANT PLAN OUT --report R --load-records` | `--plan-only` first: terms, prefixes, dialects and units in seconds. Then the full check: checks terms, prefixes, codes and dialects against Biolink and sampled data, runs the MLCommons validator, reads a few records through mlcroissant (from the first lines of each file, not whole downloads), and reports coverage |
 
 ## Workflow

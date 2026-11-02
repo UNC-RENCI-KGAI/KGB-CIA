@@ -640,8 +640,7 @@ def check_source_infores(
     catalog has none, and the croissant carries it as rcv:infores. Graph builders cite it as the
     source of every record, so a proposed id is flagged until it's registered. The id is compared
     with what the plan's own evidence says (vocab.suggest_infores: its aggregator or provided_by
-    constants, its names), which set_infores.py uses too, so the two agree; bundle is the output
-    directory's name."""
+    constants, its names); bundle is the output directory's name."""
     import vocab
 
     iid = plan.get("infores")
