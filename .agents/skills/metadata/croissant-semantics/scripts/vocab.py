@@ -677,20 +677,26 @@ def cmd_ols(args) -> None:
         )
 
 
-def cmd_infores(args) -> None:
-    words = args.text.lower().split()
+def infores_matches(text: str) -> list[tuple[bool, bool, str, dict]]:
+    """Catalog entries whose id, name, synonyms or urls contain every word of text, best first:
+    (not an exact match, not released, id, entry). Exact: text is the id, name or a synonym."""
+    words = text.lower().split()
     hits = []
     for iid, e in infores().items():
         hay = " ".join(
             [iid, e.get("name") or "", *(e.get("synonym") or []), *(e.get("xref") or [])]
         ).lower()
         if all(w in hay for w in words):
-            exact = args.text.lower() in (
+            exact = text.lower() in (
                 [iid.split(":")[1], (e.get("name") or "").lower()]
                 + [x.lower() for x in e.get("synonym") or []]
             )
             hits.append((not exact, e.get("status") != "released", iid, e))
-    hits.sort(key=lambda h: h[:3])
+    return sorted(hits, key=lambda h: h[:3])
+
+
+def cmd_infores(args) -> None:
+    hits = infores_matches(args.text)
     if not hits:
         sys.exit(
             f"No entry in infores catalog {INFORES_VERSION} matches {args.text!r}. For a source "
