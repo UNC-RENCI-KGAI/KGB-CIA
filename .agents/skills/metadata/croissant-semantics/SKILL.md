@@ -56,8 +56,17 @@ dependencies). Use `--help` on any of them.
    these are, and graph builders cite it as the source of everything read from them: without
    it, the transformation stage won't build the knowledge base at all. When several entries
    match, pick the one for the resource that publishes these files, not a service that
-   re-serves it (`infores:reactome`, not `infores:automat-reactome`). When none does, set
-   `"infores": null` and list it in `notes.md`; never make one up.
+   re-serves it (`infores:reactome`, not `infores:automat-reactome`).
+
+   When none does, propose one: `infores:` and the knowledge base's short name in lowercase
+   words joined by dashes (`infores:bioplex`, `infores:expression-atlas`), with
+   `"infores_proposed": true` in the plan. Then write its catalog entry with
+   `vocab.py infores-entry CROISSANT --id infores:NAME`, adding `--knowledge-level` and
+   `--agent-type` when the documentation makes them clear, and put it in `notes.md` under a
+   heading **Infores id to register**, near the top. Say there that the user should register it
+   with a pull request to the infores registry (the command prints where), and that the id may
+   change in review. `check.py` keeps a warning on a proposed id until it's registered; don't
+   explain it away.
 
 2. **Pick the layouts to do.** Aim for the layouts that cover most record sets and the core
    content (associations and the main entity tables) — typically the top 5–15, or until the

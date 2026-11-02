@@ -632,41 +632,64 @@ def check_infores(plan: dict, f: "Findings", catalog: dict | None) -> None:
 
 
 def check_source_infores(plan: dict, out: dict, f: "Findings", catalog: dict | None) -> None:
-    """The plan names the knowledge base's own infores id (null when the catalog has none), and the
-    croissant carries it as rcv:infores. Graph builders cite it as the source of every record."""
-    if "infores" not in plan:
+    """The plan names the knowledge base's own infores id, from the catalog or proposed when the
+    catalog has none, and the croissant carries it as rcv:infores. Graph builders cite it as the
+    source of every record, so a proposed id is flagged until it's registered."""
+    import vocab
+
+    iid = plan.get("infores")
+    if iid is None:
         f.error(
             "plan infores",
             "the plan doesn't say which information resource the knowledge base is: set infores "
-            "to its id (vocab.py infores NAME), or to null if the catalog has no entry",
+            "to its id (vocab.py infores NAME), or, if the catalog has none, propose one with "
+            '"infores_proposed": true',
         )
         return
-    iid = plan["infores"]
-    if out.get("rcv:infores") != iid:
+    proposed = bool(plan.get("infores_proposed"))
+    if out.get("rcv:infores") != iid or bool(out.get("rcv:inforesProposed")) != proposed:
         f.error(
             "croissant rcv:infores",
-            f"is {out.get('rcv:infores')!r} but the plan's infores is {iid!r}; re-run "
-            "apply_plan.py",
+            f"doesn't match the plan's infores ({iid}"
+            + (", proposed" if proposed else "")
+            + "); re-run apply_plan.py",
         )
-    if iid is None:
-        f.warn(
-            "plan infores",
-            "the knowledge base has no infores id, so nothing built from it can name its source "
-            "and the transformation stage won't run it; a new infores entry is the fix (say so "
-            "in notes.md)",
-        )
-        return
     if catalog is None:
         f.warn("plan infores", f"couldn't load the infores catalog; {iid} unchecked")
         return
-    import vocab
-
     entry = catalog.get(iid)
+    if proposed:
+        if entry is not None:
+            f.error(
+                "plan infores",
+                f"{iid} is in infores catalog {vocab.INFORES_VERSION} ({entry.get('name')}): "
+                "check it's this knowledge base, then drop infores_proposed",
+            )
+        elif not vocab.is_infores_style(iid):
+            f.error(
+                "plan infores",
+                f"proposed {iid} doesn't follow the catalog's style: lowercase words joined by "
+                f"dashes, such as {vocab.proposed_infores(iid.removeprefix('infores:'))}",
+            )
+        else:
+            # not f.warn: an `explained` entry can't turn this into a note. It stays a warning,
+            # for the user to act on, until the id is registered
+            f.items.append(
+                (
+                    "warning",
+                    "plan infores",
+                    f"{iid} is proposed, not registered: the graph will cite an id no other "
+                    f"resource knows. Ask the user to register it with a pull request to "
+                    f"{vocab.INFORES_REGISTRY} (entry from vocab.py infores-entry CROISSANT, in "
+                    f"notes.md), then raise INFORES_VERSION and drop infores_proposed",
+                )
+            )
+        return
     if entry is None:
         f.error(
             "plan infores",
             f"{iid} isn't in infores catalog {vocab.INFORES_VERSION}; find the right id with "
-            "vocab.py infores NAME, or set null if the catalog has none",
+            'vocab.py infores NAME, or propose one with "infores_proposed": true',
         )
     elif entry.get("status") != "released":
         f.warn("plan infores", f"{iid} has infores status {entry.get('status')!r}, not released")

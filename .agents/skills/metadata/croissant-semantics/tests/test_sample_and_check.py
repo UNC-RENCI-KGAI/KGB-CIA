@@ -272,15 +272,64 @@ def test_the_knowledge_base_names_its_own_infores_id():
     assert findings(hgnc, {"rcv:infores": "infores:hgnc"}) == [
         ("note", "infores:hgnc (HGNC), infores catalog v1.1.14")
     ]
-    [(level, msg)] = findings({}, {})
-    assert level == "error" and "vocab.py infores" in msg
-    [(level, msg)] = findings({"infores": None}, {})
-    assert level == "warning" and "new infores entry" in msg
+    for missing in ({}, {"infores": None}):
+        [(level, msg)] = findings(missing, {})
+        assert level == "error" and "infores_proposed" in msg
     [(level, msg)] = findings({"infores": "infores:made-up"}, {"rcv:infores": "infores:made-up"})
     assert level == "error" and "isn't in infores catalog v1.1.14" in msg
     # a croissant written from an older plan
     errs = [m for lv, m in findings(hgnc, {}) if lv == "error"]
     assert len(errs) == 1 and "re-run apply_plan.py" in errs[0]
+
+
+def test_proposed_infores_ids_and_catalog_entries_follow_the_catalog_style():
+    import yaml
+    from vocab import infores_entry, is_infores_style, proposed_infores
+
+    assert proposed_infores("BioPlex") == "infores:bioplex"
+    assert proposed_infores("Expression Atlas (EBI)") == "infores:expression-atlas-ebi"
+    assert is_infores_style("infores:dark-kinase-knowledgebase")
+    assert not is_infores_style("infores:Dark_Kinase")
+    croissant = {
+        "name": "BioPlex",
+        "description": "Protein  interactions\nfrom AP-MS.",
+        "url": "https://bioplex.hms.harvard.edu/",
+    }
+    stanza = infores_entry(croissant, "infores:bioplex", "knowledge_assertion", "not_provided")
+    assert stanza.startswith("  - status: released\n")
+    assert "    xref:\n      - https://bioplex" in stanza  # indented, as the catalog's lint wants
+    [entry] = yaml.safe_load(stanza)
+    assert entry == {
+        "status": "released",
+        "name": "BioPlex",
+        "id": "infores:bioplex",
+        "description": "Protein interactions from AP-MS.",
+        "xref": ["https://bioplex.hms.harvard.edu/"],
+        "knowledge_level": "knowledge_assertion",
+        "agent_type": "not_provided",
+    }
+
+
+def test_a_proposed_infores_id_is_flagged_until_registered():
+    from check import check_source_infores
+
+    catalog = {"infores:hgnc": {"status": "released", "name": "HGNC"}}
+
+    def findings(iid, explained=None):
+        plan = {"infores": iid, "infores_proposed": True}
+        f = Findings(explained)
+        check_source_infores(plan, {"rcv:infores": iid, "rcv:inforesProposed": True}, f, catalog)
+        return [(lv, m) for lv, _, m in f.items]
+
+    [(level, msg)] = findings("infores:bioplex")
+    assert level == "warning" and "information-resource-registry" in msg
+    # explaining it doesn't hide it: it's for the user to act on
+    explained = [{"where": "plan infores", "message": "proposed", "reason": "known"}]
+    assert [lv for lv, _ in findings("infores:bioplex", explained)] == ["warning"]
+    [(level, msg)] = findings("infores:hgnc")
+    assert level == "error" and "drop infores_proposed" in msg
+    [(level, msg)] = findings("infores:BioPlex_3")
+    assert level == "error" and "infores:bioplex-3" in msg
 
 
 def test_gzip_only_tables_need_a_dialect():

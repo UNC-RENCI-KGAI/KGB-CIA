@@ -15,6 +15,7 @@
     vocab.py associations --subject ChemicalEntity --object Disease  # association classes that fit
     vocab.py term ECO:0000315           # an ontology term by CURIE (exact)
     vocab.py infores ChEMBL             # infores ids for a source name (knowledge_source)
+    vocab.py infores-entry CROISSANT    # a catalog entry proposing an id the catalog lacks
     vocab.py unit "per molar second"    # QUDT units by label, UCUM code or symbol
     vocab.py ols "evidence used in automatic assertion" [--ontology eco]
                                         # free-text search of OBO ontologies (EBI OLS);
@@ -63,6 +64,7 @@ INFORES_URL = (
     "https://raw.githubusercontent.com/biolink/information-resource-registry/"
     f"{INFORES_VERSION}/infores_catalog.yaml"
 )
+INFORES_REGISTRY = "https://github.com/biolink/information-resource-registry"
 MAX_AGE_DAYS = 30  # for unversioned files (_refreshed)
 
 
@@ -70,6 +72,16 @@ def infores() -> dict[str, dict]:
     """The infores catalog at INFORES_VERSION: id -> entry."""
     text = _cached(f"infores_catalog-{INFORES_VERSION}.yaml", INFORES_URL)
     return {e["id"]: e for e in yaml.safe_load(text)["information_resources"]}
+
+
+def proposed_infores(name: str) -> str:
+    """An id in the catalog's style for a source it lacks: lowercase words joined by dashes
+    (BioPlex -> infores:bioplex, Expression Atlas -> infores:expression-atlas)."""
+    return "infores:" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def is_infores_style(iid: str) -> bool:
+    return re.fullmatch(r"infores:[a-z0-9]+(-[a-z0-9]+)*", iid) is not None
 
 
 def biolink_prefixes() -> dict:
@@ -681,16 +693,55 @@ def cmd_infores(args) -> None:
     hits.sort(key=lambda h: h[:3])
     if not hits:
         sys.exit(
-            f"No entry in infores catalog {INFORES_VERSION} matches {args.text!r}. If the source "
-            "has none, leave it unmapped (for the knowledge base itself, the plan's infores is "
-            "null) and list it in notes.md: a new infores entry is the fix, then a raised "
-            "INFORES_VERSION in vocab.py."
+            f"No entry in infores catalog {INFORES_VERSION} matches {args.text!r}. For a source "
+            "a column names, leave it unmapped and list it in notes.md. For the knowledge base "
+            f"itself, propose an id ({proposed_infores(args.text)}, from its short name) with "
+            '"infores_proposed": true in the plan, and write its registry entry with '
+            "vocab.py infores-entry CROISSANT."
         )
     for _, _, iid, e in hits[: args.limit]:
         print(
             f"  {iid}  {e.get('name')}  [{e.get('status')}; {e.get('knowledge_level', '-')}]  "
             f"{', '.join(e.get('xref') or [])[:80]}"
         )
+
+
+class _IndentedLists(yaml.SafeDumper):
+    """Indents lists under their key, as the catalog does and its yamllint config requires."""
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+
+def infores_entry(croissant: dict, iid: str, knowledge_level: str, agent_type: str) -> str:
+    """A stanza for the infores catalog, from the croissant's name, description and url, to paste
+    into infores_catalog.yaml in a pull request to the registry."""
+    from common import text
+
+    entry = {"status": "released", "name": text(croissant.get("name")), "id": iid}
+    if description := " ".join(text(croissant.get("description")).split()):
+        entry["description"] = description
+    if url := croissant.get("url"):
+        entry["xref"] = [url]
+    entry |= {"knowledge_level": knowledge_level, "agent_type": agent_type}
+    stanza = yaml.dump(
+        [entry], Dumper=_IndentedLists, sort_keys=False, width=96, allow_unicode=True
+    )
+    return "".join(f"  {line}" for line in stanza.splitlines(keepends=True))
+
+
+def cmd_infores_entry(args) -> None:
+    from common import load_croissant, text
+
+    croissant = load_croissant(args.croissant)
+    iid = args.id or proposed_infores(text(croissant.get("name")))
+    if not is_infores_style(iid):
+        sys.exit(f"{iid} doesn't follow the catalog's style: lowercase words joined by dashes")
+    if iid in infores():
+        sys.exit(f"{iid} is already in infores catalog {INFORES_VERSION}: use it, don't propose it")
+    print(f"# Add to infores_catalog.yaml in a pull request to {INFORES_REGISTRY}")
+    print("# (or open an issue there with the same details). Check every field first.")
+    print(infores_entry(croissant, iid, args.knowledge_level, args.agent_type), end="")
 
 
 def enum_values(model: dict, name: str) -> tuple[str, dict] | None:
@@ -764,6 +815,15 @@ def main() -> None:
     p.add_argument("text")
     p.add_argument("--limit", type=int, default=10)
     p.set_defaults(fn=cmd_infores)
+    p = sub.add_parser(
+        "infores-entry",
+        help="a catalog entry proposing an infores id for a knowledge base the catalog lacks",
+    )
+    p.add_argument("croissant")
+    p.add_argument("--id", help="the proposed id (default: from the croissant's name)")
+    p.add_argument("--knowledge-level", default="not_provided")
+    p.add_argument("--agent-type", default="not_provided")
+    p.set_defaults(fn=cmd_infores_entry)
     p = sub.add_parser(
         "unit", help="QUDT units by label, UCUM code or symbol (for a column's unit)"
     )

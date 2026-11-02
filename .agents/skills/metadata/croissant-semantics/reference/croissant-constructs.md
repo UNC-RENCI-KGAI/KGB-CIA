@@ -19,7 +19,7 @@ whose prefix is in `@context`; validators check structure, not meaning.
 | `id_form` `url`, `mixed` or `native` | An `annotation`: `equivalentProperty rcv:idForm`, `value` the form |
 | `codes` | A record set `codes_<hash>` typed `sc:Enumeration` with inline `data` (`name` → `url`), shared by every column (in any layout) with the same mapping, and `references` from the column to its `name` field |
 | `local_terms` | A record set `rc_local_terms` typed `sc:DefinedTerm`, with inline rows: id, label, definition, SKOS matches, see-also |
-| `infores` | `rcv:infores` on the dataset (left off when `null`) |
+| `infores`, `infores_proposed` | `rcv:infores` on the dataset, and `rcv:inforesProposed: true` when the id is proposed, not yet in the catalog |
 | `prefixes` | Added to `@context` |
 | layout `id` | `rcv:planLayout` on each record set the layout matched, so the croissant names its plan entry |
 

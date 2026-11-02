@@ -175,10 +175,14 @@ def test_knowledge_base_infores_goes_on_the_dataset():
     out, _ = apply_plan(croissant(), plan(infores="infores:hgnc"))
     assert out["rcv:infores"] == "infores:hgnc"
     assert out["@context"]["rcv"] == "https://roboboulangerie.github.io/vocab/"
-    # null: no catalog entry yet, so nothing is written (check.py warns)
-    stale = {**croissant(), "rcv:infores": "infores:old"}
-    out, _ = apply_plan(stale, plan(infores=None))
-    assert "rcv:infores" not in out
+    assert "rcv:inforesProposed" not in out
+    # an id the catalog doesn't have yet is marked as proposed
+    out, _ = apply_plan(croissant(), plan(infores="infores:bioplex", infores_proposed=True))
+    assert out["rcv:infores"] == "infores:bioplex" and out["rcv:inforesProposed"] is True
+    # no id at all: nothing is written, and an earlier one doesn't survive (check.py errors)
+    stale = {**croissant(), "rcv:infores": "infores:old", "rcv:inforesProposed": True}
+    out, _ = apply_plan(stale, plan())
+    assert "rcv:infores" not in out and "rcv:inforesProposed" not in out
     with pytest.raises(PlanError, match="infores CURIE"):
         apply_plan(croissant(), plan(infores="HGNC"))
 

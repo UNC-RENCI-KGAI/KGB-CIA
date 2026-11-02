@@ -80,6 +80,7 @@ KNOWN = {
     "plan": {
         "kb",
         "infores",
+        "infores_proposed",
         "croissant",
         "biolink_version",
         "prefixes",
@@ -748,15 +749,19 @@ def update_context(croissant: dict, plan: dict) -> None:
 
 def apply_infores(croissant: dict, plan: dict) -> None:
     """The knowledge base's own infores id, on the dataset as rcv:infores: the resource whose files
-    these are, which graph builders cite as the source of everything they read from them. A plan
-    whose infores is null (no catalog entry yet) leaves it off; check.py reports both cases."""
+    these are, which graph builders cite as the source of everything they read from them. An id
+    the catalog doesn't have yet is proposed (infores_proposed), and marked rcv:inforesProposed
+    so later stages can tell it apart. check.py reports a missing or proposed id."""
+    croissant.pop("rcv:infores", None)
+    croissant.pop("rcv:inforesProposed", None)
     iid = plan.get("infores")
     if iid is None:
-        croissant.pop("rcv:infores", None)
         return
     if not isinstance(iid, str) or not re.fullmatch(r"infores:[^\s:]+", iid):
         raise PlanError(f"infores must be an infores CURIE such as 'infores:hgnc', not {iid!r}")
     croissant["rcv:infores"] = iid
+    if plan.get("infores_proposed"):
+        croissant["rcv:inforesProposed"] = True
 
 
 def duplicate_ids(croissant: dict) -> set[str]:
