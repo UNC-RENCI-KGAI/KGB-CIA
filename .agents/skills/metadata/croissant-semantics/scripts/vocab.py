@@ -55,22 +55,21 @@ def biolink() -> dict:
     return yaml.safe_load(_cached("biolink-model.yaml", f"{BIOLINK_RAW}/biolink-model.yaml"))
 
 
-INFORES_URL = "https://raw.githubusercontent.com/biolink/information-resource-registry/main/infores_catalog.yaml"
-INFORES_MAX_AGE_DAYS = 30
+# The infores catalog is released separately from Biolink. Pinned like Biolink, so a plan's
+# source identity and every infores id it uses are checked against the same entries on every
+# run. A source whose entry is newer than the pin needs the pin raised.
+INFORES_VERSION = "v1.1.14"
+INFORES_URL = (
+    "https://raw.githubusercontent.com/biolink/information-resource-registry/"
+    f"{INFORES_VERSION}/infores_catalog.yaml"
+)
+MAX_AGE_DAYS = 30  # for unversioned files (_refreshed)
 
 
 def infores() -> dict[str, dict]:
-    """The infores catalog: id -> entry. Not versioned with Biolink; refreshed when the cached copy
-    is 30 days old."""
-    import time
-
-    path = CACHE.parent / "infores_catalog.yaml"
-    if not path.exists() or time.time() - path.stat().st_mtime > INFORES_MAX_AGE_DAYS * 86400:
-        r = requests.get(INFORES_URL, timeout=60)
-        r.raise_for_status()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(r.text)
-    return {e["id"]: e for e in yaml.safe_load(path.read_text())["information_resources"]}
+    """The infores catalog at INFORES_VERSION: id -> entry."""
+    text = _cached(f"infores_catalog-{INFORES_VERSION}.yaml", INFORES_URL)
+    return {e["id"]: e for e in yaml.safe_load(text)["information_resources"]}
 
 
 def biolink_prefixes() -> dict:
@@ -311,7 +310,7 @@ def _refreshed(name: str, url: str, headers: dict | None = None) -> str:
     import time
 
     path = CACHE.parent / name
-    if not path.exists() or time.time() - path.stat().st_mtime > INFORES_MAX_AGE_DAYS * 86400:
+    if not path.exists() or time.time() - path.stat().st_mtime > MAX_AGE_DAYS * 86400:
         r = requests.get(url, timeout=120, headers=headers or {})
         r.raise_for_status()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -682,9 +681,10 @@ def cmd_infores(args) -> None:
     hits.sort(key=lambda h: h[:3])
     if not hits:
         sys.exit(
-            f"No infores entry matches {args.text!r}. If the source has none, leave it unmapped "
-            "and list it "
-            "in notes.md (a new infores entry is the fix)."
+            f"No entry in infores catalog {INFORES_VERSION} matches {args.text!r}. If the source "
+            "has none, leave it unmapped (for the knowledge base itself, the plan's infores is "
+            "null) and list it in notes.md: a new infores entry is the fix, then a raised "
+            "INFORES_VERSION in vocab.py."
         )
     for _, _, iid, e in hits[: args.limit]:
         print(

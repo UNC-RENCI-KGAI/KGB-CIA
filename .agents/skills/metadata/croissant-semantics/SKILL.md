@@ -51,6 +51,14 @@ dependencies). Use `--help` on any of them.
    croissant) and how record sets spread over layouts. Large knowledge bases have hundreds of
    layouts; work from the top of the list.
 
+   Find the knowledge base's own infores id now (`vocab.py infores NAME`; try its full name, its
+   acronym and its url) and set it as the plan's `infores`. It names the resource whose files
+   these are, and graph builders cite it as the source of everything read from them: without
+   it, the transformation stage won't build the knowledge base at all. When several entries
+   match, pick the one for the resource that publishes these files, not a service that
+   re-serves it (`infores:reactome`, not `infores:automat-reactome`). When none does, set
+   `"infores": null` and list it in `notes.md`; never make one up.
+
 2. **Pick the layouts to do.** Aim for the layouts that cover most record sets and the core
    content (associations and the main entity tables) — typically the top 5–15, or until the
    remaining layouts are minor (readme-like files, logs, per-release counts). If there are many

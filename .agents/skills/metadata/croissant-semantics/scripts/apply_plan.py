@@ -79,6 +79,7 @@ PLAN_PREFIXES: dict[str, str] = {}  # prefix -> expansion, for the plan being ap
 KNOWN = {
     "plan": {
         "kb",
+        "infores",
         "croissant",
         "biolink_version",
         "prefixes",
@@ -745,6 +746,19 @@ def update_context(croissant: dict, plan: dict) -> None:
         ctx[key] = iri
 
 
+def apply_infores(croissant: dict, plan: dict) -> None:
+    """The knowledge base's own infores id, on the dataset as rcv:infores: the resource whose files
+    these are, which graph builders cite as the source of everything they read from them. A plan
+    whose infores is null (no catalog entry yet) leaves it off; check.py reports both cases."""
+    iid = plan.get("infores")
+    if iid is None:
+        croissant.pop("rcv:infores", None)
+        return
+    if not isinstance(iid, str) or not re.fullmatch(r"infores:[^\s:]+", iid):
+        raise PlanError(f"infores must be an infores CURIE such as 'infores:hgnc', not {iid!r}")
+    croissant["rcv:infores"] = iid
+
+
 def duplicate_ids(croissant: dict) -> set[str]:
     """@ids used more than once (record sets, fields, sub-fields, annotations, distributions)."""
     seen: dict[str, int] = {}
@@ -960,6 +974,7 @@ def apply_plan(croissant: dict, plan: dict) -> tuple[dict, dict]:
             "and field names (a pipeline problem worth reporting)"
         )
     update_context(out, plan)
+    apply_infores(out, plan)
     assignments = match_record_sets(out, plan)
     enums: dict = {}
     counts = {

@@ -105,7 +105,7 @@ The agent doesn't edit the croissant. It writes a **semantics plan** (JSON), and
 3. **Write the plan**, by layout: dialect, row type, entities, column specs, constants, code mappings, local terms.
 4. **Apply** it to produce a new croissant.
 5. **Check:**
-   - The plan: terms exist, prefixes are declared, entity classes fit the association, units exist in QUDT, infores ids are in the catalog, negated or inferred codes aren't merged with direct ones. This takes seconds, so it runs first.
+   - The plan: terms exist, prefixes are declared, entity classes fit the association, units exist in QUDT, the knowledge base names its own infores id, infores ids are in the catalog (at a pinned release, like Biolink), negated or inferred codes aren't merged with direct ones. This takes seconds, so it runs first.
    - The data: sampled values against declared prefixes (Bioregistry patterns), codes against mappings, files against their dialect, ids that are missing or repeat.
    - Croissant: the MLCommons validator, and reading a few records of each layout through mlcroissant. This uses the first couple of MB of each file, not whole downloads. Failures that happen with the original croissant too are reported as pre-existing.
    - Coverage: share of record sets and fields with semantics, by kind of vocabulary.

@@ -10,6 +10,7 @@ the plan itself is kept next to the result as the record of what was asserted an
 ```json
 {
   "kb": "ctd",
+  "infores": "infores:ctd",
   "croissant": "kbs/ctd/croissant.json",
   "biolink_version": "v4.4.6",
   "prefixes": { "NCBIGene": "http://identifiers.org/ncbigene/", "MESH": "http://id.nlm.nih.gov/mesh/" },
@@ -23,6 +24,14 @@ the plan itself is kept next to the result as the record of what was asserted an
 }
 ```
 
+- `infores`: the knowledge base's own information-resource id, from `vocab.py infores NAME`,
+  which searches the infores catalog at the release pinned in `vocab.py` (`INFORES_VERSION`).
+  Required: `apply_plan.py` writes it on the dataset as `rcv:infores`, and graph builders cite
+  it as the source of every record they read from these files. `null` when the catalog has no
+  entry for the knowledge base; `check.py` then warns, and `notes.md` lists it (a new catalog
+  entry is the fix, then a raised pin). This is the knowledge base's identity, not a statement
+  about its rows: when rows come from other sources (an aggregator such as DrugCentral), map
+  those per layout with `biolink:primary_knowledge_source` as below.
 - `prefixes`: every CURIE prefix used anywhere in the plan (types, properties, id prefixes,
   code mappings, constant values) **and** every prefix that appears in the data's CURIE values.
   `biolink`, `skos`, `sh`, `qudt`, `unit`, `rcv`, `infores`, `csvw`, `rdfs`, `sc`, `cr` are built in.

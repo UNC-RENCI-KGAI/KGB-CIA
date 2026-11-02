@@ -631,6 +631,51 @@ def check_infores(plan: dict, f: "Findings", catalog: dict | None) -> None:
             f.warn(iid, f"infores status is {entry.get('status')!r}, not released")
 
 
+def check_source_infores(plan: dict, out: dict, f: "Findings", catalog: dict | None) -> None:
+    """The plan names the knowledge base's own infores id (null when the catalog has none), and the
+    croissant carries it as rcv:infores. Graph builders cite it as the source of every record."""
+    if "infores" not in plan:
+        f.error(
+            "plan infores",
+            "the plan doesn't say which information resource the knowledge base is: set infores "
+            "to its id (vocab.py infores NAME), or to null if the catalog has no entry",
+        )
+        return
+    iid = plan["infores"]
+    if out.get("rcv:infores") != iid:
+        f.error(
+            "croissant rcv:infores",
+            f"is {out.get('rcv:infores')!r} but the plan's infores is {iid!r}; re-run "
+            "apply_plan.py",
+        )
+    if iid is None:
+        f.warn(
+            "plan infores",
+            "the knowledge base has no infores id, so nothing built from it can name its source "
+            "and the transformation stage won't run it; a new infores entry is the fix (say so "
+            "in notes.md)",
+        )
+        return
+    if catalog is None:
+        f.warn("plan infores", f"couldn't load the infores catalog; {iid} unchecked")
+        return
+    import vocab
+
+    entry = catalog.get(iid)
+    if entry is None:
+        f.error(
+            "plan infores",
+            f"{iid} isn't in infores catalog {vocab.INFORES_VERSION}; find the right id with "
+            "vocab.py infores NAME, or set null if the catalog has none",
+        )
+    elif entry.get("status") != "released":
+        f.warn("plan infores", f"{iid} has infores status {entry.get('status')!r}, not released")
+    else:
+        f.note(
+            "plan infores", f"{iid} ({entry.get('name')}), infores catalog {vocab.INFORES_VERSION}"
+        )
+
+
 _INFORES: list = []  # the catalog, loaded once by the first data check that needs it
 
 
@@ -2251,6 +2296,7 @@ def main() -> None:
             progress(f"couldn't load the infores catalog: {e}")
             catalog = None
         check_infores(plan, f, catalog)
+        check_source_infores(plan, out, f, catalog)
         check_formats(original, plan, f)
         check_roles(plan, f, model)
         check_code_merges(plan, f)

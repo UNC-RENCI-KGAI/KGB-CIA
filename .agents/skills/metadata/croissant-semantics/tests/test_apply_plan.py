@@ -171,6 +171,18 @@ def test_entities_group_columns_and_keep_their_ids_and_sources():
     assert "annotation" not in rs["field"][1]["subField"][0]  # curie ids need no prefix annotation
 
 
+def test_knowledge_base_infores_goes_on_the_dataset():
+    out, _ = apply_plan(croissant(), plan(infores="infores:hgnc"))
+    assert out["rcv:infores"] == "infores:hgnc"
+    assert out["@context"]["rcv"] == "https://roboboulangerie.github.io/vocab/"
+    # null: no catalog entry yet, so nothing is written (check.py warns)
+    stale = {**croissant(), "rcv:infores": "infores:old"}
+    out, _ = apply_plan(stale, plan(infores=None))
+    assert "rcv:infores" not in out
+    with pytest.raises(PlanError, match="infores CURIE"):
+        apply_plan(croissant(), plan(infores="HGNC"))
+
+
 def test_row_predicate_becomes_a_constant_field():
     out, _ = apply_plan(croissant(), plan())
     pred = next(f for f in rs_by_id(out, "rs_human")["field"] if f["name"] == "predicate")

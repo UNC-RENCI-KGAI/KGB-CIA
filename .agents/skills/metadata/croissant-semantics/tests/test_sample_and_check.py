@@ -258,6 +258,31 @@ def test_infores_ids_must_be_in_the_catalog():
     assert len(warns) == 1 and "deprecated" in warns[0]
 
 
+def test_the_knowledge_base_names_its_own_infores_id():
+    from check import check_source_infores
+
+    catalog = {"infores:hgnc": {"status": "released", "name": "HGNC"}}
+
+    def findings(plan, out):
+        f = Findings()
+        check_source_infores(plan, out, f, catalog)
+        return [(lv, m) for lv, _, m in f.items]
+
+    hgnc = {"infores": "infores:hgnc"}
+    assert findings(hgnc, {"rcv:infores": "infores:hgnc"}) == [
+        ("note", "infores:hgnc (HGNC), infores catalog v1.1.14")
+    ]
+    [(level, msg)] = findings({}, {})
+    assert level == "error" and "vocab.py infores" in msg
+    [(level, msg)] = findings({"infores": None}, {})
+    assert level == "warning" and "new infores entry" in msg
+    [(level, msg)] = findings({"infores": "infores:made-up"}, {"rcv:infores": "infores:made-up"})
+    assert level == "error" and "isn't in infores catalog v1.1.14" in msg
+    # a croissant written from an older plan
+    errs = [m for lv, m in findings(hgnc, {}) if lv == "error"]
+    assert len(errs) == 1 and "re-run apply_plan.py" in errs[0]
+
+
 def test_gzip_only_tables_need_a_dialect():
     from check import check_formats
 
