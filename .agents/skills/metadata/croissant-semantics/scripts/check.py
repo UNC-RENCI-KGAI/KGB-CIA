@@ -40,11 +40,13 @@ import dialects  # noqa: E402
 from apply_plan import (
     ATOMIC,
     CONTEXT_TERMS,
+    EDGE_PROVENANCE,
     VOCAB,
     PlanError,
     answers_path,
     match_record_sets,
     merge_answers,
+    normalize_edge_provenance,
     resolve_plan,
 )
 from common import (
@@ -699,97 +701,121 @@ def check_source_infores(plan: dict, out: dict, f: "Findings", catalog: dict | N
         )
 
 
-EDGE_PROVENANCE = ("knowledge_level", "agent_type")
+EDGE_SLOTS = ("knowledge_level", "agent_type")
 
 
-def check_edge_provenance(
-    plan: dict, f: "Findings", catalog: dict | None, model: dict | None
-) -> None:
+def check_edge_provenance(plan: dict, f: "Findings", catalog: dict | None) -> None:
     """Every layout that makes edges (entities with roles) says how its statements were made:
-    knowledge_level and agent_type. When it doesn't, suggest the values the infores catalog gives
-    for the edges' primary knowledge source: the layout's constant, the codes of its source
-    column, or else the knowledge base itself."""
+    knowledge_level and agent_type. The layout's values always stand; where they differ from the
+    infores catalog's for the edges' primary knowledge source (the layout's constant, each code
+    of its source column, or else the knowledge base itself), that's flagged for review. Where
+    the layout has none, the catalog's are suggested."""
     import vocab
 
-    allowed = {}
-    for slot in EDGE_PROVENANCE:
-        enum = model and vocab.slot_enum(model, slot)
-        hit = enum and vocab.enum_values(model, enum)
-        # the catalog also uses mixed and other, which aren't Biolink values
-        allowed[slot] = set(hit[1]) if hit else set()
+    # Biolink's values; the catalog also uses mixed and other, which aren't
+    valid = {
+        s: set(EDGE_PROVENANCE[f"biolink:{s}"]["values"]) - {"not_provided"} for s in EDGE_SLOTS
+    }
     for lay in plan.get("layouts") or []:
         if not any(ent.get("role") for ent in lay.get("entities") or []):
             continue
-        mapped, sources, per_row, stated = set(), set(), False, set()
+        mapped, sources, per_row = set(), set(), False
+        stated = {s: set() for s in EDGE_SLOTS}  # layout constants
+        by_source: dict[str, dict] = {}  # infores id -> slot -> value, from per-source codes
         for _, spec, _ in iter_assertions(lay):
             prop = str(spec.get("property") or "").removeprefix("biolink:")
             mapped.add(prop)
-            if prop == "knowledge_level" and "value" in spec:
-                stated.add(str(spec["value"]).removeprefix("biolink:"))
-            if prop == "primary_knowledge_source":
-                if "value" in spec:
-                    sources.add(spec["value"])
-                elif spec.get("codes"):
-                    sources.update(v for v in spec["codes"].values() if v)
-                    per_row = True
-                else:
-                    per_row = True
-        missing = [s for s in EDGE_PROVENANCE if s not in mapped]
-        if not missing:
-            continue
+            if prop in EDGE_SLOTS and spec.get("value"):
+                stated[prop].add(str(spec["value"]).removeprefix("biolink:"))
+            if prop != "primary_knowledge_source":
+                continue
+            if "value" in spec:
+                sources.add(spec["value"])
+                continue
+            per_row = True
+            codes = spec.get("codes") or {}
+            sources.update(v for v in codes.values() if v)
+            for d in spec.get("derived") or []:
+                slot = str(d.get("property") or "").removeprefix("biolink:")
+                for code, value in (d.get("codes") or {}).items() if slot in EDGE_SLOTS else ():
+                    if codes.get(code):
+                        by_source.setdefault(codes[code], {})[slot] = str(value).removeprefix(
+                            "biolink:"
+                        )
         if not sources and not per_row and plan.get("infores"):
             sources = {plan["infores"]}
         where = f"layout {lay.get('id')}"
-        need = " and ".join(missing)
+        missing = [s for s in EDGE_SLOTS if s not in mapped]
         if catalog is None or not sources:
-            f.warn(where, f"edges have no {need}: map them from the documentation")
+            if missing:
+                f.warn(
+                    where, f"edges have no {' and '.join(missing)}: map them from the documentation"
+                )
             continue
-        suggested, unlike = {}, {}
+
+        def ours(src: str, slot: str, by_source=by_source, stated=stated) -> str | None:
+            """The layout's value for a source's edges: per source, else its one constant."""
+            mine = by_source.get(src, {}).get(slot)
+            return mine or (next(iter(stated[slot])) if len(stated[slot]) == 1 else None)
+
+        differ, suggested, unlike = [], {}, {}
         for src in sorted(sources):
             entry = catalog.get(src) or {}
-            if stated and entry.get("knowledge_level") not in stated:
+            theirs = {s: entry.get(s) for s in EDGE_SLOTS if entry.get(s) in valid[s]}
+            for slot, value in theirs.items():
+                if ours(src, slot) and ours(src, slot) != value:
+                    differ.append(f"{src} {slot} biolink:{ours(src, slot)} (catalog: {value})")
+            if not missing:
+                continue
+            kl = ours(src, "knowledge_level")
+            if kl and theirs.get("knowledge_level") and kl != theirs["knowledge_level"]:
                 # the catalog describes the resource's usual statements (HGNC: curated, by
                 # hand), not these (HGNC's orthology predictions); its agent_type won't fit
-                unlike[src] = entry.get("knowledge_level")
-                continue
-            values = {
-                s: entry.get(s)
-                for s in missing
-                if entry.get(s) in allowed[s] and entry.get(s) != "not_provided"
-            }
-            if values:
+                unlike[src] = (theirs["knowledge_level"], kl)
+            elif values := {s: theirs[s] for s in missing if s in theirs}:
                 suggested[src] = values
-        if not suggested and unlike:
+        if differ:
+            f.warn(
+                where,
+                f"the layout's values stand, but differ from infores catalog "
+                f"{vocab.INFORES_VERSION}: {'; '.join(differ)}. Check them against the "
+                "documentation",
+            )
+        if not missing:
+            continue
+        need = " and ".join(missing)
+        if suggested:
+            said = "; ".join(
+                f"{src}: " + ", ".join(f"{s} biolink:{v}" for s, v in values.items())
+                for src, values in suggested.items()
+            )
+            how = (
+                "a derived field on the source column, coded per source"
+                if per_row
+                else ("layout constants")
+            )
+            f.warn(
+                where,
+                f"edges have no {need}; infores catalog {vocab.INFORES_VERSION} says {said}. Add "
+                f"them as {how} (or values the documentation supports better)",
+            )
+        elif unlike:
             f.warn(
                 where,
                 f"edges have no {need}. Infores catalog {vocab.INFORES_VERSION} describes "
-                + ", ".join(f"{s} as {kl}" for s, kl in unlike.items())
-                + f", but these edges are {', '.join(sorted(stated))}, so its values don't fit "
-                "them: map them from the documentation, or set biolink:not_provided",
+                + ", ".join(f"{s} as {cat}" for s, (cat, _) in unlike.items())
+                + ", but these edges are "
+                + ", ".join(sorted({mine for _, mine in unlike.values()}))
+                + ", so its values don't fit them: map them from the documentation, or set "
+                "biolink:not_provided",
             )
-            continue
-        if not suggested:
+        else:
             f.warn(
                 where,
                 f"edges have no {need}, and infores catalog {vocab.INFORES_VERSION} gives none for "
                 f"{', '.join(sorted(sources))}: map them from the documentation, or set "
                 "biolink:not_provided to say they aren't known",
             )
-            continue
-        said = "; ".join(
-            f"{src}: " + ", ".join(f"{s} biolink:{v}" for s, v in values.items())
-            for src, values in suggested.items()
-        )
-        how = (
-            "a derived field on the source column, coded per source"
-            if per_row
-            else "layout constants"
-        )
-        f.warn(
-            where,
-            f"edges have no {need}; infores catalog {vocab.INFORES_VERSION} says {said}. Add "
-            f"them as {how} (or values the documentation supports better)",
-        )
 
 
 _INFORES: list = []  # the catalog, loaded once by the first data check that needs it
@@ -2382,6 +2408,9 @@ def main() -> None:
         )
     out = load_croissant(args.out)
     f = Findings(plan.get("explained"))
+    # as apply_plan.py writes them, so the checks see what's in the croissant
+    for where, msg in normalize_edge_provenance(plan):
+        f.warn(where, f"{msg} (put that in the plan)")
     for ln in answer_lines:
         (f.warn if "matched no layout" in ln else f.note)("maintainer answers", ln)
     for e in plan.get("explained") or []:
@@ -2413,7 +2442,7 @@ def main() -> None:
             catalog = None
         check_infores(plan, f, catalog)
         check_source_infores(plan, out, f, catalog)
-        check_edge_provenance(plan, f, catalog, model)
+        check_edge_provenance(plan, f, catalog)
         check_formats(original, plan, f)
         check_roles(plan, f, model)
         check_code_merges(plan, f)

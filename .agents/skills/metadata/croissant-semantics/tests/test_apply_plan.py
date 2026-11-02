@@ -171,6 +171,37 @@ def test_entities_group_columns_and_keep_their_ids_and_sources():
     assert "annotation" not in rs["field"][1]["subField"][0]  # curie ids need no prefix annotation
 
 
+def test_knowledge_level_and_agent_type_values_become_the_closest_biolink_values():
+    from apply_plan import WARNINGS, closest_edge_provenance
+
+    kl, at = "biolink:knowledge_level", "biolink:agent_type"
+    assert closest_edge_provenance(kl, "biolink:prediction") == "biolink:prediction"
+    assert closest_edge_provenance(kl, "Knowledge Assertion") == "biolink:knowledge_assertion"
+    assert closest_edge_provenance(kl, "biolink:curated") == "biolink:knowledge_assertion"
+    assert closest_edge_provenance(kl, "mixed") == "biolink:not_provided"  # the catalog's
+    assert closest_edge_provenance(kl, "statistical_assocation") == (
+        "biolink:statistical_association"
+    )  # misspelt
+    assert closest_edge_provenance(at, "text mining") == "biolink:text_mining_agent"
+    assert closest_edge_provenance(at, "biolink:manual") == "biolink:manual_agent"
+    assert closest_edge_provenance(at, "gibberish") == "biolink:not_provided"
+
+    p = plan()
+    p["layouts"][0]["constants"] = [
+        {"name": "kl", "property": kl, "value": "biolink:curated"},
+        {"name": "at", "property": at, "value": "biolink:manual_agent"},
+    ]
+    p["layouts"][0]["columns"]["Evidence"]["derived"] = [
+        {"name": "how", "property": at, "codes": {"IMP": "manual curation"}}
+    ]
+    out, _ = apply_plan(croissant(), p)
+    values = {f["name"]: f.get("value") for f in rs_by_id(out, "rs_human")["field"] if "value" in f}
+    assert values["kl"] == "biolink:knowledge_assertion" and values["at"] == "biolink:manual_agent"
+    assert any("'biolink:curated' isn't a Biolink knowledge_level" in w for w in WARNINGS)
+    assert any("'manual curation'" in w and "manual_agent" in w for w in WARNINGS)
+    assert not any("'biolink:manual_agent'" in w for w in WARNINGS)  # valid values are kept
+
+
 def test_knowledge_base_infores_goes_on_the_dataset():
     out, _ = apply_plan(croissant(), plan(infores="infores:hgnc"))
     assert out["rcv:infores"] == "infores:hgnc"

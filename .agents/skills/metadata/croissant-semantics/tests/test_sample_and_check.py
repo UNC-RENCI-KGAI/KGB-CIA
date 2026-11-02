@@ -310,60 +310,66 @@ def test_proposed_infores_ids_and_catalog_entries_follow_the_catalog_style():
     }
 
 
-def test_edges_without_knowledge_level_get_the_catalog_values_suggested():
+def test_edge_provenance_keeps_the_layouts_values_and_suggests_the_catalogs():
     from check import check_edge_provenance
 
-    model = {
-        "slots": {
-            "knowledge level": {"range": "KnowledgeLevelEnum"},
-            "agent type": {"range": "AgentTypeEnum"},
-        },
-        "enums": {
-            "KnowledgeLevelEnum": {
-                "permissible_values": {"knowledge_assertion": {}, "prediction": {}}
-            },
-            "AgentTypeEnum": {"permissible_values": {"manual_agent": {}, "not_provided": {}}},
-        },
-    }
     catalog = {
         "infores:go": {"knowledge_level": "knowledge_assertion", "agent_type": "manual_agent"},
         "infores:chembl": {"knowledge_level": "knowledge_assertion", "agent_type": "not_provided"},
         "infores:gtopdb": {"knowledge_level": "mixed", "agent_type": "not_provided"},
     }
     edge = {"name": "gene", "role": "biolink:subject", "columns": {}}
+    go = {"infores": "infores:go"}
+
+    def const(slot, value):
+        return {"name": slot, "property": f"biolink:{slot}", "value": f"biolink:{value}"}
 
     def findings(plan):
         f = Findings()
-        check_edge_provenance(plan, f, catalog, model)
-        return [(where, m) for _, where, m in f.items]
+        check_edge_provenance(plan, f, catalog)
+        return [m for _, _, m in f.items]
 
-    # no source mapped: the knowledge base itself is the primary source
-    [(where, msg)] = findings({"infores": "infores:go", **plan_with(entities=[edge])})
-    assert where == "layout l" and "knowledge_level biolink:knowledge_assertion" in msg
+    # none mapped, no source named: the knowledge base itself is the primary source
+    [msg] = findings({**go, **plan_with(entities=[edge])})
+    assert "knowledge_level biolink:knowledge_assertion" in msg
     assert "agent_type biolink:manual_agent" in msg and "layout constants" in msg
-    # mapped (even as not_provided) or no edges: nothing to say
-    kl = {"name": "kl", "property": "biolink:knowledge_level", "value": "biolink:prediction"}
-    at = {"name": "at", "property": "biolink:agent_type", "value": "biolink:not_provided"}
+    # the layout agrees with the catalog, or makes no edges: nothing to say
+    agree = [const("knowledge_level", "knowledge_assertion"), const("agent_type", "manual_agent")]
+    assert findings({**go, **plan_with(entities=[edge], constants=agree)}) == []
+    assert findings({**go, **plan_with()}) == []
+    # the layout disagrees: its values stand, and the difference is flagged
+    differ = [const("knowledge_level", "prediction"), const("agent_type", "manual_agent")]
+    [msg] = findings({**go, **plan_with(entities=[edge], constants=differ)})
+    assert "the layout's values stand" in msg
+    assert "infores:go knowledge_level biolink:prediction (catalog: knowledge_assertion)" in msg
+    # ... and with agent_type missing, the catalog's (for curated statements) isn't suggested
+    flagged, missing = findings({**go, **plan_with(entities=[edge], constants=differ[:1])})
+    assert "values stand" in flagged
     assert (
-        findings({"infores": "infores:go", **plan_with(entities=[edge], constants=[kl, at])}) == []
+        "infores:go as knowledge_assertion" in missing and "these edges are prediction" in missing
     )
-    assert findings({"infores": "infores:go", **plan_with()}) == []
-    # a source column: per-source values, and "mixed" isn't a Biolink value, so not suggested
+    assert "manual_agent" not in missing
+    # a source column: per-source values; "mixed" isn't a Biolink value, so not suggested
     src = {
         "property": "biolink:primary_knowledge_source",
         "codes": {"ChEMBL": "infores:chembl", "IUPHAR": "infores:gtopdb"},
     }
-    [(_, msg)] = findings(plan_with(entities=[edge], columns={"src": src}, constants=[at]))
+    at = const("agent_type", "not_provided")
+    [msg] = findings(plan_with(entities=[edge], columns={"src": src}, constants=[at]))
     assert "infores:chembl: knowledge_level biolink:knowledge_assertion" in msg
     assert "gtopdb" not in msg and "derived field" in msg
-    # the layout's own knowledge level differs from the catalog's: its agent_type won't fit
-    [(_, msg)] = findings({"infores": "infores:go", **plan_with(entities=[edge], constants=[kl])})
-    assert "infores:go as knowledge_assertion" in msg and "these edges are prediction" in msg
-    assert "manual_agent" not in msg
+    # per-source values the layout codes on the source column are compared per source
+    kl = {
+        "name": "kl",
+        "property": "biolink:knowledge_level",
+        "codes": {"ChEMBL": "biolink:prediction", "IUPHAR": "biolink:prediction"},
+    }
+    coded = {**src, "derived": [kl]}
+    [msg] = findings(plan_with(entities=[edge], columns={"src": coded}, constants=[at]))
+    assert "infores:chembl knowledge_level biolink:prediction (catalog: knowledge_assertion)" in msg
+    assert "gtopdb" not in msg
     # nothing usable in the catalog
-    [(_, msg)] = findings(
-        {"infores": "infores:gtopdb", **plan_with(entities=[edge], constants=[at])}
-    )
+    [msg] = findings({"infores": "infores:gtopdb", **plan_with(entities=[edge], constants=[at])})
     assert "gives none" in msg and "not_provided" in msg
 
 

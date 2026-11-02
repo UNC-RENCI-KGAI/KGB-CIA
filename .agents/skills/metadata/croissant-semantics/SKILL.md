@@ -209,10 +209,13 @@ dependencies). Use `--help` on any of them.
      explanation of each edge is lost). Start from the infores catalog's values for the edges'
      primary knowledge source (`vocab.py infores NAME` shows both; the knowledge base's own entry
      when its rows don't name another source), as layout constants, or as a derived field coded
-     per source when a column names the source. Prefer what the documentation says about these
-     particular statements: the catalog describes a resource's usual statements, so HGNC's
-     `manual_agent` doesn't fit the orthology predictions it collects. `check.py` suggests the
-     catalog's values, and says when they don't fit.
+     per source when a column names the source. What the layout says always stands over the
+     catalog: the catalog describes a resource's usual statements, so HGNC's `manual_agent`
+     doesn't fit the orthology predictions it collects. `check.py` suggests the catalog's values
+     where the layout has none, and flags where the layout's differ, for you to confirm against
+     the documentation (and mention in `notes.md`). A value that isn't a Biolink one (`curated`,
+     the catalog's `mixed`) is written as the closest Biolink value, with a warning; put that
+     value in the plan.
    - *Dialect*: for tables that aren't plain CSV/TSV with a header row, the layout's `dialect`.
      When the croissant labels a file with a type mlcroissant can't read (`text/plain` for a TSV,
      gzip alone, `application/parquet`), the layout's `encoding_format` corrects it.

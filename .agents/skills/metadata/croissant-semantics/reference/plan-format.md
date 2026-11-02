@@ -254,8 +254,10 @@ the catalog. For a source with no infores id, leave it unmapped. The check warns
 sources unless the knowledge base documents them as its own.
 
 How each source made its statements goes on the same column, as `derived` fields coded per
-source, starting from the catalog's values for each (`vocab.py infores NAME` shows them; leave
-out a source whose catalog value is `mixed` or `other`, which aren't Biolink values):
+source, starting from the catalog's values for each (`vocab.py infores NAME` shows them). Values
+you set stand; `check.py` flags those that differ from the catalog's. A `knowledge_level` or
+`agent_type` value that isn't a Biolink one (`curated`, the catalog's `mixed` or `other`) is
+written as the closest Biolink value (`knowledge_assertion`, `not_provided`), with a warning:
 
 ```json
 "source": {
