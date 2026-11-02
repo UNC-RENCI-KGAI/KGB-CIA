@@ -33,8 +33,8 @@ It uses the RENCI Azure models in `.pi/models.json` for now.
   this pass as a Pi subagent; the script also calls the model directly, so `kgb-augment` runs
   without Pi.
 - **Choosing the models:** a gold set of 50–100 hand-labeled (edge, abstract) pairs decides
-  which models are good enough. Candidates for the bulk pass are gpt-5.6-luna,
-  DeepSeek-V4-Flash and gpt-oss-120b, roughly $20–30 per 10,000 pairs at about 9k input and 1k
+  which models are good enough. Candidates for the bulk pass are gpt-6-luna, gpt-5.6-luna,
+  DeepSeek-V4-Flash and gpt-oss-120b, roughly $14–30 per 10,000 pairs at about 9k input and 1k
   output tokens per pair. Candidates for the second pass are gpt-5.6-terra and gpt-6.1-sol.
 
 ## Step 2: Which edges to query
