@@ -146,7 +146,7 @@ def test_run_fails_when_orion_run_fails(tmp_path, monkeypatch):
     assert handoff["sources"][0]["error"] == "ORION blew up"
 
 
-def test_run_succeeds_when_orion_run_succeeds(tmp_path, monkeypatch):
+def test_run_succeeds_when_orion_run_succeeds(tmp_path, monkeypatch, capsys):
     input_dir = tmp_path / "metadata" / "acme"
     input_dir.mkdir(parents=True)
     (input_dir / "croissant.semantic.json").write_text("{}")
@@ -158,6 +158,8 @@ def test_run_succeeds_when_orion_run_succeeds(tmp_path, monkeypatch):
                 "source_id": "Kgbcia_acme",
                 "status": "partial",
                 "requires_infores": False,
+                "infores": "infores:acme",
+                "infores_proposed": True,
                 "skipped": [{"ref": "field_x", "name": "junk", "reason": "no meaning"}],
             }
         ],
@@ -171,3 +173,6 @@ def test_run_succeeds_when_orion_run_succeeds(tmp_path, monkeypatch):
     assert transform.run(input_dir, output_dir) == 0
     handoff = json.loads((output_dir / "transformation_report.json").read_text())
     assert handoff["sources"][0]["orion_exit_code"] == 0
+    # a proposed infores id runs, and is reported for registering
+    assert handoff["sources"][0]["infores_proposed"] is True
+    assert "proposed infores ids that need registering" in capsys.readouterr().out

@@ -181,6 +181,26 @@ def test_missing_source_identity_is_explicit(bundle):
         generator.compile_bundle(bundle[0], infores="synthetic")
 
 
+def test_source_identity_comes_from_the_metadatas_rcv_infores(bundle, tmp_path):
+    # the metadata's own id wins over the old single-constant inference
+    bundle[1]["rcv:infores"] = "infores:metadata-named"
+    config = generator.compile_bundle(save(bundle))
+    assert config["infores"] == "infores:metadata-named" and not config["infores_proposed"]
+    # an explicit --infores still wins
+    assert generator.compile_bundle(bundle[0], infores="infores:confirmed")["infores"] == (
+        "infores:confirmed"
+    )
+    # a proposed id (not yet in the infores catalog) is used, marked, and doesn't block the run
+    bundle[1]["recordSet"][0]["field"] = bundle[1]["recordSet"][0]["field"][:-2]
+    bundle[1].update({"rcv:infores": "infores:proposed-kb", "rcv:inforesProposed": True})
+    result = generator.generate(save(bundle), tmp_path / "out")
+    assert result["infores"] == "infores:proposed-kb" and result["infores_proposed"]
+    assert result["status"] != "needs_infores"
+    bundle[1]["rcv:infores"] = "proposed-kb"
+    with pytest.raises(ValueError, match="rcv:infores"):
+        generator.compile_bundle(save(bundle))
+
+
 @pytest.mark.parametrize("reason", ["missing_extract", "unknown_reader", "join", "missing_id"])
 def test_unsupported_inputs_are_reported_without_inventing_mappings(bundle, reason):
     path, doc = bundle

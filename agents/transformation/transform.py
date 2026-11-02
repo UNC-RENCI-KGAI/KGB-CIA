@@ -120,6 +120,9 @@ def run(input_dir: Path | None, output_dir: Path) -> int:
             "source_id": result["source_id"],
             "status": result["status"],
             "requires_infores": result["requires_infores"],
+            "infores": result.get("infores"),
+            # an id the infores catalog lacks: built anyway, to be registered
+            "infores_proposed": result.get("infores_proposed", False),
             "skipped": result["skipped"],
         }
         if result["status"] in RUNNABLE_STATUSES:
@@ -139,4 +142,10 @@ def run(input_dir: Path | None, output_dir: Path) -> int:
         f"ORION; {len(report['errors'])} generation errors. "
         f"See {report_path} for the metadata-team handoff."
     )
+    proposed = sorted(o["infores"] for o in outcomes if o["infores_proposed"])
+    if proposed:
+        print(
+            f"  {len(proposed)} sources cite proposed infores ids that need registering in the "
+            f"infores catalog: {', '.join(proposed)}"
+        )
     return 1 if structural_failure else 0
