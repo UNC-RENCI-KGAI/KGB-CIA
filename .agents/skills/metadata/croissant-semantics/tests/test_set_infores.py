@@ -18,7 +18,7 @@ CATALOG = {
 def bundle(root: Path, name: str, kb: str, title: str, **plan) -> Path:
     path = root / name
     path.mkdir()
-    (path / "semantics_plan.json").write_text(json.dumps({"kb": kb, **plan, "layouts": []}))
+    (path / "semantics_plan.json").write_text(json.dumps({"kb": kb, "layouts": [], **plan}))
     (path / "croissant.semantic.json").write_text(json.dumps({"name": title, "recordSet": []}))
     return path
 
@@ -52,6 +52,41 @@ def test_ids_are_chosen_without_review_and_written_into_only_the_infores(tmp_pat
     assert level == "warning"  # proposed: flagged, not blocked
     croissant = json.loads((bioplex / "croissant.semantic.json").read_text())
     assert croissant["rcv:inforesProposed"] is True
+
+
+def test_the_plans_own_constants_spellings_and_parent_names_find_registered_ids(
+    tmp_path, monkeypatch
+):
+    catalog = {
+        "infores:ncbi-gene": {"name": "NCBI Gene", "status": "released"},
+        "infores:ensembl-gene": {"name": "Ensembl gene", "status": "released"},
+        "infores:hgnc": {"name": "HGNC", "status": "released"},
+        "infores:kegg": {"name": "KEGG", "status": "released"},
+    }
+    monkeypatch.setattr(vocab, "infores", lambda: catalog)
+
+    def const(slot, value):
+        return {"name": slot, "property": f"biolink:{slot}", "value": value}
+
+    def plan_with(*consts):
+        return {"layouts": [{"id": "l", "constants": list(consts)}]}
+
+    # an aggregator constant names the knowledge base itself (HCOP orthologs come from HGNC)
+    hcop = bundle(tmp_path, "orthologs", "orthologs", "HCOP",
+                  **plan_with(const("aggregator_knowledge_source", "infores:hgnc")))  # fmt: skip
+    assert set_infores.choose(hcop)["infores"] == "infores:hgnc"
+    # dashes, spaces and underscores are the same name
+    assert set_infores.choose(bundle(tmp_path, "ncbi-gene", "ncbi_gene", "Gene"))["infores"] == (
+        "infores:ncbi-gene"
+    )
+    # a single primary source, after the name
+    kegg = bundle(tmp_path, "kegg-pathways", "kegg-pathways", "KEGG PATHWAY Database",
+                  **plan_with(const("primary_knowledge_source", "infores:kegg")))  # fmt: skip
+    assert set_infores.choose(kegg)["infores"] == "infores:kegg"
+    # a slice of a registered resource takes its id
+    ensembl = bundle(tmp_path, "ensembl-gene-ids", "ensembl-gene-ids", "Ensembl")
+    choice = set_infores.choose(ensembl)
+    assert choice["infores"] == "infores:ensembl-gene" and not choice["proposed"]
 
 
 def test_every_proposed_id_under_root_is_listed_for_registering(tmp_path, monkeypatch):
