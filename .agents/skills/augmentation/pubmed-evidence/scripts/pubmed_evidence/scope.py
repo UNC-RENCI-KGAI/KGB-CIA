@@ -1,0 +1,641 @@
+"""Step 2 (`kgb-augment select`): choose the edges worth checking in the literature, and group
+them by node pair.
+
+An edge is checked when abstracts state its relationship as a claim that a paper could
+contradict (DESIGN.md, "Step 2: Which edges to query"). Rules pick edges by (subject category,
+predicate, object category), matching on Biolink ancestry so the child predicates and
+categories the transform picks are covered. The first rule that matches an edge decides:
+
+- `query` rules keep every matching edge.
+- `capped` rules (gene-gene, gene-phenotype) keep only their best-scored `--capped-limit` pairs,
+  after dropping statements below `--min-score` if given.
+- `skip` rules keep nothing. They exist so the report can say which skip rule covered an
+  edge type, and so an edge type no rule covers shows up as `unmatched`.
+
+A rule matches an edge in its own direction, and also reversed when the rule is `symmetric` or
+Biolink marks the edge's predicate symmetric (`interacts_with`, `binds`, ...), since a source
+may write either "A binds B" or "B binds A".
+
+Negated source edges are skipped: step 6 only adds negated edges, and checking a source's own
+negative finding against the literature is out of scope for now. Edges whose subject or object
+is not in `nodes.jsonl` are skipped too. Both are counted in the report.
+
+Kept edges become one `Statement` per distinct statement (`graphio.statement_id`), one `Pair`
+per unordered node pair and one `Entity` per node in a kept pair, in the work directory:
+`statements.jsonl`, `pairs.jsonl`, `entities.jsonl`, and `scope_report.json` with the counts.
+
+`--rules FILE` replaces the built-in rules with a JSON list of objects (or `{"rules": [...]}`)
+with the same fields as `Rule`, in order of precedence:
+
+    [{"id": "gene-disease", "tier": "query",
+      "subject": ["biolink:GeneOrGeneProduct"],
+      "predicates": ["biolink:gene_associated_with_condition", "biolink:causes"],
+      "object": ["biolink:Disease"],
+      "symmetric": false}]
+
+`subject` and `object` list Biolink categories (empty or left out: any node); `tier` is
+`query`, `capped` or `skip`; `symmetric` defaults to false.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import sys
+from collections import Counter, defaultdict
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from pubmed_evidence import biolink, config, records
+from pubmed_evidence.graphio import (
+    EDGES,
+    NODES,
+    edge_statement_id,
+    extras,
+    graph_file,
+    is_negated,
+    pair_id,
+    pair_nodes,
+    pmid_of,
+    qualifiers_of,
+    read_edges,
+    read_jsonl,
+    read_nodes,
+)
+from pubmed_evidence.records import Entity, Pair, Statement
+from shared.schema import Node
+
+STEP = "select"
+
+# NodeNorm conflation merges proteins into genes, but an unconflated protein should match too.
+GENE = "biolink:GeneOrGeneProduct"
+# Drug is below ChemicalEntity.
+CHEMICAL = "biolink:ChemicalEntity"
+
+# Edge slots read as a confidence score for capped rules, best (highest) value wins. Scales
+# differ between sources, so `--min-score` compares against the raw value.
+SCORE_SLOTS = (
+    "score",
+    "confidence_score",
+    "has_confidence_score",
+    "combined_score",
+    "stringdb_combined_score",
+    "evidence_score",
+)
+# Node slots that give an entity's synonyms, besides its name.
+SYNONYM_SLOTS = ("symbol", "synonym", "full_name")
+
+PROGRESS_EVERY = 1_000_000
+
+
+class Rule(BaseModel):
+    """Which edges to keep (or name as skipped), by category and predicate ancestry."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(min_length=1)
+    tier: Literal["query", "capped", "skip"]
+    subject: tuple[str, ...] = Field(default=(), description="Categories; empty: any node")
+    predicates: tuple[str, ...] = Field(min_length=1)
+    object: tuple[str, ...] = Field(default=(), description="Categories; empty: any node")
+    symmetric: bool = False
+
+
+DEFAULT_RULES: tuple[Rule, ...] = (
+    # Two entities mentioned together isn't a claim, and checking co-mention against PubMed
+    # would be circular. It is under `associated_with`, so it is skipped before the rules below.
+    Rule(
+        id="literature-co-occurrence",
+        tier="skip",
+        predicates=("biolink:occurs_together_in_literature_with",),
+        symmetric=True,
+    ),
+    Rule(
+        id="chemical-treats-disease",
+        tier="query",
+        subject=(CHEMICAL,),
+        predicates=(
+            "biolink:treats",
+            "biolink:contraindicated_in",
+            "biolink:treats_or_applied_or_studied_to_treat",
+        ),
+        object=("biolink:Disease",),
+    ),
+    Rule(
+        id="chemical-affects-gene",
+        tier="query",
+        subject=(CHEMICAL,),
+        predicates=(
+            "biolink:affects",
+            "biolink:directly_physically_interacts_with",
+            "biolink:binds",
+        ),
+        object=(GENE,),
+    ),
+    # `associated_with` covers gene_associated_with_condition, genetically_associated_with,
+    # the likelihood predicates (ClinGen's "Likely Pathogenic" in Monarch), correlated_with and
+    # biomarker_for; `contributes_to` covers causes.
+    Rule(
+        id="gene-disease",
+        tier="query",
+        subject=(GENE,),
+        predicates=("biolink:associated_with", "biolink:contributes_to"),
+        object=("biolink:Disease",),
+    ),
+    Rule(
+        id="gene-gene",
+        tier="capped",
+        subject=(GENE,),
+        predicates=("biolink:physically_interacts_with", "biolink:interacts_with"),
+        object=(GENE,),
+        symmetric=True,
+    ),
+    Rule(
+        id="gene-phenotype",
+        tier="capped",
+        subject=(GENE,),
+        predicates=("biolink:has_phenotype",),
+        object=("biolink:PhenotypicFeature",),
+    ),
+    # Pathway and GO names rarely appear verbatim in abstracts, and GO annotations carry their
+    # own references and evidence codes. Pathway is below BiologicalProcessOrActivity.
+    Rule(
+        id="pathway-go",
+        tier="skip",
+        subject=(GENE,),
+        predicates=("biolink:participates_in", "biolink:enables", "biolink:located_in"),
+        object=("biolink:BiologicalProcessOrActivity", "biolink:CellularComponent"),
+    ),
+    # Measurements rather than claims, and very numerous. Cell is below AnatomicalEntity.
+    Rule(
+        id="expression",
+        tier="skip",
+        subject=(GENE,),
+        predicates=("biolink:expressed_in",),
+        object=("biolink:AnatomicalEntity",),
+    ),
+    # True by construction. DESIGN.md names the first of each pair; the inverses are the same
+    # relationships written the other way round.
+    Rule(
+        id="by-construction",
+        tier="skip",
+        predicates=(
+            "biolink:orthologous_to",
+            "biolink:has_part",
+            "biolink:part_of",
+            "biolink:subclass_of",
+            "biolink:superclass_of",
+            "biolink:member_of",
+            "biolink:has_member",
+        ),
+        symmetric=True,
+    ),
+)
+
+
+class RulesError(ValueError):
+    """A `--rules` file that can't be used; the message is one line."""
+
+
+def load_rules(path: Path) -> tuple[Rule, ...]:
+    """Rules from a JSON file (format in the module docstring)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise RulesError(f"can't read rules file {path}: {e}") from e
+    if isinstance(data, dict):
+        data = data.get("rules")
+    if not isinstance(data, list) or not data:
+        raise RulesError(f"rules file {path}: expected a non-empty JSON list of rules")
+    try:
+        rules = tuple(Rule.model_validate(r) for r in data)
+    except ValidationError as e:
+        first = e.errors()[0]
+        where = ".".join(str(x) for x in first["loc"])
+        raise RulesError(f"rules file {path}: rule {where}: {first['msg']}") from e
+    ids = [r.id for r in rules]
+    if len(set(ids)) != len(ids):
+        raise RulesError(f"rules file {path}: rule ids must be unique")
+    tk = biolink.toolkit()
+    for r in rules:
+        for curie in (*r.subject, *r.predicates, *r.object):
+            if tk.get_element(curie) is None:
+                raise RulesError(f"rules file {path}: rule {r.id}: {curie} is not in Biolink")
+    return rules
+
+
+def _side(categories: tuple[str, ...], allowed: tuple[str, ...]) -> bool:
+    return not allowed or biolink.is_a(list(categories), list(allowed))
+
+
+def match_rule(
+    rules: Iterable[Rule],
+    subject_categories: tuple[str, ...],
+    predicate: str,
+    object_categories: tuple[str, ...],
+) -> Rule | None:
+    """The first rule that matches the edge, in either direction where that is allowed."""
+    for rule in rules:
+        if not biolink.is_a(predicate, list(rule.predicates)):
+            continue
+        if _side(subject_categories, rule.subject) and _side(object_categories, rule.object):
+            return rule
+        reversible = rule.symmetric or biolink.is_symmetric(predicate)
+        if (
+            reversible
+            and _side(object_categories, rule.subject)
+            and _side(subject_categories, rule.object)
+        ):
+            return rule
+    return None
+
+
+def edge_score(edge_slots: dict[str, Any]) -> float | None:
+    """The best numeric value among an edge's SCORE_SLOTS; booleans and NaN don't count."""
+    best = None
+    for slot in SCORE_SLOTS:
+        v = edge_slots.get(slot)
+        if isinstance(v, bool) or not isinstance(v, int | float) or math.isnan(v):
+            continue
+        best = float(v) if best is None else max(best, float(v))
+    return best
+
+
+def usable_name(node_id: str, name: str | None) -> str | None:
+    """`name`, unless it is only the node's identifier: the whole CURIE, its local part, or the
+    local part's own id (Xenbase names genes "XB-GENE-865198"; dictyBase phenotypes are often
+    named "0001015"). Such a name says nothing to PubMed or a reader."""
+    if not name or not name.strip():
+        return None
+    # MONDO keeps a retired term's name as "obsolete <name>".
+    name = re.sub(r"^obsolete\s+", "", name.strip(), flags=re.I)
+    local = node_id.split(":", 1)[-1]
+    if not name or name.casefold() in {node_id.casefold(), local.casefold()}:
+        return None
+    return name
+
+
+def entity_of(node: Node) -> Entity:
+    """The node as step 3 searches for it and step 4 names it. A node whose name is only its
+    identifier is named by its first symbol or synonym instead, or left unnamed."""
+    slots = extras(node)
+    name = usable_name(node.id, node.name)
+    synonyms = synonyms_of(slots, name)
+    if name is None and synonyms:
+        name, synonyms = synonyms[0], synonyms[1:]
+    return Entity(
+        id=node.id,
+        name=name,
+        category=node.category,
+        equivalent_identifiers=node.equivalent_identifiers,
+        synonyms=synonyms,
+    )
+
+
+def synonyms_of(node_slots: dict[str, Any], name: str | None) -> list[str]:
+    """The node's symbol, synonyms and full name, deduplicated ignoring case, without its name."""
+    seen = {name.casefold()} if name else set()
+    out: list[str] = []
+    for slot in SYNONYM_SLOTS:
+        value = node_slots.get(slot)
+        for s in [value] if isinstance(value, str) else value or []:
+            if isinstance(s, str) and (s := s.strip()) and s.casefold() not in seen:
+                seen.add(s.casefold())
+                out.append(s)
+    return out
+
+
+class _Accumulator:
+    """A statement being collected from the edges that make it."""
+
+    __slots__ = (
+        "subject",
+        "predicate",
+        "object",
+        "qualifiers",
+        "rule",
+        "edges",
+        "sources",
+        "pmids",
+        "score",
+    )
+
+    def __init__(self, edge, rule: str):
+        self.subject = edge.subject
+        self.predicate = edge.predicate
+        self.object = edge.object
+        self.qualifiers = qualifiers_of(edge)
+        self.rule = rule
+        self.edges = 0
+        self.sources: set[str] = set()
+        self.pmids: set[str] = set()
+        self.score: float | None = None
+
+    def add(self, edge, score: float | None) -> None:
+        self.edges += 1
+        self.sources.add(edge.primary_knowledge_source)
+        self.pmids.update(p for p in map(pmid_of, edge.publications) if p)
+        if score is not None and (self.score is None or score > self.score):
+            self.score = score
+
+    @property
+    def pair_id(self) -> str:
+        return pair_id(self.subject, self.object)
+
+
+def _read_categories(input_dir: Path) -> dict[str, tuple[str, ...]]:
+    """Node id -> categories, with equal category lists shared to save memory."""
+    out: dict[str, tuple[str, ...]] = {}
+    shared: dict[tuple[str, ...], tuple[str, ...]] = {}
+    for d in read_jsonl(graph_file(input_dir, NODES)):
+        value = d.get("category") or ()
+        cats = (value,) if isinstance(value, str) else tuple(value)
+        out[d["id"]] = shared.setdefault(cats, cats)
+    return out
+
+
+def _pmid_key(pmid: str) -> tuple[int, str]:
+    return (int(pmid), pmid) if pmid.isdigit() else (sys.maxsize, pmid)
+
+
+def _apply_caps(
+    statements: dict[str, _Accumulator],
+    rules: tuple[Rule, ...],
+    capped_limit: int,
+    min_score: float | None,
+) -> dict[str, dict[str, int]]:
+    """Drop capped-rule statements below `min_score`, then all but the top `capped_limit`
+    pairs of each capped rule. Returns what was dropped, per rule."""
+    by_rule: dict[str, list[str]] = defaultdict(list)
+    for sid, acc in statements.items():
+        by_rule[acc.rule].append(sid)
+    dropped: dict[str, dict[str, int]] = {}
+    for rule in rules:
+        if rule.tier != "capped":
+            continue
+        counts = dict.fromkeys(
+            ("min_score_statements", "min_score_edges", "cap_pairs", "cap_statements", "cap_edges"),
+            0,
+        )
+        sids = by_rule.get(rule.id, [])
+        if min_score is not None:
+            low = [s for s in sids if (sc := statements[s].score) is None or sc < min_score]
+            for sid in low:
+                counts["min_score_statements"] += 1
+                counts["min_score_edges"] += statements.pop(sid).edges
+            sids = [s for s in sids if s in statements]
+        pairs: dict[str, list[str]] = defaultdict(list)
+        best: dict[str, float | None] = {}
+        for sid in sids:
+            acc = statements[sid]
+            pairs[acc.pair_id].append(sid)
+            old = best.get(acc.pair_id)
+            if acc.score is not None and (old is None or acc.score > old):
+                best[acc.pair_id] = acc.score
+            else:
+                best.setdefault(acc.pair_id, old)
+        # Best-scored first, unscored last, then by pair id so ties are deterministic.
+        ranked = sorted(pairs, key=lambda p: (best[p] is None, -(best[p] or 0.0), p))
+        for pid in ranked[max(capped_limit, 0) :]:
+            counts["cap_pairs"] += 1
+            for sid in pairs[pid]:
+                counts["cap_statements"] += 1
+                counts["cap_edges"] += statements.pop(sid).edges
+        dropped[rule.id] = counts
+    return dropped
+
+
+def select(
+    input_dir: Path,
+    work: Path,
+    *,
+    capped_limit: int = config.CAPPED_LIMIT,
+    min_score: float | None = None,
+    rules_file: Path | None = None,
+) -> dict:
+    """Run step 2: write the work files and return the scope report."""
+    rules = load_rules(rules_file) if rules_file is not None else DEFAULT_RULES
+    order = {r.id: i for i, r in enumerate(rules)}
+    # Nodes are read twice: categories now, since rules match on them as edges stream past,
+    # and full records at the end, only for the nodes of kept pairs.
+    categories = _read_categories(input_dir)
+
+    matches: dict[tuple, Rule | None] = {}
+    statements: dict[str, _Accumulator] = {}
+    skipped: Counter[tuple[str, str, str, str]] = Counter()
+    matched_edges: Counter[str] = Counter()
+    edges_read = negated = missing = 0
+    for edge in read_edges(input_dir):
+        edges_read += 1
+        if edges_read % PROGRESS_EVERY == 0:
+            print(f"{STEP}: {edges_read:,} edges read", file=sys.stderr)
+        if is_negated(edge):
+            negated += 1
+            continue
+        s_cats = categories.get(edge.subject)
+        o_cats = categories.get(edge.object)
+        if s_cats is None or o_cats is None:
+            missing += 1
+            continue
+        key = (s_cats, edge.predicate, o_cats)
+        if key not in matches:
+            matches[key] = match_rule(rules, s_cats, edge.predicate, o_cats)
+        rule = matches[key]
+        if rule is None or rule.tier == "skip":
+            label = f"skip:{rule.id}" if rule else "unmatched"
+            first = (s_cats[0] if s_cats else "", edge.predicate, o_cats[0] if o_cats else "")
+            skipped[(*first, label)] += 1
+            continue
+        matched_edges[rule.id] += 1
+        sid = edge_statement_id(edge)
+        acc = statements.get(sid)
+        if acc is None:
+            acc = statements[sid] = _Accumulator(edge, rule.id)
+        acc.add(edge, edge_score(extras(edge)))
+    matched_statements = Counter(acc.rule for acc in statements.values())
+
+    dropped = _apply_caps(statements, rules, capped_limit, min_score)
+
+    pair_statements: dict[str, list[str]] = defaultdict(list)
+    for sid, acc in statements.items():
+        pair_statements[acc.pair_id].append(sid)
+    pairs = []
+    for pid in sorted(pair_statements):
+        sids = sorted(pair_statements[pid])
+        pmids = set().union(*(statements[s].pmids for s in sids))
+        rule_ids = sorted({statements[s].rule for s in sids}, key=order.__getitem__)
+        pairs.append(
+            Pair(
+                pair_id=pid,
+                nodes=pair_nodes(pid),
+                statement_ids=sids,
+                source_pmids=sorted(pmids, key=_pmid_key),
+                rules=rule_ids,
+            )
+        )
+    statement_records = [
+        Statement(
+            statement_id=sid,
+            pair_id=acc.pair_id,
+            subject=acc.subject,
+            predicate=acc.predicate,
+            object=acc.object,
+            qualifiers=acc.qualifiers,
+            rule=acc.rule,
+            edge_count=acc.edges,
+            sources=sorted(acc.sources),
+            source_pmids=sorted(acc.pmids, key=_pmid_key),
+            score=acc.score,
+        )
+        for sid, acc in sorted(statements.items(), key=lambda kv: (kv[1].pair_id, kv[0]))
+    ]
+
+    wanted = {n for p in pairs for n in p.nodes}
+    entities = [entity_of(node) for node in read_nodes(input_dir) if node.id in wanted]
+    entities.sort(key=lambda e: e.id)
+
+    records.write_records(work / records.ENTITIES, entities)
+    records.write_records(work / records.STATEMENTS, statement_records)
+    records.write_records(work / records.PAIRS, pairs)
+
+    per_rule: dict[str, dict[str, Any]] = {}
+    for rule in rules:
+        if rule.tier == "skip":
+            n = sum(c for k, c in skipped.items() if k[3] == f"skip:{rule.id}")
+            per_rule[rule.id] = {"tier": rule.tier, "skipped_edges": n}
+            continue
+        kept = [s for s in statement_records if s.rule == rule.id]
+        entry: dict[str, Any] = {
+            "tier": rule.tier,
+            "matched_edges": matched_edges[rule.id],
+            "matched_statements": matched_statements[rule.id],
+            "edges": sum(s.edge_count for s in kept),
+            "statements": len(kept),
+            "pairs": len({s.pair_id for s in kept}),
+        }
+        if rule.tier == "capped":
+            d = dropped[rule.id]
+            entry["dropped_by_min_score"] = {
+                "statements": d["min_score_statements"],
+                "edges": d["min_score_edges"],
+            }
+            entry["dropped_by_cap"] = {
+                "pairs": d["cap_pairs"],
+                "statements": d["cap_statements"],
+                "edges": d["cap_edges"],
+            }
+        per_rule[rule.id] = entry
+
+    report = {
+        "input": str(input_dir),
+        "rules_file": str(rules_file) if rules_file is not None else None,
+        "capped_limit": capped_limit,
+        "min_score": min_score,
+        "edges_read": edges_read,
+        "negated_skipped": negated,
+        "missing_node_skipped": missing,
+        "kept": {
+            "edges": sum(s.edge_count for s in statement_records),
+            "statements": len(statement_records),
+            "pairs": len(pairs),
+            "entities": len(entities),
+        },
+        "rules": per_rule,
+        "skipped": [
+            {
+                "subject_category": s,
+                "predicate": p,
+                "object_category": o,
+                "edges": n,
+                "rule": label,
+            }
+            for (s, p, o, label), n in sorted(skipped.items(), key=lambda kv: (-kv[1], kv[0]))
+        ],
+    }
+    records.write_json(work / records.SCOPE_REPORT, report)
+    return report
+
+
+def summary(report: dict) -> list[str]:
+    kept = report["kept"]
+    lines = [
+        f"read {report['edges_read']:,} edges; kept {kept['edges']:,} edges as "
+        f"{kept['statements']:,} statements in {kept['pairs']:,} pairs "
+        f"({kept['entities']:,} entities)"
+    ]
+    for rule_id, r in report["rules"].items():
+        if r["tier"] == "skip":
+            continue
+        line = f"  {rule_id}: {r['edges']:,} edges, {r['statements']:,} statements, "
+        line += f"{r['pairs']:,} pairs"
+        if r["tier"] == "capped":
+            cap, low = r["dropped_by_cap"], r["dropped_by_min_score"]
+            line += f" (dropped {cap['pairs']:,} pairs over the cap, "
+            line += f"{low['statements']:,} statements under --min-score)"
+        lines.append(line)
+    by_skip = sum(e["edges"] for e in report["skipped"] if e["rule"] != "unmatched")
+    unmatched = sum(e["edges"] for e in report["skipped"] if e["rule"] == "unmatched")
+    lines.append(
+        f"skipped {report['negated_skipped']:,} negated, "
+        f"{report['missing_node_skipped']:,} with a node missing from {NODES}, "
+        f"{by_skip:,} by skip rules, {unmatched:,} unmatched"
+    )
+    return lines
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--capped-limit",
+        type=int,
+        default=config.CAPPED_LIMIT,
+        help=f"pairs kept per capped rule (gene-gene, gene-phenotype), best-scored first "
+        f"(default {config.CAPPED_LIMIT:,})",
+    )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=None,
+        help="drop capped-rule statements whose best score is below this, or that have none "
+        "(default: no cutoff)",
+    )
+    parser.add_argument(
+        "--rules",
+        type=Path,
+        default=None,
+        help="JSON file of rules replacing the built-in ones (format in reference/rules.md)",
+    )
+
+
+def run(args: argparse.Namespace) -> int:
+    input_dir = Path(args.input)
+    for name in (EDGES, NODES):
+        if not graph_file(input_dir, name).exists():
+            print(f"{STEP}: no {name} in {input_dir}", file=sys.stderr)
+            return 1
+    try:
+        report = select(
+            input_dir,
+            Path(args.work),
+            capped_limit=getattr(args, "capped_limit", config.CAPPED_LIMIT),
+            min_score=getattr(args, "min_score", None),
+            rules_file=getattr(args, "rules", None),
+        )
+    except RulesError as e:
+        print(f"{STEP}: {e}", file=sys.stderr)
+        return 1
+    except (ValidationError, json.JSONDecodeError) as e:
+        reason = str(e).splitlines()[0]
+        print(f"{STEP}: invalid record in {input_dir}: {reason}", file=sys.stderr)
+        return 1
+    for line in summary(report):
+        print(f"{STEP}: {line}")
+    print(
+        f"{STEP}: wrote {records.STATEMENTS}, {records.PAIRS}, {records.ENTITIES} and "
+        f"{records.SCOPE_REPORT} in {args.work}"
+    )
+    return 0
