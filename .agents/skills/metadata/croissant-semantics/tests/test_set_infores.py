@@ -11,7 +11,7 @@ import vocab  # noqa: E402
 CATALOG = {
     "infores:go": {"name": "Gene Ontology", "status": "released"},
     "infores:hgnc": {"name": "HUGO Gene Nomenclature Committee", "status": "released"},
-    "infores:hgnc-old": {"name": "HGNC (old)", "status": "deprecated"},
+    "infores:bioplex-old": {"name": "BioPlex (old)", "status": "deprecated"},
 }
 
 
@@ -23,19 +23,24 @@ def bundle(root: Path, name: str, kb: str, title: str, **plan) -> Path:
     return path
 
 
-def test_suggest_then_apply_sets_only_the_infores(tmp_path, monkeypatch):
+def test_ids_are_chosen_without_review_and_written_into_only_the_infores(tmp_path, monkeypatch):
     monkeypatch.setattr(vocab, "infores", lambda: CATALOG)
-    go = bundle(tmp_path, "gene_ontology", "go", "Gene Ontology")
-    bundle(tmp_path, "bioplex", "bioplex", "BioPlex")
-    bundle(tmp_path, "hgnc", "hgnc", "HGNC", infores="infores:hgnc")
-    found = set_infores.bundles(tmp_path)
+    go = bundle(tmp_path, "gene-ontology", "go", "Gene Ontology")
+    bioplex = bundle(tmp_path, "bioplex", "bioplex", "BioPlex")
+    hgnc = bundle(tmp_path, "hgnc", "hgnc", "HGNC", infores="infores:hgnc")
 
-    assert set_infores.suggest(found["gene_ontology"])["infores"] == "infores:go"
-    assert set_infores.suggest(found["hgnc"]) == {"infores": "infores:hgnc", "proposed": False}
-    bioplex = set_infores.suggest(found["bioplex"])
-    assert bioplex["infores"] == "infores:bioplex" and bioplex["proposed"] and bioplex["review"]
+    assert set_infores.choose(go)["infores"] == "infores:go"
+    assert set_infores.choose(hgnc) == {
+        "infores": "infores:hgnc",
+        "proposed": False,
+        "why": "already in the plan",
+    }
+    choice = set_infores.choose(bioplex)  # only a deprecated, inexact entry: propose one
+    assert choice["infores"] == "infores:bioplex" and choice["proposed"]
+    assert "infores:bioplex-old" in choice["why"]
+    assert set_infores.choose(bioplex, "infores:go")["proposed"] is False
 
-    assert set_infores.apply(go, {"infores": "infores:go"}, CATALOG) == [
+    assert set_infores.apply(go, set_infores.choose(go), CATALOG) == [
         ("note", "infores:go (Gene Ontology), infores catalog v1.1.14")
     ]
     plan = json.loads((go / "semantics_plan.json").read_text())
@@ -43,9 +48,19 @@ def test_suggest_then_apply_sets_only_the_infores(tmp_path, monkeypatch):
     croissant = json.loads((go / "croissant.semantic.json").read_text())
     assert croissant == {"name": "Gene Ontology", "recordSet": [], "rcv:infores": "infores:go"}
 
-    [(level, msg)] = set_infores.apply(
-        found["bioplex"], {"infores": "infores:bioplex", "proposed": True}, CATALOG
-    )
-    assert level == "warning" and "proposed" in msg
-    croissant = json.loads((found["bioplex"] / "croissant.semantic.json").read_text())
+    [(level, _)] = set_infores.apply(bioplex, choice, CATALOG)
+    assert level == "warning"  # proposed: flagged, not blocked
+    croissant = json.loads((bioplex / "croissant.semantic.json").read_text())
     assert croissant["rcv:inforesProposed"] is True
+
+
+def test_every_proposed_id_under_root_is_listed_for_registering(tmp_path, monkeypatch):
+    monkeypatch.setattr(vocab, "infores", lambda: CATALOG)
+    bundle(tmp_path, "bioplex", "bioplex", "BioPlex", infores="infores:bioplex",
+           infores_proposed=True)  # fmt: skip
+    bundle(tmp_path, "gene-ontology", "go", "Gene Ontology", infores="infores:go")
+    found = set_infores.bundles(tmp_path)
+    assert set_infores.write_to_register(tmp_path, found) == 0
+    text = (tmp_path / "infores_to_register.yaml").read_text()
+    assert "id: infores:bioplex" in text and "infores:go" not in text
+    assert "information-resource-registry" in text
