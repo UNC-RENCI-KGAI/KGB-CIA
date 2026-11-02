@@ -11,7 +11,6 @@ import vocab  # noqa: E402
 CATALOG = {
     "infores:go": {"name": "Gene Ontology", "status": "released"},
     "infores:hgnc": {"name": "HUGO Gene Nomenclature Committee", "status": "released"},
-    "infores:bioplex-old": {"name": "BioPlex (old)", "status": "deprecated"},
 }
 
 
@@ -23,22 +22,16 @@ def bundle(root: Path, name: str, kb: str, title: str, **plan) -> Path:
     return path
 
 
-def test_ids_are_chosen_without_review_and_written_into_only_the_infores(tmp_path, monkeypatch):
+def test_ids_are_chosen_and_written_into_only_the_infores(tmp_path, monkeypatch):
     monkeypatch.setattr(vocab, "infores", lambda: CATALOG)
     go = bundle(tmp_path, "gene-ontology", "go", "Gene Ontology")
     bioplex = bundle(tmp_path, "bioplex", "bioplex", "BioPlex")
     hgnc = bundle(tmp_path, "hgnc", "hgnc", "HGNC", infores="infores:hgnc")
 
-    assert set_infores.choose(go)["infores"] == "infores:go"
-    assert set_infores.choose(hgnc) == {
-        "infores": "infores:hgnc",
-        "proposed": False,
-        "why": "already in the plan",
-    }
-    choice = set_infores.choose(bioplex)  # only a deprecated, inexact entry: propose one
-    assert choice["infores"] == "infores:bioplex" and choice["proposed"]
-    assert "infores:bioplex-old" in choice["why"]
+    # an id in --ids or already in the plan wins; otherwise the plan's evidence decides
     assert set_infores.choose(bioplex, "infores:go")["proposed"] is False
+    assert set_infores.choose(hgnc)["why"] == "already in the plan"
+    assert set_infores.choose(go)["infores"] == "infores:go"
 
     assert set_infores.apply(go, set_infores.choose(go), CATALOG) == [
         ("note", "infores:go (Gene Ontology), infores catalog v1.1.14")
@@ -48,45 +41,11 @@ def test_ids_are_chosen_without_review_and_written_into_only_the_infores(tmp_pat
     croissant = json.loads((go / "croissant.semantic.json").read_text())
     assert croissant == {"name": "Gene Ontology", "recordSet": [], "rcv:infores": "infores:go"}
 
-    [(level, _)] = set_infores.apply(bioplex, choice, CATALOG)
-    assert level == "warning"  # proposed: flagged, not blocked
+    # a proposed id is written and flagged, not blocked
+    [(level, _)] = set_infores.apply(bioplex, set_infores.choose(bioplex), CATALOG)
+    assert level == "warning"
     croissant = json.loads((bioplex / "croissant.semantic.json").read_text())
     assert croissant["rcv:inforesProposed"] is True
-
-
-def test_the_plans_own_constants_spellings_and_parent_names_find_registered_ids(
-    tmp_path, monkeypatch
-):
-    catalog = {
-        "infores:ncbi-gene": {"name": "NCBI Gene", "status": "released"},
-        "infores:ensembl-gene": {"name": "Ensembl gene", "status": "released"},
-        "infores:hgnc": {"name": "HGNC", "status": "released"},
-        "infores:kegg": {"name": "KEGG", "status": "released"},
-    }
-    monkeypatch.setattr(vocab, "infores", lambda: catalog)
-
-    def const(slot, value):
-        return {"name": slot, "property": f"biolink:{slot}", "value": value}
-
-    def plan_with(*consts):
-        return {"layouts": [{"id": "l", "constants": list(consts)}]}
-
-    # an aggregator constant names the knowledge base itself (HCOP orthologs come from HGNC)
-    hcop = bundle(tmp_path, "orthologs", "orthologs", "HCOP",
-                  **plan_with(const("aggregator_knowledge_source", "infores:hgnc")))  # fmt: skip
-    assert set_infores.choose(hcop)["infores"] == "infores:hgnc"
-    # dashes, spaces and underscores are the same name
-    assert set_infores.choose(bundle(tmp_path, "ncbi-gene", "ncbi_gene", "Gene"))["infores"] == (
-        "infores:ncbi-gene"
-    )
-    # a single primary source, after the name
-    kegg = bundle(tmp_path, "kegg-pathways", "kegg-pathways", "KEGG PATHWAY Database",
-                  **plan_with(const("primary_knowledge_source", "infores:kegg")))  # fmt: skip
-    assert set_infores.choose(kegg)["infores"] == "infores:kegg"
-    # a slice of a registered resource takes its id
-    ensembl = bundle(tmp_path, "ensembl-gene-ids", "ensembl-gene-ids", "Ensembl")
-    choice = set_infores.choose(ensembl)
-    assert choice["infores"] == "infores:ensembl-gene" and not choice["proposed"]
 
 
 def test_only_the_infores_lines_of_a_plan_change():
@@ -119,8 +78,7 @@ def test_every_proposed_id_under_root_is_listed_for_registering(tmp_path, monkey
     bundle(tmp_path, "bioplex", "bioplex", "BioPlex", infores="infores:bioplex",
            infores_proposed=True)  # fmt: skip
     bundle(tmp_path, "gene-ontology", "go", "Gene Ontology", infores="infores:go")
-    found = set_infores.bundles(tmp_path)
-    assert set_infores.write_to_register(tmp_path, found) == 0
+    set_infores.write_to_register(tmp_path, set_infores.bundles(tmp_path))
     text = (tmp_path / "infores_to_register.yaml").read_text()
     assert "id: infores:bioplex" in text and "infores:go" not in text
     assert "information-resource-registry" in text

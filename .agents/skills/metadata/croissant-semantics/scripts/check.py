@@ -809,11 +809,9 @@ def check_edge_provenance(plan: dict, f: "Findings", catalog: dict | None) -> No
                 f"{src}: " + ", ".join(f"{s} biolink:{v}" for s, v in values.items())
                 for src, values in suggested.items()
             )
-            how = (
-                "a derived field on the source column, coded per source"
-                if per_row
-                else ("layout constants")
-            )
+            how = "layout constants"
+            if per_row:
+                how = "a derived field on the source column, coded per source"
             f.warn(
                 where,
                 f"edges have no {need}; infores catalog {vocab.INFORES_VERSION} says {said}. Add "

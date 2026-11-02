@@ -763,7 +763,11 @@ def suggest_infores(
     why = "no catalog entry is " + " or ".join(repr(n) for n in every)
     if similar:
         why += f" (similar: {', '.join(similar)})"
-    return {"infores": proposed_infores(names[0] if names else "x"), "proposed": True, "why": why}
+    return {
+        "infores": proposed_infores((names + titles + ["unnamed"])[0]),
+        "proposed": True,
+        "why": why,
+    }
 
 
 def cmd_infores(args) -> None:

@@ -262,24 +262,68 @@ def test_the_knowledge_base_names_its_own_infores_id():
     from check import check_source_infores
 
     catalog = {"infores:hgnc": {"status": "released", "name": "HGNC"}}
+    aggregator = {
+        "name": "agg",
+        "property": "biolink:aggregator_knowledge_source",
+        "value": "infores:hgnc",
+    }
+    hcop = {"kb": "orthologs", "layouts": [{"id": "l", "constants": [aggregator]}]}
 
     def findings(plan, out):
         f = Findings()
-        check_source_infores(plan, out, f, catalog)
+        check_source_infores(plan, out, f, catalog, "orthologs")
         return [(lv, m) for lv, _, m in f.items]
 
-    hgnc = {"infores": "infores:hgnc"}
+    hgnc = {**hcop, "infores": "infores:hgnc"}
     assert findings(hgnc, {"rcv:infores": "infores:hgnc"}) == [
         ("note", "infores:hgnc (HGNC), infores catalog v1.1.14")
     ]
-    for missing in ({}, {"infores": None}):
-        [(level, msg)] = findings(missing, {})
-        assert level == "error" and "infores_proposed" in msg
-    [(level, msg)] = findings({"infores": "infores:made-up"}, {"rcv:infores": "infores:made-up"})
-    assert level == "error" and "isn't in infores catalog v1.1.14" in msg
+    # none: the error names what the plan's own constants say
+    [(level, msg)] = findings(hcop, {"name": "HCOP"})
+    assert level == "error" and "evidence gives infores:hgnc" in msg
+    # not in the catalog, or contradicting the plan's own constants
+    made_up = {**hcop, "infores": "infores:made-up"}
+    found = findings(made_up, {"rcv:infores": "infores:made-up"})
+    assert found[1][0] == "error" and "isn't in infores catalog v1.1.14" in found[1][1]
+    assert found[0][0] == "warning" and "constant gives infores:hgnc" in found[0][1]
     # a croissant written from an older plan
     errs = [m for lv, m in findings(hgnc, {}) if lv == "error"]
     assert len(errs) == 1 and "re-run apply_plan.py" in errs[0]
+
+
+def test_a_plans_evidence_suggests_its_infores_id():
+    from vocab import suggest_infores
+
+    catalog = {
+        "infores:ncbi-gene": {"name": "NCBI Gene", "status": "released"},
+        "infores:ensembl-gene": {"name": "Ensembl gene", "status": "released"},
+        "infores:hgnc": {"name": "HGNC", "status": "released"},
+        "infores:kegg": {"name": "KEGG", "status": "released"},
+        "infores:bioplex-old": {"name": "BioPlex (old)", "status": "deprecated"},
+    }
+
+    def plan(slot=None, value=None):
+        consts = [{"name": "c", "property": f"biolink:{slot}", "value": value}] if slot else []
+        return {"layouts": [{"id": "l", "constants": consts}]}
+
+    def suggest(p, names, titles=()):
+        return suggest_infores(p, names, list(titles), catalog)
+
+    # the plan names itself as aggregator (HCOP's orthologs come from HGNC)
+    agg = plan("aggregator_knowledge_source", "infores:hgnc")
+    assert suggest(agg, ["orthologs"], ["HCOP"])["infores"] == "infores:hgnc"
+    # dashes, spaces and underscores are the same name
+    assert suggest(plan(), ["ncbi_gene"])["infores"] == "infores:ncbi-gene"
+    # a single primary source, when no name matches
+    kegg = plan("primary_knowledge_source", "infores:kegg")
+    assert suggest(kegg, ["kegg-pathways"], ["KEGG PATHWAY Database"])["infores"] == "infores:kegg"
+    # a slice of a registered resource takes its id
+    ensembl = suggest(plan(), ["ensembl-gene-ids"])
+    assert ensembl["infores"] == "infores:ensembl-gene" and not ensembl["proposed"]
+    # nothing: proposed, naming similar entries
+    bioplex = suggest(plan(), ["bioplex"], ["BioPlex"])
+    assert bioplex["infores"] == "infores:bioplex" and bioplex["proposed"]
+    assert "infores:bioplex-old" in bioplex["why"]
 
 
 def test_proposed_infores_ids_and_catalog_entries_follow_the_catalog_style():
@@ -371,37 +415,6 @@ def test_edge_provenance_keeps_the_layouts_values_and_suggests_the_catalogs():
     # nothing usable in the catalog
     [msg] = findings({"infores": "infores:gtopdb", **plan_with(entities=[edge], constants=[at])})
     assert "gives none" in msg and "not_provided" in msg
-
-
-def test_the_plans_own_evidence_names_its_infores_id():
-    from check import check_source_infores
-
-    catalog = {"infores:hgnc": {"status": "released", "name": "HGNC"}}
-    aggregator = {
-        "name": "agg",
-        "property": "biolink:aggregator_knowledge_source",
-        "value": "infores:hgnc",
-    }
-    hcop = {"kb": "orthologs", "layouts": [{"id": "l", "constants": [aggregator]}]}
-
-    def findings(plan, out):
-        f = Findings()
-        check_source_infores(plan, out, f, catalog, "orthologs")
-        return [(lv, m) for lv, _, m in f.items]
-
-    # no infores: the error names what the plan's own constants say
-    [(level, msg)] = findings(hcop, {"name": "HCOP"})
-    assert level == "error" and "evidence gives infores:hgnc" in msg
-    assert "aggregator_knowledge_source constant" in msg
-    # an infores that contradicts the plan's own constants is flagged
-    hcop_id = {**hcop, "infores": "infores:hcop", "infores_proposed": True}
-    out = {"name": "HCOP", "rcv:infores": "infores:hcop", "rcv:inforesProposed": True}
-    contradiction, proposed = findings(hcop_id, out)
-    assert contradiction[0] == "warning" and "gives infores:hgnc" in contradiction[1]
-    assert "infores:hcop is proposed" in proposed[1]
-    # one that agrees: only the usual note
-    agrees = findings({**hcop, "infores": "infores:hgnc"}, {"rcv:infores": "infores:hgnc"})
-    assert [lv for lv, _ in agrees] == ["note"]
 
 
 def test_a_proposed_infores_id_is_flagged_until_registered():

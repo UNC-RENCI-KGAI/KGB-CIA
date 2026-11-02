@@ -11,8 +11,9 @@
     set_infores.py ROOT --ids ids.json        # override choices: {"bundle": "infores:x", ...}
 
 A bundle is a directory holding semantics_plan.json and croissant.semantic.json(.gz). For each,
-the id is the one in --ids, else the one already in its plan, else the catalog entry whose id,
-name or synonym is exactly the knowledge base's name, else a proposed id in the catalog's style
+the id is the one in --ids, else the one already in its plan, else what the plan's own evidence
+says (vocab.suggest_infores, as check.py uses it): its aggregator or provided_by constant, a
+catalog entry named like the knowledge base, else a proposed id in the catalog's style
 (infores:bioplex). It's written into the plan (infores, and infores_proposed for a proposed id)
 and the croissant (rcv:infores, rcv:inforesProposed) as apply_plan.py would; nothing else in
 either file changes, and neither the data nor the original croissant is read.
@@ -110,6 +111,32 @@ def apply(bundle: Path, choice: dict, catalog: dict) -> list[tuple[str, str]]:
     return [(level, msg) for level, _, msg in f.items]
 
 
+def write_to_register(root: Path, found: dict[str, Path]) -> None:
+    """Catalog entries for every proposed id under root, from all its bundles (not just this
+    run's), so the file is complete however the bundles were set."""
+    entries = []
+    for bundle in found.values():
+        plan = json.loads((bundle / PLAN).read_text())
+        if plan.get("infores_proposed") and plan.get("infores"):
+            croissant = load_croissant(semantic_croissant(bundle))
+            entries.append(vocab.infores_entry(croissant, plan["infores"], *["not_provided"] * 2))
+    path = root / TO_REGISTER
+    if not entries:
+        path.unlink(missing_ok=True)
+        return
+    path.write_text(
+        f"# Proposed infores ids, used in the graph but not yet in the infores catalog.\n"
+        f"# Add these entries to infores_catalog.yaml in a pull request to\n"
+        f"# {vocab.INFORES_REGISTRY} (check each field, and set knowledge_level\n"
+        f"# and agent_type), then raise INFORES_VERSION in vocab.py.\n" + "".join(entries),
+        encoding="utf-8",
+    )
+    print(
+        f"\n{len(entries)} proposed infores ids are in use but need registering: their catalog "
+        f"entries are in {path}, for a pull request to {vocab.INFORES_REGISTRY}"
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -138,35 +165,8 @@ def main() -> None:
             if level == "error":
                 print(f"  error: {msg}")
     if not args.dry_run:
-        errors += write_to_register(args.root, found)
+        write_to_register(args.root, found)
     sys.exit(1 if errors else 0)
-
-
-def write_to_register(root: Path, found: dict[str, Path]) -> int:
-    """Catalog entries for every proposed id under root, from all its bundles (not just this
-    run's), so the file is complete however the bundles were set."""
-    entries = []
-    for bundle in found.values():
-        plan = json.loads((bundle / PLAN).read_text())
-        if plan.get("infores_proposed") and plan.get("infores"):
-            croissant = load_croissant(semantic_croissant(bundle))
-            entries.append(vocab.infores_entry(croissant, plan["infores"], *["not_provided"] * 2))
-    path = root / TO_REGISTER
-    if not entries:
-        path.unlink(missing_ok=True)
-        return 0
-    path.write_text(
-        f"# Proposed infores ids, used in the graph but not yet in the infores catalog.\n"
-        f"# Add these entries to infores_catalog.yaml in a pull request to\n"
-        f"# {vocab.INFORES_REGISTRY} (check each field, and set knowledge_level\n"
-        f"# and agent_type), then raise INFORES_VERSION in vocab.py.\n" + "".join(entries),
-        encoding="utf-8",
-    )
-    print(
-        f"\n{len(entries)} proposed infores ids are in use but need registering: their catalog "
-        f"entries are in {path}, for a pull request to {vocab.INFORES_REGISTRY}"
-    )
-    return 0
 
 
 if __name__ == "__main__":
