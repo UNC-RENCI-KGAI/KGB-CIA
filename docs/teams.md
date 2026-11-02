@@ -12,12 +12,14 @@ https://github.com/orgs/UNC-RENCI-KGAI/projects/1
 | Transformation :phoenix: | `agents/transformation/` | Swaroopa Dola (swa112003), Suparna Goswami (GitHub account TBD), Evan Morris (EvanDietzMorris), Yaphet Kebede (YaphetKG), Mahir Morshed (mahir256), Ashok Krishnamurthy (ashokohio) |
 | Filter and integration :scissors: | `agents/filter/` | Matt Satusky (satusky), Evan Morris (EvanDietzMorris), James McManus (jmpmcmanus), Mahir Morshed (mahir256), Yogesh Kale (yskale) |
 | Augmentation :open_hands: | `agents/augmentation/` | Hong Yi (hyi), Matt Satusky (satusky), Olawumi Olasunkanmi (wumirose), Gaurav Vaidya (gaurav), Sahil Kapadia (sahilk873) |
-| Cleaning :broom: | `agents/cleaning/` | Cheng-Han Chung (chjchung), Kathleen Carter (eKathleenCarter), Hina Shah (hina-shah), James McManus (jmpmcmanus), Marcello DeLuca (marcello-deluca), Shilpa Sundar (Shilpasundar14) |
+| Cleaning :broom: | `agents/cleaning/` | Cheng-Han Chung (chjchung), Kathleen Carter (eKathleenCarter), Hina Shah (hina-shah), James McManus (jmpmcmanus), Marcello DeLuca (marcello-deluca) |
 | MCP interface :electric_plug: | `agents/mcp_interface/` | Hong Yi (hyi), Chris Bizon (cbizon), Yaphet Kebede (YaphetKG), Yogesh Kale (yskale), Ashok Krishnamurthy (ashokohio) |
-| Evaluation :bar_chart: | `evaluation/` | Kushal Koirala (kushal2051), Cheng-Han Chung (chjchung), Hina Shah (hina-shah), Marcello DeLuca (marcello-deluca), Sahil Kapadia (sahilk873), Shilpa Sundar (Shilpasundar14) |
+| Evaluation :bar_chart: | `evaluation/` | Kushal Koirala (kushal2051), Cheng-Han Chung (chjchung), Hina Shah (hina-shah), Marcello DeLuca (marcello-deluca), Sahil Kapadia (sahilk873) |
 | Leads | `shared/`, `.github/`, root | Cheng-Han Chung (chjchung), Chris Bizon (cbizon), Hong Yi (hyi), Matt Satusky (satusky), Gaurav Vaidya (gaurav), Kathleen Carter (eKathleenCarter), Yaphet Kebede (YaphetKG), Kushal Koirala (kushal2051), Jason Reilly (jdr0887) |
 
 Not yet placed: Alexander Tropsha (no personal GitHub account found).
+
+Left the hackathon: Shilpa Sundar.
 
 ## How the placements were made
 

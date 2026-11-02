@@ -1,12 +1,38 @@
 # KGB-CIA: Knowledge Graph Based Creation of Informed Agents
 
-Team entry for the **Bio-Agent Knowledge Graph Construction Challenge** (Structured Data
-Integration and Link Prediction track). We are building an agent that constructs a
-[Biolink](https://biolink.github.io/biolink-model/) labeled property graph from
-[Pharos](https://pharos.nih.gov/) / TCRD data, then exposes it to other agents through an MCP
-interface. Evaluation is GNN link prediction against the Pharos baseline.
+In plain terms: we're building a pipeline of AI agents that reads raw drug-target data (from
+[Pharos](https://pharos.nih.gov/) / TCRD), figures out on its own what the data means and how it
+fits together, and turns it into a proper knowledge graph — then lets other agents query that
+graph. No step requires a human to hand-map columns or write transform code; a person only
+steps in briefly, with sensible defaults, to say which parts of the graph they want.
+
+This is our team's entry for the **Bio-Agent Knowledge Graph Construction Challenge** (Structured
+Data Integration and Link Prediction track). The output graph follows the
+[Biolink](https://biolink.github.io/biolink-model/) model, and it's scored by GNN link prediction
+against a Pharos baseline.
 
 Key dates: progress report **Oct 27, 2026**, final submission **Nov 17, 2026**.
+
+## Status (as of Oct 26, 2026)
+
+This is a progress-report checkpoint, not a finished pipeline. Where things stand:
+
+| Stage | Status |
+| --- | --- |
+| 1. Metadata (`agents/metadata/`) | **Working, pending merge.** Builds on RoboCroissant; the `croissant-semantics` skill adds Biolink semantics on top. Reviewed and fixed; [PR #17](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/17) is open, blocked on a stale changes-requested review. |
+| 2. Transformation (`agents/transformation/`) | **In progress.** Next piece being built — turns the metadata into actual graph nodes and edges. |
+| ORION merge | Existing tool, not a new agent. Merges the per-source files Transformation produces, after NodeNorm. |
+| 3. Filter & integration (`agents/filter/`) | Planned, not started. Out of scope for this checkpoint. |
+| 4. Augmentation (`agents/augmentation/`) | Planned, not started. Out of scope for this checkpoint. |
+| 5. Cleaning (`agents/cleaning/`) | Planned, not started. Out of scope for this checkpoint. |
+| 6. MCP interface (`agents/mcp_interface/`) | Planned, not started. Out of scope for this checkpoint. |
+
+Goal for this checkpoint: stages 1–2 working end to end, so a person can point the pipeline at a
+real Pharos/TCRD source and get back a graph — filtering, augmentation, and cleaning come later.
+Two design questions are still open and tracked as issues:
+[#23](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/23) (does Filter run before or after
+Transformation?) and [#24](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/24) (does Cleaning run
+before, after, or both around Augmentation?).
 
 ## Pipeline
 
@@ -18,6 +44,9 @@ Pharos / TCRD files
         |
         v
 2. Transformation agent  agents/transformation/  columns -> Biolink classes and predicates; writes and runs code
+        |
+        v
+   ORION merge           (not an agent)           merges per-source, NodeNorm'd files
         |
         v
 3. Filter & integration  agents/filter/          user choices with strong defaults; one connected baseline graph
@@ -34,6 +63,9 @@ Pharos / TCRD files
 Evaluation pipeline      evaluation/             GNN link prediction vs. Pharos baseline (not an agent)
 Shared code              shared/                 edge schema, NodeNorm client, Biolink helpers, I/O
 ```
+
+A more detailed diagram, with each stage's exact input/output files, is in
+[`docs/KG_AI_plandraft.png`](docs/KG_AI_plandraft.png) (source: [`docs/pipeline_diagram.mmd`](docs/pipeline_diagram.mmd)).
 
 Design rules agreed by the team: agents decide, code transforms (reproducible); every node goes
 through NodeNorm; Biolink is fixed, not user-selectable; strong defaults everywhere, with user

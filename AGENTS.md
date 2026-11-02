@@ -44,8 +44,13 @@ stays in sync.
 - **Each stage is also a console script** (`kgb-metadata`, `kgb-transform`, `kgb-filter`,
   `kgb-augment`, `kgb-clean`, `kgb-mcp`, `kgb-pipeline`) declared in `pyproject.toml`.
 - **Handoffs between stages use the pydantic records in `shared/schema.py`** (`Node`, `Edge`,
-  `Provenance`, `Graph`). Every `Edge` must carry `Provenance`: explainability is 20% of the
-  score, and the MCP interface has to answer "why does A connect to B?" from it.
+  `Graph`, `TransformReport`). `Node` and `Edge` are flat Biolink/KGX records shaped like
+  ORION's `nodes.jsonl` and `edges.jsonl`. Every `Edge` must carry its Biolink provenance
+  (`primary_knowledge_source`, `knowledge_level`, `agent_type`; plus aggregators and
+  publications where known): explainability is 20% of the score, and the MCP interface has to
+  answer "why does A connect to B?" from it. Which file and columns produced each node or edge
+  is not Biolink, so it lives in the transformation agent's `TransformReport`, which points
+  into the source's Croissant metadata.
 - **Every node ID goes through NodeNorm** via `shared/nodenorm.py`.
 - **`evaluation/` is deliberately not a stage** and is not in `STAGES`.
 

@@ -9,10 +9,15 @@ This directory contains the project-level [Pi](https://pi.dev) configuration. Af
 | `.pi/settings.json` | Project settings and package declarations |
 | `.pi/mcp.json` | Project MCP servers |
 | `.pi/extensions/` | Project extensions |
-| `.pi/skills/` | Project skills |
+| `.agents/skills/` | Shared project skills, grouped by agent category |
 | `.pi/prompts/` | Project prompt templates |
 | `.pi/themes/` | Project themes |
 | `~/.pi/agent/` | Global Pi configuration, credentials, and models |
+
+Project skills live in `.agents/skills/<category>/<skill-name>/SKILL.md`, not under
+`.pi/`. Pi discovers them directly; run `python3 scripts/sync_claude_skills.py --prune`
+from the repository root to expose them to Claude Code. See the
+[shared skills guide](../.agents/skills/README.md) for naming, preloading, and dry-run details.
 
 ## RENCI Azure models
 

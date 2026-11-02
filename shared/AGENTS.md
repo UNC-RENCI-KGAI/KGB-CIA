@@ -6,7 +6,8 @@ it touches.
 
 - `schema.py` is the contract between stages. Prefer adding optional fields with defaults over
   renaming or removing fields, since each stage reads and writes these records independently.
-  Keep `Provenance` required on `Edge`. `tests/test_smoke.py` round-trips a `Graph` through
+  Keep `primary_knowledge_source`, `knowledge_level` and `agent_type` required on `Edge`, and
+  keep `Node` and `Edge` flat and Biolink-named, like ORION's KGX output. `tests/test_smoke.py` round-trips a `Graph` through
   JSON; extend it when you add a field.
 - `pipeline.py` must keep `--dry-run` working with no network and no data: `make demo` runs it
   in CI and must always pass on `main`. Stage order is the `STAGES` list.
