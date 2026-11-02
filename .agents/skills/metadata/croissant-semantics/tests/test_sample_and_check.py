@@ -310,6 +310,63 @@ def test_proposed_infores_ids_and_catalog_entries_follow_the_catalog_style():
     }
 
 
+def test_edges_without_knowledge_level_get_the_catalog_values_suggested():
+    from check import check_edge_provenance
+
+    model = {
+        "slots": {
+            "knowledge level": {"range": "KnowledgeLevelEnum"},
+            "agent type": {"range": "AgentTypeEnum"},
+        },
+        "enums": {
+            "KnowledgeLevelEnum": {
+                "permissible_values": {"knowledge_assertion": {}, "prediction": {}}
+            },
+            "AgentTypeEnum": {"permissible_values": {"manual_agent": {}, "not_provided": {}}},
+        },
+    }
+    catalog = {
+        "infores:go": {"knowledge_level": "knowledge_assertion", "agent_type": "manual_agent"},
+        "infores:chembl": {"knowledge_level": "knowledge_assertion", "agent_type": "not_provided"},
+        "infores:gtopdb": {"knowledge_level": "mixed", "agent_type": "not_provided"},
+    }
+    edge = {"name": "gene", "role": "biolink:subject", "columns": {}}
+
+    def findings(plan):
+        f = Findings()
+        check_edge_provenance(plan, f, catalog, model)
+        return [(where, m) for _, where, m in f.items]
+
+    # no source mapped: the knowledge base itself is the primary source
+    [(where, msg)] = findings({"infores": "infores:go", **plan_with(entities=[edge])})
+    assert where == "layout l" and "knowledge_level biolink:knowledge_assertion" in msg
+    assert "agent_type biolink:manual_agent" in msg and "layout constants" in msg
+    # mapped (even as not_provided) or no edges: nothing to say
+    kl = {"name": "kl", "property": "biolink:knowledge_level", "value": "biolink:prediction"}
+    at = {"name": "at", "property": "biolink:agent_type", "value": "biolink:not_provided"}
+    assert (
+        findings({"infores": "infores:go", **plan_with(entities=[edge], constants=[kl, at])}) == []
+    )
+    assert findings({"infores": "infores:go", **plan_with()}) == []
+    # a source column: per-source values, and "mixed" isn't a Biolink value, so not suggested
+    src = {
+        "property": "biolink:primary_knowledge_source",
+        "codes": {"ChEMBL": "infores:chembl", "IUPHAR": "infores:gtopdb"},
+    }
+    [(_, msg)] = findings(plan_with(entities=[edge], columns={"src": src}, constants=[at]))
+    assert "infores:chembl: knowledge_level biolink:knowledge_assertion" in msg
+    assert "gtopdb" not in msg and "derived field" in msg
+    # the layout's own knowledge level differs from the catalog's: its agent_type won't fit
+    [(_, msg)] = findings({"infores": "infores:go", **plan_with(entities=[edge], constants=[kl])})
+    assert "infores:go as knowledge_assertion" in msg and "these edges are prediction" in msg
+    assert "manual_agent" not in msg
+    # nothing usable in the catalog
+    [(_, msg)] = findings(
+        {"infores": "infores:gtopdb", **plan_with(entities=[edge], constants=[at])}
+    )
+    assert "gives none" in msg and "not_provided" in msg
+
+
 def test_a_proposed_infores_id_is_flagged_until_registered():
     from check import check_source_infores
 

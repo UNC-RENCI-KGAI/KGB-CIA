@@ -701,7 +701,8 @@ def cmd_infores(args) -> None:
         )
     for _, _, iid, e in hits[: args.limit]:
         print(
-            f"  {iid}  {e.get('name')}  [{e.get('status')}; {e.get('knowledge_level', '-')}]  "
+            f"  {iid}  {e.get('name')}  [{e.get('status')}; {e.get('knowledge_level', '-')}; "
+            f"{e.get('agent_type', '-')}]  "
             f"{', '.join(e.get('xref') or [])[:80]}"
         )
 

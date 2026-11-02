@@ -699,6 +699,99 @@ def check_source_infores(plan: dict, out: dict, f: "Findings", catalog: dict | N
         )
 
 
+EDGE_PROVENANCE = ("knowledge_level", "agent_type")
+
+
+def check_edge_provenance(
+    plan: dict, f: "Findings", catalog: dict | None, model: dict | None
+) -> None:
+    """Every layout that makes edges (entities with roles) says how its statements were made:
+    knowledge_level and agent_type. When it doesn't, suggest the values the infores catalog gives
+    for the edges' primary knowledge source: the layout's constant, the codes of its source
+    column, or else the knowledge base itself."""
+    import vocab
+
+    allowed = {}
+    for slot in EDGE_PROVENANCE:
+        enum = model and vocab.slot_enum(model, slot)
+        hit = enum and vocab.enum_values(model, enum)
+        # the catalog also uses mixed and other, which aren't Biolink values
+        allowed[slot] = set(hit[1]) if hit else set()
+    for lay in plan.get("layouts") or []:
+        if not any(ent.get("role") for ent in lay.get("entities") or []):
+            continue
+        mapped, sources, per_row, stated = set(), set(), False, set()
+        for _, spec, _ in iter_assertions(lay):
+            prop = str(spec.get("property") or "").removeprefix("biolink:")
+            mapped.add(prop)
+            if prop == "knowledge_level" and "value" in spec:
+                stated.add(str(spec["value"]).removeprefix("biolink:"))
+            if prop == "primary_knowledge_source":
+                if "value" in spec:
+                    sources.add(spec["value"])
+                elif spec.get("codes"):
+                    sources.update(v for v in spec["codes"].values() if v)
+                    per_row = True
+                else:
+                    per_row = True
+        missing = [s for s in EDGE_PROVENANCE if s not in mapped]
+        if not missing:
+            continue
+        if not sources and not per_row and plan.get("infores"):
+            sources = {plan["infores"]}
+        where = f"layout {lay.get('id')}"
+        need = " and ".join(missing)
+        if catalog is None or not sources:
+            f.warn(where, f"edges have no {need}: map them from the documentation")
+            continue
+        suggested, unlike = {}, {}
+        for src in sorted(sources):
+            entry = catalog.get(src) or {}
+            if stated and entry.get("knowledge_level") not in stated:
+                # the catalog describes the resource's usual statements (HGNC: curated, by
+                # hand), not these (HGNC's orthology predictions); its agent_type won't fit
+                unlike[src] = entry.get("knowledge_level")
+                continue
+            values = {
+                s: entry.get(s)
+                for s in missing
+                if entry.get(s) in allowed[s] and entry.get(s) != "not_provided"
+            }
+            if values:
+                suggested[src] = values
+        if not suggested and unlike:
+            f.warn(
+                where,
+                f"edges have no {need}. Infores catalog {vocab.INFORES_VERSION} describes "
+                + ", ".join(f"{s} as {kl}" for s, kl in unlike.items())
+                + f", but these edges are {', '.join(sorted(stated))}, so its values don't fit "
+                "them: map them from the documentation, or set biolink:not_provided",
+            )
+            continue
+        if not suggested:
+            f.warn(
+                where,
+                f"edges have no {need}, and infores catalog {vocab.INFORES_VERSION} gives none for "
+                f"{', '.join(sorted(sources))}: map them from the documentation, or set "
+                "biolink:not_provided to say they aren't known",
+            )
+            continue
+        said = "; ".join(
+            f"{src}: " + ", ".join(f"{s} biolink:{v}" for s, v in values.items())
+            for src, values in suggested.items()
+        )
+        how = (
+            "a derived field on the source column, coded per source"
+            if per_row
+            else "layout constants"
+        )
+        f.warn(
+            where,
+            f"edges have no {need}; infores catalog {vocab.INFORES_VERSION} says {said}. Add "
+            f"them as {how} (or values the documentation supports better)",
+        )
+
+
 _INFORES: list = []  # the catalog, loaded once by the first data check that needs it
 
 
@@ -2320,6 +2413,7 @@ def main() -> None:
             catalog = None
         check_infores(plan, f, catalog)
         check_source_infores(plan, out, f, catalog)
+        check_edge_provenance(plan, f, catalog, model)
         check_formats(original, plan, f)
         check_roles(plan, f, model)
         check_code_merges(plan, f)

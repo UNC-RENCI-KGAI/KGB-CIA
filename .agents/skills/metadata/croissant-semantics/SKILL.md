@@ -204,6 +204,15 @@ dependencies). Use `--help` on any of them.
      variant, a gene, with a unique id per row), type the row with that thing's class, map its own columns directly, and
      link the other things it mentions as entities with roles like `biolink:has_gene`. Many
      layouts sharing columns? Define specs once in `column_library`.
+   - *How the statements were made*: every layout that makes edges gets `biolink:knowledge_level`
+     and `biolink:agent_type` (a downstream graph says `not_provided` otherwise, and the
+     explanation of each edge is lost). Start from the infores catalog's values for the edges'
+     primary knowledge source (`vocab.py infores NAME` shows both; the knowledge base's own entry
+     when its rows don't name another source), as layout constants, or as a derived field coded
+     per source when a column names the source. Prefer what the documentation says about these
+     particular statements: the catalog describes a resource's usual statements, so HGNC's
+     `manual_agent` doesn't fit the orthology predictions it collects. `check.py` suggests the
+     catalog's values, and says when they don't fit.
    - *Dialect*: for tables that aren't plain CSV/TSV with a header row, the layout's `dialect`.
      When the croissant labels a file with a type mlcroissant can't read (`text/plain` for a TSV,
      gzip alone, `application/parquet`), the layout's `encoding_format` corrects it.

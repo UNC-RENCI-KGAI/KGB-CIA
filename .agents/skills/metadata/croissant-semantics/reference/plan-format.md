@@ -253,6 +253,22 @@ the catalog. For a source with no infores id, leave it unmapped. The check warns
 (a new infores entry is the fix). Don't invent infores ids, and don't make local terms for
 sources unless the knowledge base documents them as its own.
 
+How each source made its statements goes on the same column, as `derived` fields coded per
+source, starting from the catalog's values for each (`vocab.py infores NAME` shows them; leave
+out a source whose catalog value is `mixed` or `other`, which aren't Biolink values):
+
+```json
+"source": {
+  "property": "biolink:primary_knowledge_source",
+  "codes": { "ChEMBL": "infores:chembl", "DrugMatrix": "infores:drugmatrix" },
+  "derived": [ { "name": "knowledge_level", "property": "biolink:knowledge_level",
+                 "codes": { "ChEMBL": "biolink:knowledge_assertion",
+                            "DrugMatrix": "biolink:knowledge_assertion" },
+                 "basis": "infores catalog values for each source", "source": "documentation",
+                 "confidence": "medium" } ]
+}
+```
+
 ### Repeated groups of columns
 
 Some files repeat a block of columns per item (BindingDB has chain 1..50, each with a UniProt
