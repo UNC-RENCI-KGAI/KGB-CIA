@@ -677,12 +677,12 @@ def cmd_ols(args) -> None:
         )
 
 
-def infores_matches(text: str) -> list[tuple[bool, bool, str, dict]]:
+def infores_matches(text: str, catalog: dict | None = None) -> list[tuple[bool, bool, str, dict]]:
     """Catalog entries whose id, name, synonyms or urls contain every word of text, best first:
     (not an exact match, not released, id, entry). Exact: text is the id, name or a synonym."""
     words = text.lower().split()
     hits = []
-    for iid, e in infores().items():
+    for iid, e in (catalog if catalog is not None else infores()).items():
         hay = " ".join(
             [iid, e.get("name") or "", *(e.get("synonym") or []), *(e.get("xref") or [])]
         ).lower()
@@ -693,6 +693,77 @@ def infores_matches(text: str) -> list[tuple[bool, bool, str, dict]]:
             )
             hits.append((not exact, e.get("status") != "released", iid, e))
     return sorted(hits, key=lambda h: h[:3])
+
+
+def infores_constants(plan: dict, slot: str) -> set[str]:
+    """infores ids a plan sets as a constant (not per row through codes) for a slot."""
+    found = set()
+
+    def walk(o):
+        if isinstance(o, dict):
+            value = o.get("value")
+            if o.get("property") == f"biolink:{slot}" and str(value).startswith("infores:"):
+                found.add(value)
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(plan.get("layouts"))
+    return found
+
+
+def exact_infores(name: str, catalog: dict | None = None) -> tuple[str, dict] | None:
+    """The released catalog entry whose id, name or synonym is name, written with dashes, spaces
+    or underscores (ncbi_gene, NCBI Gene and ncbi-gene all find infores:ncbi-gene)."""
+    spellings = {name, re.sub(r"[\s_]+", "-", name), re.sub(r"[-_]+", " ", name)}
+    for spelling in spellings:
+        for not_exact, not_released, iid, entry in infores_matches(spelling, catalog):
+            if not not_exact and not not_released:
+                return iid, entry
+    return None
+
+
+def suggest_infores(
+    plan: dict, names: list[str], titles: list[str] = (), catalog: dict | None = None
+) -> dict:
+    """What a plan's own evidence says the knowledge base's infores id is, apart from the plan's
+    infores itself: {"infores", "proposed", "why"}. names are its short names, most telling
+    first (kb, bundle directory); titles its full ones (the croissant's name). The first of
+    1. a single aggregator_knowledge_source or provided_by constant: the plan naming itself;
+    2. a catalog entry that is exactly a name or title (or a title before ':' or '(');
+    3. a single primary_knowledge_source constant;
+    4. a catalog entry that is exactly a leading part of a short name, for a knowledge base that's a
+       slice of a registered resource (ensembl-gene-ids -> infores:ensembl-gene);
+    5. a proposed id, from the first name, noting similar catalog entries."""
+
+    def found(iid, why):
+        return {"infores": iid, "proposed": False, "why": why}
+
+    for slot in ("aggregator_knowledge_source", "provided_by"):
+        if len(ids := infores_constants(plan, slot)) == 1:
+            return found(next(iter(ids)), f"the plan's {slot} constant")
+    names = list(dict.fromkeys(n for n in names if n))
+    titles = [t for t in titles if t]
+    every = list(dict.fromkeys(names + titles + [re.split(r":| \(", t)[0].strip() for t in titles]))
+    for n in every:
+        if hit := exact_infores(n, catalog):
+            return found(hit[0], f"the catalog's {hit[1].get('name')!r} is {n!r}")
+    if len(ids := infores_constants(plan, "primary_knowledge_source")) == 1:
+        return found(next(iter(ids)), "the plan's primary_knowledge_source constant")
+    for n in names:
+        parts = re.split(r"[-_\s]+", n)
+        for k in range(len(parts) - 1, 0, -1):
+            if hit := exact_infores("-".join(parts[:k]), catalog):
+                return found(hit[0], f"{n!r} is part of the catalog's {hit[1].get('name')!r}")
+    similar = []
+    for n in every:
+        similar += [iid for *_, iid, _ in infores_matches(n, catalog)[:3] if iid not in similar]
+    why = "no catalog entry is " + " or ".join(repr(n) for n in every)
+    if similar:
+        why += f" (similar: {', '.join(similar)})"
+    return {"infores": proposed_infores(names[0] if names else "x"), "proposed": True, "why": why}
 
 
 def cmd_infores(args) -> None:

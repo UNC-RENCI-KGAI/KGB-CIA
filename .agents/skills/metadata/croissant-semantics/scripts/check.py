@@ -633,19 +633,33 @@ def check_infores(plan: dict, f: "Findings", catalog: dict | None) -> None:
             f.warn(iid, f"infores status is {entry.get('status')!r}, not released")
 
 
-def check_source_infores(plan: dict, out: dict, f: "Findings", catalog: dict | None) -> None:
+def check_source_infores(
+    plan: dict, out: dict, f: "Findings", catalog: dict | None, bundle: str | None = None
+) -> None:
     """The plan names the knowledge base's own infores id, from the catalog or proposed when the
     catalog has none, and the croissant carries it as rcv:infores. Graph builders cite it as the
-    source of every record, so a proposed id is flagged until it's registered."""
+    source of every record, so a proposed id is flagged until it's registered. The id is compared
+    with what the plan's own evidence says (vocab.suggest_infores: its aggregator or provided_by
+    constants, its names), which set_infores.py uses too, so the two agree; bundle is the output
+    directory's name."""
     import vocab
 
     iid = plan.get("infores")
+    evidence = None
+    if catalog is not None:
+        names, titles = [plan.get("kb"), bundle], [text(out.get("name"))]
+        evidence = vocab.suggest_infores(plan, names, titles, catalog)
     if iid is None:
+        hint = ""
+        if evidence:
+            hint = f". The plan's evidence gives {evidence['infores']} ({evidence['why']})" + (
+                ', proposed with "infores_proposed": true' if evidence["proposed"] else ""
+            )
         f.error(
             "plan infores",
             "the plan doesn't say which information resource the knowledge base is: set infores "
             "to its id (vocab.py infores NAME), or, if the catalog has none, propose one with "
-            '"infores_proposed": true',
+            '"infores_proposed": true' + hint,
         )
         return
     proposed = bool(plan.get("infores_proposed"))
@@ -659,6 +673,12 @@ def check_source_infores(plan: dict, out: dict, f: "Findings", catalog: dict | N
     if catalog is None:
         f.warn("plan infores", f"couldn't load the infores catalog; {iid} unchecked")
         return
+    if evidence and not evidence["proposed"] and evidence["infores"] != iid:
+        f.warn(
+            "plan infores",
+            f"the plan's infores is {iid}, but {evidence['why']} gives {evidence['infores']}: use "
+            f"that, or explain why the knowledge base is {iid}",
+        )
     entry = catalog.get(iid)
     if proposed:
         if entry is not None:
@@ -2441,7 +2461,7 @@ def main() -> None:
             progress(f"couldn't load the infores catalog: {e}")
             catalog = None
         check_infores(plan, f, catalog)
-        check_source_infores(plan, out, f, catalog)
+        check_source_infores(plan, out, f, catalog, Path(args.out).parent.name)
         check_edge_provenance(plan, f, catalog)
         check_formats(original, plan, f)
         check_roles(plan, f, model)

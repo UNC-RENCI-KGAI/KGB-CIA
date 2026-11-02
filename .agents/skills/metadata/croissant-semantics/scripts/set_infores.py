@@ -50,46 +50,10 @@ def semantic_croissant(bundle: Path) -> Path:
     raise FileNotFoundError(f"{bundle} has no croissant.semantic.json(.gz)")
 
 
-def constants(plan: dict, slot: str) -> set[str]:
-    """infores ids the plan sets as a constant (not per row through codes) for a slot."""
-    found = set()
-
-    def walk(o):
-        if isinstance(o, dict):
-            value = o.get("value")
-            if o.get("property") == f"biolink:{slot}" and str(value).startswith("infores:"):
-                found.add(value)
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-
-    walk(plan.get("layouts"))
-    return found
-
-
-def exact(name: str) -> tuple[str, dict] | None:
-    """The released catalog entry whose id, name or synonym is name, written with dashes, spaces
-    or underscores (ncbi_gene, NCBI Gene and ncbi-gene all find infores:ncbi-gene)."""
-    spellings = {name, re.sub(r"[\s_]+", "-", name), re.sub(r"[-_]+", " ", name)}
-    for spelling in spellings:
-        for not_exact, not_released, iid, entry in vocab.infores_matches(spelling):
-            if not not_exact and not not_released:
-                return iid, entry
-    return None
-
-
 def choose(bundle: Path, override: str | None = None) -> dict:
-    """The bundle's id, {"infores", "proposed", "why"}: the first of
-    1. the id given in --ids, or already in the plan;
-    2. the one the plan already names as its own: a single aggregator or provided_by constant;
-    3. a catalog entry that is exactly the knowledge base's name (kb, directory or croissant
-       name, or the croissant name before ':' or '(');
-    4. a single primary_knowledge_source constant;
-    5. a catalog entry that is exactly a leading part of the name, for a bundle that is a slice
-       of a registered resource (ensembl-gene-ids -> infores:ensembl-gene);
-    6. a proposed id, from the knowledge base's name, noting similar catalog entries."""
+    """The bundle's id, {"infores", "proposed", "why"}: the one given in --ids, else the one
+    already in its plan, else what the plan's own evidence says (vocab.suggest_infores), with
+    the kb, directory and croissant name as the knowledge base's names."""
     plan = json.loads((bundle / PLAN).read_text())
     if override:
         proposed = override not in vocab.infores()
@@ -97,34 +61,11 @@ def choose(bundle: Path, override: str | None = None) -> dict:
     if plan.get("infores"):
         proposed = bool(plan.get("infores_proposed"))
         return {"infores": plan["infores"], "proposed": proposed, "why": "already in the plan"}
-
-    def found(iid, why):
-        return {"infores": iid, "proposed": False, "why": why}
-
-    for slot in ("aggregator_knowledge_source", "provided_by"):
-        if len(ids := constants(plan, slot)) == 1:
-            return found(next(iter(ids)), f"the plan's {slot} constant")
     title = text(load_croissant(semantic_croissant(bundle)).get("name"))
-    names = [plan.get("kb"), bundle.name, title, re.split(r":| \(", title)[0].strip()]
-    names = [n for n in dict.fromkeys(names) if n]
-    for n in names:
-        if hit := exact(n):
-            return found(hit[0], f"the catalog's {hit[1].get('name')!r} is {n!r}")
-    if len(ids := constants(plan, "primary_knowledge_source")) == 1:
-        return found(next(iter(ids)), "the plan's primary_knowledge_source constant")
-    for n in (plan.get("kb"), bundle.name):
-        parts = re.split(r"[-_\s]+", n or "")
-        for k in range(len(parts) - 1, 0, -1):
-            if hit := exact("-".join(parts[:k])):
-                return found(hit[0], f"{n!r} is part of the catalog's {hit[1].get('name')!r}")
-    similar = []
-    for n in names:
-        similar += [iid for *_, iid, _ in vocab.infores_matches(n)[:3] if iid not in similar]
-    why = "no catalog entry is " + " or ".join(repr(n) for n in names)
-    if similar:
-        why += f" (similar: {', '.join(similar)}; pass --ids if one of them is this source)"
-    proposed = vocab.proposed_infores(plan.get("kb") or bundle.name)
-    return {"infores": proposed, "proposed": True, "why": why}
+    choice = vocab.suggest_infores(plan, [plan.get("kb"), bundle.name], [title])
+    if choice["proposed"] and "similar" in choice["why"]:
+        choice["why"] += "; pass --ids if one of them is this source"
+    return choice
 
 
 def plan_text(raw: str, plan: dict) -> str:
@@ -165,7 +106,7 @@ def apply(bundle: Path, choice: dict, catalog: dict) -> list[tuple[str, str]]:
     plan_path.write_text(plan_text(raw, plan), encoding="utf-8")
     save_croissant(croissant, croissant_path)
     f = Findings()
-    check_source_infores(plan, croissant, f, catalog)
+    check_source_infores(plan, croissant, f, catalog, bundle.name)
     return [(level, msg) for level, _, msg in f.items]
 
 

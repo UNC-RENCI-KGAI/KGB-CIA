@@ -57,7 +57,10 @@ dependencies). Use `--help` on any of them.
    these are, and graph builders cite it as the source of everything read from them: without
    it, the transformation stage won't build the knowledge base at all. When several entries
    match, pick the one for the resource that publishes these files, not a service that
-   re-serves it (`infores:reactome`, not `infores:automat-reactome`).
+   re-serves it (`infores:reactome`, not `infores:automat-reactome`). `check.py` compares it
+   with what the rest of your plan says: a single aggregator or provided_by constant names the
+   knowledge base too (HCOP's orthologs are aggregated by `infores:hgnc`), and a mismatch is a
+   warning to resolve.
 
    When none does, propose one: `infores:` and the knowledge base's short name in lowercase
    words joined by dashes (`infores:bioplex`, `infores:expression-atlas`), with

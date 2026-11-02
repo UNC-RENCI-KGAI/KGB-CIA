@@ -373,6 +373,37 @@ def test_edge_provenance_keeps_the_layouts_values_and_suggests_the_catalogs():
     assert "gives none" in msg and "not_provided" in msg
 
 
+def test_the_plans_own_evidence_names_its_infores_id():
+    from check import check_source_infores
+
+    catalog = {"infores:hgnc": {"status": "released", "name": "HGNC"}}
+    aggregator = {
+        "name": "agg",
+        "property": "biolink:aggregator_knowledge_source",
+        "value": "infores:hgnc",
+    }
+    hcop = {"kb": "orthologs", "layouts": [{"id": "l", "constants": [aggregator]}]}
+
+    def findings(plan, out):
+        f = Findings()
+        check_source_infores(plan, out, f, catalog, "orthologs")
+        return [(lv, m) for lv, _, m in f.items]
+
+    # no infores: the error names what the plan's own constants say
+    [(level, msg)] = findings(hcop, {"name": "HCOP"})
+    assert level == "error" and "evidence gives infores:hgnc" in msg
+    assert "aggregator_knowledge_source constant" in msg
+    # an infores that contradicts the plan's own constants is flagged
+    hcop_id = {**hcop, "infores": "infores:hcop", "infores_proposed": True}
+    out = {"name": "HCOP", "rcv:infores": "infores:hcop", "rcv:inforesProposed": True}
+    contradiction, proposed = findings(hcop_id, out)
+    assert contradiction[0] == "warning" and "gives infores:hgnc" in contradiction[1]
+    assert "infores:hcop is proposed" in proposed[1]
+    # one that agrees: only the usual note
+    agrees = findings({**hcop, "infores": "infores:hgnc"}, {"rcv:infores": "infores:hgnc"})
+    assert [lv for lv, _ in agrees] == ["note"]
+
+
 def test_a_proposed_infores_id_is_flagged_until_registered():
     from check import check_source_infores
 
