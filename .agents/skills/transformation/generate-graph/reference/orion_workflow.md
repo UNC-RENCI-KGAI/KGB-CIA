@@ -69,8 +69,9 @@ uv run --script OUTPUT/parsers/Kgbcia_SOURCE/src/parser.py PARSED --source-files
 
 The script dependency metadata selects Python 3.12+ and the pinned ORION package. Optional
 `--infores` supplies source identity. ORION writes `PARSED/nodes.jsonl` and `PARSED/edges.jsonl`;
-the loader writes `PARSED/transform_report.json` and `PARSED/diagnostics.jsonl`. This output is
-raw, not normalized. Exit 0 permits documented skips; structural failure returns 1 and may
+the loader writes `PARSED/transform_report.json` and `PARSED/diagnostics.jsonl`. Diagnostics keep
+the first 100 records for each field and reason, then one line with that reason's total `count`.
+This output is raw, not normalized. Exit 0 permits documented skips; structural failure returns 1 and may
 leave partial artifacts that must not be treated as a successful graph.
 
 ## Native ingestion

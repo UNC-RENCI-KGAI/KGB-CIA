@@ -17,11 +17,13 @@ import json
 import lzma
 import math
 import os
+import re
 import shutil
 import tarfile
 import tempfile
 import urllib.request
 import zipfile
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -38,6 +40,9 @@ else:
 MANY = {"category", "equivalent_identifiers", "xref", "publications", "aggregator_knowledge_source"}
 ENUMS = {"knowledge_level", "agent_type"}
 IDENTITY = {"id", "subject", "object", "predicate", "category"}
+# diagnostics.jsonl keeps this many examples of each (field, reason) and then a count; one
+# unmapped column otherwise writes a line per row (4.2 GB for STRING).
+DIAGNOSTIC_EXAMPLES = 100
 
 
 class MergingNodeWriter(KGXFileWriter):
@@ -249,6 +254,7 @@ class SemanticSourceLoader(SourceDataLoader):
         self._skip_keys = {(s["ref"], s["reason"]) for s in self.skips}
         self.mappings = {}
         self.diagnostic_count = 0
+        self._diagnostic_counts = Counter()
 
     def get_latest_source_version(self):
         return self.mapping["source_version"]
@@ -342,8 +348,12 @@ class SemanticSourceLoader(SourceDataLoader):
 
     def diagnostic(self, ref, reason, *, record=None):
         self.diagnostic_count += 1
-        self._diagnostics.write(json.dumps({"ref": ref, "record": record, "reason": reason}) + "\n")
-        key = (ref, reason)
+        # validation messages quote the row's value; group them by the error, not the value
+        key = (ref, re.sub(r"input_value=.*?, input_type", "input_type", reason))
+        self._diagnostic_counts[key] += 1
+        if self._diagnostic_counts[key] <= DIAGNOSTIC_EXAMPLES:
+            line = {"ref": ref, "record": record, "reason": reason}
+            self._diagnostics.write(json.dumps(line) + "\n")
         if key not in self._skip_keys:
             self.skips.append({"ref": ref, "name": None, "reason": reason})
             self._skip_keys.add(key)
@@ -656,7 +666,7 @@ class SemanticSourceLoader(SourceDataLoader):
                         objects = [
                             i for i, e in enumerate(rs["entities"]) if e["role"] == "biolink:object"
                         ]
-                        if len(subjects) == len(objects) == 1:
+                        if len(subjects) == len(objects) == 1 and rs.get("predicate_mapped", True):
                             s, o = subjects[0], objects[0]
                             props = self.properties(rs["row_fields"], row, number)
                             self.emit_edge(
@@ -711,6 +721,10 @@ class SemanticSourceLoader(SourceDataLoader):
                                     number,
                                 )
         finally:
+            for (ref, reason), count in self._diagnostic_counts.items():
+                if count > DIAGNOSTIC_EXAMPLES:
+                    line = {"ref": ref, "record": None, "reason": reason, "count": count}
+                    self._diagnostics.write(json.dumps(line) + "\n")
             self._diagnostics.close()
             report = TransformReport(
                 source=self.provenance_id,

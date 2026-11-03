@@ -278,6 +278,47 @@ def test_native_missing_endpoint_skips_record_and_continues(
     assert len(nodes) == 3
 
 
+def test_association_without_a_predicate_is_reported_at_generation(bundle):
+    rs = bundle[1]["recordSet"][0]
+    rs["field"] = [f for f in rs["field"] if f["name"] != "predicate"]
+    config = generator.compile_bundle(save(bundle))
+    assert config["record_sets"][0]["predicate_mapped"] is False
+    assert any(s["ref"] == "rs" and "no predicate" in s["reason"] for s in config["skipped"])
+
+
+def test_native_association_without_a_predicate_emits_nodes_only(
+    bundle, tmp_path, monkeypatch, native_orion
+):
+    rs = bundle[1]["recordSet"][0]
+    rs["field"] = [f for f in rs["field"] if f["name"] != "predicate"]
+    nodes, edges, _, counts, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "gene_id\tdisease_id\tpublications\n1017\t0001\t\n1018\t0002\t\n",
+    )
+    assert len(nodes) == 4 and edges == []
+    # not one "predicate: Input should be a valid string" diagnostic per row
+    assert counts["diagnostic_count"] == 0
+
+
+def test_native_diagnostics_keep_examples_then_a_count(bundle, tmp_path, monkeypatch, native_orion):
+    rows = "".join(f"\t{n:04}\t\n" for n in range(250))
+    _, _, _, counts, workspace = run_loader(
+        bundle, tmp_path, monkeypatch, native_orion, "gene_id\tdisease_id\tpublications\n" + rows
+    )
+    assert counts["diagnostic_count"] == 500  # no gene id, so no edge, on every row
+    lines = [json.loads(line) for p in workspace.rglob("diagnostics.jsonl") for line in p.open()]
+    examples = [line for line in lines if "count" not in line]
+    totals = {line["reason"]: line["count"] for line in lines if "count" in line}
+    assert len(examples) == 200
+    assert totals == {
+        "Entity gene has no identifier": 250,
+        "Relationship has a missing endpoint": 250,
+    }
+
+
 def test_native_stale_columns_are_dropped_and_reported(bundle, tmp_path, monkeypatch, native_orion):
     nodes, edges, report, counts, _ = run_loader(
         bundle, tmp_path, monkeypatch, native_orion, "gene_id\tdisease_id\n1017\t0001\n"

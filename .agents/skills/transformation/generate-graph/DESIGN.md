@@ -87,6 +87,8 @@ and successful ORION execution for the supported content. Documented skips permi
 partial result; they do not claim that all source content was transformed.
 
 Malformed records and unsupported values produce diagnostics while other records continue.
+A subject/object association with no predicate field is reported at generation; its nodes are
+emitted and its edges are not, rather than failing edge validation on every row.
 Missing files, changed checksums, crashes, or failed ORION stages return failure. ORION stage
 metadata determines whether normalized outputs are usable; raw files alone do not establish
 a completed graph build.
