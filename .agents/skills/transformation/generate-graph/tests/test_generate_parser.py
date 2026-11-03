@@ -712,8 +712,8 @@ def test_runner_reports_why_a_download_failed_and_retries_it(
 
     argv = [str(output), "Kgbcia_synthetic_source", str(tmp_path / "storage")]
     for code in (403, 404):
-        # urlopen, not urlretrieve: every download in the runtime goes through it
-        monkeypatch.setattr("urllib.request.urlopen", refusing(code))
+        for call in ("urlretrieve", "urlopen"):
+            monkeypatch.setattr(f"urllib.request.{call}", refusing(code))
         assert runner.main(argv) == 1
         assert f"fetch: <HTTPError {code}" in capsys.readouterr().err
     # the second run downloaded again rather than stopping at "previously failed"
