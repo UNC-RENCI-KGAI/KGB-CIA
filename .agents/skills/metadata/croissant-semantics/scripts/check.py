@@ -16,7 +16,8 @@ Checks, in order:
   2. Data (unless --no-data): reads a sample of each layout (with the layout's dialect, if any)
      and checks that the dialect reads the files into the croissant's columns, id columns
      against their declared prefix (Bioregistry pattern for bare ids, the prefix itself for
-     CURIEs) and that code columns only hold codes the plan maps.
+     CURIEs), that node ids end up with a Biolink prefix NodeNorm can resolve, and that code
+     columns only hold codes the plan maps.
   3. Croissant: mlcroissant validate on OUT (unless --no-validate). With --load-records, reads a
      few records of one record set per layout through mlcroissant. It doesn't download whole
      files: it takes the first complete lines (about 2 MB) of each file and points a small copy
@@ -832,6 +833,105 @@ def is_ontology(prefix: str) -> bool:
     return _ONTOLOGY[prefix]
 
 
+def emitted_prefix(value: str, row: dict, spec: dict, prefixes: dict) -> str | None:
+    """The CURIE prefix transformation gives this node id (the same rules as its runtime), or
+    None when the id is left without a namespace."""
+    if spec.get("codes"):
+        value = str(spec["codes"].get(value, value))
+    form = spec.get("id_form")
+    if spec.get("prefix_column"):
+        pre = str(row.get(spec["prefix_column"]) or "").strip()
+        return (spec.get("prefix_codes") or {}).get(pre, pre) or None
+    if spec.get("id_prefix"):
+        own = CURIE.match(value)
+        return own.group(1) if form == "mixed" and own else spec["id_prefix"]
+    if form == "obo":
+        return m.group(1) if (m := OBO_ID.match(value)) else None
+    if form == "url":
+        hits = [p for p, uri in prefixes.items() if isinstance(uri, str) and value.startswith(uri)]
+        return max(hits, key=lambda p: len(prefixes[p])) if hits else None
+    if form == "native":
+        return None  # the source's own tag, not a namespace
+    return m.group(1) if (m := CURIE.match(value)) and not value.startswith("http") else None
+
+
+def _biolink_fits(values: list[str]) -> list[str]:
+    """Biolink prefixes whose registered id pattern fits every value (most specific first)."""
+    import vocab
+
+    values = list(dict.fromkeys(values))[:20]
+    # integers fit many registries' patterns; their namespace comes from documentation
+    if not values or all(v.isdigit() for v in values):
+        return []
+    return [h[3] for h in vocab.identify(values) if h[3]][:3]
+
+
+def check_node_prefixes(
+    where: str, pairs: list, spec: dict, etype: str, model: dict | None, plan: dict, f: Findings
+) -> None:
+    """Node ids NodeNorm can't resolve: no namespace, a prefix Biolink doesn't have, or one
+    Biolink doesn't list for the node's category. Their nodes stay unresolved in the graph."""
+    import bioregistry
+    import vocab
+
+    if not pairs:
+        return
+    biolink = vocab.biolink_prefixes()
+    lower = {p.lower(): p for p in biolink}
+    emitted = [(v, emitted_prefix(v, r, spec, plan.get("prefixes") or {})) for v, r in pairs]
+    got = Counter(p for _, p in emitted)
+    total = len(pairs)
+
+    def advice(values):
+        # the source's own tag in front of a registered id (KEGG's ko:K00001, md:M00001)
+        tagged = [v for v in values if CURIE.match(v)]
+        if len(tagged) < len(values) / 2:
+            fits = _biolink_fits(values)
+            return (
+                f"; their pattern fits Biolink's {', '.join(fits)}: set id_prefix" if fits else ""
+            )
+        tag = CURIE.match(tagged[0]).group(1)
+        fits = _biolink_fits([CURIE.match(v).group(2) for v in tagged])
+        return (
+            f"; strip the source's {tag}: tag with item_pattern '{tag}:(.+)' and set id_prefix"
+            + (f" (the ids fit Biolink's {', '.join(fits)})" if fits else "")
+        )
+
+    if got[None] > 0.05 * total:
+        bare = list(dict.fromkeys(v for v, p in emitted if p is None))
+        f.warn(
+            where,
+            f"{got[None]}/{total} sampled {etype} ids have no namespace (e.g. {bare[:3]}), so "
+            "NodeNorm can't resolve them and their nodes stay unresolved" + advice(bare),
+        )
+    allowed = []
+    key = _class_key(model, etype) if model else None
+    for k in class_lineage(model, key) if key else []:
+        allowed += model["classes"][k].get("id_prefixes") or []
+    for prefix, n in got.most_common():
+        if prefix is None or n <= 0.05 * total:
+            continue
+        if prefix not in biolink:
+            norm = bioregistry.normalize_prefix(prefix)
+            same = lower.get(prefix.lower()) or next(
+                (b for b in biolink if norm and bioregistry.normalize_prefix(b) == norm), None
+            )
+            values = [v for v, p in emitted if p == prefix]
+            f.warn(
+                where,
+                f"{n}/{total} sampled {etype} ids get prefix {prefix}, which isn't a Biolink "
+                "prefix, so NodeNorm can't resolve them"
+                + (f"; Biolink writes it {same}" if same else advice(values)),
+            )
+        elif allowed and prefix not in allowed and not spec.get("id_prefix"):
+            # (a declared id_prefix is checked against the category in check_plan)
+            f.warn(
+                where,
+                f"{n}/{total} sampled ids use {prefix}, which Biolink doesn't list as an id prefix "
+                f"for {etype} (it lists {', '.join(allowed[:8])})",
+            )
+
+
 def check_data(
     original: dict, plan: dict, f: Findings, max_mb: float, model: dict | None = None
 ) -> None:
@@ -915,6 +1015,17 @@ def check_data(
         row_ids = [
             c for c, sp in (lay.get("columns") or {}).items() if sp.get("property") == "biolink:id"
         ]
+        # node id columns and the Biolink category of the node each one names
+        node_types = {
+            c: t
+            for e in lay.get("entities") or []
+            for t in as_list(e.get("type"))[:1]
+            if str(t).startswith("biolink:")
+            for c, sp in (e.get("columns") or {}).items()
+            if sp.get("property") in ("biolink:id", "sc:identifier")
+        }
+        if rows_are_things:
+            node_types.update({c: row_type for c in row_ids})
         checks = [(col, spec, f"{lay['id']} {col}") for col, spec in specs.items()]
         checks += [
             (col, d, f"{lay['id']} {col} -> {d.get('name')}")
@@ -1137,6 +1248,8 @@ def check_data(
                         f"{list(dict.fromkeys(values))[:3]}); add id_prefix or codes, or use "
                         "another property",
                     )
+            if col in node_types and spec in specs.values():
+                check_node_prefixes(where, pairs, spec, node_types[col], model, plan, f)
             if spec.get("id_prefix") == "infores" or (
                 form in ("curie", "mixed") and any(v.startswith("infores:") for v in values)
             ):

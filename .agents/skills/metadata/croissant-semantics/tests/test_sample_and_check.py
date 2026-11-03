@@ -1048,3 +1048,55 @@ def test_load_failure_causes():
     assert "no header row" in _load_cause(no_header)
     positional = 'ValueError: Column "column_1" does not exist in node'
     assert "column_1" in _load_cause(positional)
+
+
+def test_node_ids_nodenorm_cant_resolve_are_flagged(monkeypatch):
+    import check
+    import vocab
+
+    biolink = {p: "http://x.org/" for p in ("KEGG.ORTHOLOGY", "MONDO", "NCBIGene", "COG")}
+    monkeypatch.setattr(vocab, "biolink_prefixes", lambda: biolink)
+
+    def warnings(values, spec, etype="biolink:Gene", rows=None):
+        f = Findings()
+        pairs = list(zip(values, rows or [{}] * len(values), strict=True))
+        check.check_node_prefixes("l x", pairs, spec, etype, MODEL, {"prefixes": {}}, f)
+        return [m for level, _, m in f.items if level == "warning"]
+
+    # the source's own tag declared as a prefix (KEGG's ko:K00001)
+    (w,) = warnings(["ko:K15889", "ko:K00001"], {"id_form": "curie"}, "biolink:GeneFamily")
+    assert "prefix ko, which isn't a Biolink prefix" in w
+    assert "item_pattern 'ko:(.+)'" in w and "KEGG.ORTHOLOGY" in w
+    # ids with no namespace at all (STRING's COGs marked native)
+    (w,) = warnings(["COG0001", "COG0002"], {"id_form": "native"}, "biolink:GeneFamily")
+    assert "have no namespace" in w and "fits Biolink's COG" in w
+    # a Biolink prefix spelled differently
+    (w,) = warnings(["mondo:0000001"], {"id_form": "curie"}, "biolink:Disease")
+    assert "Biolink writes it MONDO" in w
+    # a Biolink prefix Biolink doesn't list for the category (from the data, not id_prefix)
+    (w,) = warnings(["MONDO:0000001"], {"id_form": "curie"})
+    assert "doesn't list as an id prefix for biolink:Gene" in w
+    # resolvable ids, whichever way the prefix is given
+    assert warnings(["1017"], {"id_prefix": "NCBIGene"}) == []
+    assert warnings(["K15889"], {"id_prefix": "KEGG.ORTHOLOGY"}, "biolink:GeneFamily") == []
+    assert (
+        warnings(
+            ["1017"],
+            {"prefix_column": "db", "prefix_codes": {"EG": "NCBIGene"}},
+            rows=[{"db": "EG"}],
+        )
+        == []
+    )
+
+
+def test_emitted_prefix_follows_the_transformation_rules():
+    from check import emitted_prefix
+
+    prefixes = {"MONDO": "http://purl.obolibrary.org/obo/MONDO_"}
+    assert emitted_prefix("1017", {}, {"id_prefix": "NCBIGene"}, {}) == "NCBIGene"
+    assert emitted_prefix("HGNC:5", {}, {"id_prefix": "NCBIGene", "id_form": "mixed"}, {}) == "HGNC"
+    assert emitted_prefix("MONDO_0000001", {}, {"id_form": "obo"}, {}) == "MONDO"
+    url = "http://purl.obolibrary.org/obo/MONDO_0000001"
+    assert emitted_prefix(url, {}, {"id_form": "url"}, prefixes) == "MONDO"
+    assert emitted_prefix("path:map00010", {}, {"id_form": "native"}, {}) is None
+    assert emitted_prefix("a", {}, {"codes": {"a": "MONDO:1"}}, {}) == "MONDO"
