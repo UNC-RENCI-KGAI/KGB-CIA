@@ -1,0 +1,142 @@
+"""Generate ORION parsers from semantic metadata, run them, and report what transformation
+could not convert so the metadata team can act on it.
+
+Delegates the actual compiling and running to the standalone scripts under
+``.agents/skills/transformation/generate-graph/scripts``; this module only orchestrates them
+across every source bundle under the input directory and aggregates the result.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+from pathlib import Path
+from types import ModuleType
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SKILL_SCRIPTS = REPO_ROOT / ".agents/skills/transformation/generate-graph/scripts"
+DATA_DIR = REPO_ROOT / "data"
+CONVENTIONAL_INPUT = DATA_DIR / "metadata"
+
+# A compiled source with extractable record sets, with or without skipped fields. These are
+# the only statuses worth handing to ORION; "needs_infores" and "unsupported" are reported to
+# the metadata team instead of run.
+RUNNABLE_STATUSES = {"ready", "partial"}
+
+
+def _load_module(path: Path, name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+generate_parser = _load_module(SKILL_SCRIPTS / "generate_parser.py", "kgbcia_generate_parser")
+
+
+def discover_input_dir() -> Path:
+    """Find where semantic Croissant bundles actually live under data/.
+
+    There is no agreed convention yet for the metadata stage's output directory name, so
+    rather than hardcode a guess, look for one unambiguous location. `data/metadata` wins if
+    it has bundles (the generic "previous stage's output" convention); otherwise, if every
+    bundle found under data/ shares one parent directory, use that.
+    """
+    if CONVENTIONAL_INPUT.exists() and any(CONVENTIONAL_INPUT.rglob("croissant.semantic.json*")):
+        return CONVENTIONAL_INPUT
+    if not DATA_DIR.exists():
+        return CONVENTIONAL_INPUT
+    roots = {bundle.parent.parent for bundle in DATA_DIR.rglob("croissant.semantic.json*")}
+    if len(roots) == 1:
+        return roots.pop()
+    if len(roots) > 1:
+        raise LookupError(
+            "multiple semantic metadata directories found under data/ ("
+            + ", ".join(sorted(str(r) for r in roots))
+            + "); pass --input explicitly"
+        )
+    return CONVENTIONAL_INPUT
+
+
+def _bundle_paths(input_dir: Path) -> dict[str, Path]:
+    """Map each generated source_id back to the semantic Croissant bundle it came from."""
+    mapping = {}
+    for bundle in sorted(input_dir.rglob("croissant.semantic.json*")):
+        source_id = "Kgbcia_" + generate_parser.slug(bundle.parent.name)
+        mapping[source_id] = bundle
+    return mapping
+
+
+def _run_orion(output_dir: Path, source_id: str, bundle: Path | None) -> dict:
+    """Run a compiled parser through ORION's native ingest pipeline in its own process.
+
+    ORION requires Python 3.12+; the generated run_orion.py carries that requirement as
+    inline script metadata, so it must run under `uv run --script`, not be imported here.
+    """
+    workspace = output_dir / "graphs" / source_id
+    cmd = [
+        "uv",
+        "run",
+        "--script",
+        str(output_dir / "run_orion.py"),
+        str(output_dir),
+        source_id,
+        str(workspace),
+    ]
+    bindings = bundle.parent / "source_files.json" if bundle else None
+    if bindings and bindings.exists():
+        cmd += ["--source-files", str(bindings)]
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    outcome = {"workspace": str(workspace), "orion_exit_code": proc.returncode}
+    if proc.returncode != 0:
+        outcome["error"] = proc.stderr.strip()[-4000:]
+    return outcome
+
+
+def run(input_dir: Path | None, output_dir: Path) -> int:
+    if input_dir is None:
+        try:
+            input_dir = discover_input_dir()
+        except LookupError as error:
+            print(f"Transformation agent: {error}")
+            return 1
+        print(f"Transformation agent: autodetected input at {input_dir}")
+
+    if not input_dir.exists() or not any(input_dir.rglob("croissant.semantic.json*")):
+        print(f"Transformation agent: no semantic Croissant bundles found under {input_dir}")
+        print("  run the metadata stage first")
+        return 1
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generate_parser.main([str(input_dir), str(output_dir)])
+    report = json.loads((output_dir / "generation_report.json").read_text())
+    bundles = _bundle_paths(input_dir)
+
+    structural_failure = bool(report["errors"])
+    outcomes = []
+    for result in report["sources"]:
+        outcome = {
+            "source_id": result["source_id"],
+            "status": result["status"],
+            "requires_infores": result["requires_infores"],
+            "skipped": result["skipped"],
+        }
+        if result["status"] in RUNNABLE_STATUSES:
+            bundle = bundles.get(result["source_id"])
+            outcome.update(_run_orion(output_dir, result["source_id"], bundle))
+            if outcome.get("orion_exit_code"):
+                structural_failure = True
+        outcomes.append(outcome)
+
+    handoff = {"generation_errors": report["errors"], "sources": outcomes}
+    report_path = output_dir / "transformation_report.json"
+    report_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n")
+
+    runnable = sum(1 for o in outcomes if o["status"] in RUNNABLE_STATUSES)
+    print(
+        f"Transformation agent: {runnable}/{len(outcomes)} sources compiled and run through "
+        f"ORION; {len(report['errors'])} generation errors. "
+        f"See {report_path} for the metadata-team handoff."
+    )
+    return 1 if structural_failure else 0

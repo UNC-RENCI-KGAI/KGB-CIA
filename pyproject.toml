@@ -41,4 +41,4 @@ extend-exclude = ["data"]
 select = ["E", "F", "I", "W", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", ".agents/skills/transformation/generate-graph/tests"]
