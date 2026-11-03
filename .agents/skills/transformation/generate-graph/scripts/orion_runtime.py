@@ -40,9 +40,6 @@ else:
 MANY = {"category", "equivalent_identifiers", "xref", "publications", "aggregator_knowledge_source"}
 ENUMS = {"knowledge_level", "agent_type"}
 IDENTITY = {"id", "subject", "object", "predicate", "category"}
-# diagnostics.jsonl keeps this many examples of each (field, reason) and then a count; one
-# unmapped column otherwise writes a line per row (4.2 GB for STRING).
-DIAGNOSTIC_EXAMPLES = 100
 
 
 class MergingNodeWriter(KGXFileWriter):
@@ -233,6 +230,9 @@ def open_text(path):
 class SemanticSourceLoader(SourceDataLoader):
     mapping_file: Path
     preserve_unconnected_nodes = True
+    # diagnostics.jsonl keeps this many examples of each (field, reason) and then a count; one
+    # unmapped column otherwise writes a line per row (4.2 GB for STRING).
+    diagnostic_examples = 100
 
     def __init__(self, test_mode=False, source_data_dir=None):
         super().__init__(test_mode=test_mode, source_data_dir=source_data_dir)
@@ -351,7 +351,7 @@ class SemanticSourceLoader(SourceDataLoader):
         # validation messages quote the row's value; group them by the error, not the value
         key = (ref, re.sub(r"input_value=.*?, input_type", "input_type", reason))
         self._diagnostic_counts[key] += 1
-        if self._diagnostic_counts[key] <= DIAGNOSTIC_EXAMPLES:
+        if self._diagnostic_counts[key] <= self.diagnostic_examples:
             line = {"ref": ref, "record": record, "reason": reason}
             self._diagnostics.write(json.dumps(line) + "\n")
         if key not in self._skip_keys:
@@ -722,7 +722,7 @@ class SemanticSourceLoader(SourceDataLoader):
                                 )
         finally:
             for (ref, reason), count in self._diagnostic_counts.items():
-                if count > DIAGNOSTIC_EXAMPLES:
+                if count > self.diagnostic_examples:
                     line = {"ref": ref, "record": None, "reason": reason, "count": count}
                     self._diagnostics.write(json.dumps(line) + "\n")
             self._diagnostics.close()
