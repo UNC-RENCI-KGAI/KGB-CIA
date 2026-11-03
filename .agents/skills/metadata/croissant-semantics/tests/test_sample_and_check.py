@@ -1069,7 +1069,12 @@ def test_node_ids_nodenorm_cant_resolve_are_flagged(monkeypatch):
     assert "item_pattern 'ko:(.+)'" in w and "KEGG.ORTHOLOGY" in w
     # ids with no namespace at all (STRING's COGs marked native)
     (w,) = warnings(["COG0001", "COG0002"], {"id_form": "native"}, "biolink:GeneFamily")
-    assert "have no namespace" in w and "fits Biolink's COG" in w
+    assert "have no namespace" in w and "may fit Biolink's COG;" in w
+    # CURIEs with a Biolink prefix marked native, and IRIs given no form
+    (w,) = warnings(["MONDO:0000001", "MONDO:0000002"], {"id_form": "native"}, "biolink:Disease")
+    assert "already CURIEs (MONDO): use id_form curie" in w
+    (w,) = warnings(["http://purl.obolibrary.org/obo/MONDO_0000001"], {}, "biolink:Disease")
+    assert "IRIs: use id_form url" in w
     # a Biolink prefix spelled differently
     (w,) = warnings(["mondo:0000001"], {"id_form": "curie"}, "biolink:Disease")
     assert "Biolink writes it MONDO" in w

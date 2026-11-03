@@ -856,14 +856,31 @@ def emitted_prefix(value: str, row: dict, spec: dict, prefixes: dict) -> str | N
 
 
 def _biolink_fits(values: list[str]) -> list[str]:
-    """Biolink prefixes whose registered id pattern fits every value (most specific first)."""
+    """Biolink prefixes whose own registered id pattern fits every value: those whose pattern
+    names the values' leading letters first (COG for COG0001), then the most specific."""
+    import bioregistry
     import vocab
 
     values = list(dict.fromkeys(values))[:20]
     # integers fit many registries' patterns; their namespace comes from documentation
     if not values or all(v.isdigit() for v in values):
         return []
-    return [h[3] for h in vocab.identify(values) if h[3]][:3]
+    fits = []
+    for prefix in vocab.biolink_prefixes():
+        pattern = bioregistry.get_pattern(bioregistry.normalize_prefix(prefix) or prefix)
+        try:
+            rx = re.compile(pattern) if pattern else None
+        except re.error:
+            continue
+        if rx is None or sum(bool(rx.fullmatch(p)) for p in vocab.CATCH_ALL_PROBES) >= 2:
+            continue
+        if all(rx.fullmatch(v) for v in values):
+            fits.append((-vocab._anchor(pattern, values), len(pattern), prefix))
+    fits.sort()
+    if fits and fits[0][0] < 0:
+        # patterns naming the values' letters (rs for DBSNP, COG) beat ones that merely allow them
+        fits = [fit for fit in fits if fit[0] == fits[0][0]]
+    return [prefix for *_, prefix in fits[:2]]
 
 
 def check_node_prefixes(
@@ -883,19 +900,27 @@ def check_node_prefixes(
     total = len(pairs)
 
     def advice(values):
-        # the source's own tag in front of a registered id (KEGG's ko:K00001, md:M00001)
+        iris = [v for v in values if v.lstrip("<").startswith(("http://", "https://"))]
+        if len(iris) >= len(values) / 2:
+            return "; the values are IRIs: use id_form url and declare their namespaces"
         tagged = [v for v in values if CURIE.match(v)]
+        tags = Counter(CURIE.match(v).group(1) for v in tagged)
+        if tags and all(t in biolink for t in tags) and len(tagged) >= len(values) / 2:
+            # already CURIEs with Biolink prefixes (GO:0006139), only marked native or bare
+            return f"; they are already CURIEs ({', '.join(tags)}): use id_form curie"
+        # the source's own tag in front of a registered id (KEGG's ko:K00001, md:M00001)
         if len(tagged) < len(values) / 2:
             fits = _biolink_fits(values)
-            return (
-                f"; their pattern fits Biolink's {', '.join(fits)}: set id_prefix" if fits else ""
-            )
+            return f"; set id_prefix{suggest(fits)}" if fits else ""
         tag = CURIE.match(tagged[0]).group(1)
         fits = _biolink_fits([CURIE.match(v).group(2) for v in tagged])
-        return (
-            f"; strip the source's {tag}: tag with item_pattern '{tag}:(.+)' and set id_prefix"
-            + (f" (the ids fit Biolink's {', '.join(fits)})" if fits else "")
-        )
+        strip = f"; strip the source's {tag}: tag with item_pattern '{tag}:(.+)' and set id_prefix"
+        return strip + suggest(fits)
+
+    def suggest(fits):
+        if not fits:
+            return ""
+        return f" (the ids may fit Biolink's {' or '.join(fits)}; confirm with vocab.py prefix)"
 
     if got[None] > 0.05 * total:
         bare = list(dict.fromkeys(v for v, p in emitted if p is None))
