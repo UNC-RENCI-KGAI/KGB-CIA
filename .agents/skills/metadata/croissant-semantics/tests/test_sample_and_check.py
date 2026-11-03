@@ -1076,6 +1076,8 @@ def test_node_ids_nodenorm_cant_resolve_are_flagged(monkeypatch):
     # a Biolink prefix Biolink doesn't list for the category (from the data, not id_prefix)
     (w,) = warnings(["MONDO:0000001"], {"id_form": "curie"})
     assert "doesn't list as an id prefix for biolink:Gene" in w
+    # a subclass's prefix fits a union class (MODEL: gene is a named thing)
+    assert warnings(["NCBIGene:1017"], {"id_form": "curie"}, "biolink:NamedThing") == []
     # resolvable ids, whichever way the prefix is given
     assert warnings(["1017"], {"id_prefix": "NCBIGene"}) == []
     assert warnings(["K15889"], {"id_prefix": "KEGG.ORTHOLOGY"}, "biolink:GeneFamily") == []

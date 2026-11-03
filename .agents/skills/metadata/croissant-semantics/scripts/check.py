@@ -906,8 +906,15 @@ def check_node_prefixes(
         )
     allowed = []
     key = _class_key(model, etype) if model else None
-    for k in class_lineage(model, key) if key else []:
-        allowed += model["classes"][k].get("id_prefixes") or []
+    if key:
+        # a class's own prefixes, its ancestors', and its subclasses' (DiseaseOrPhenotypicFeature
+        # lists only MESH, UMLS and KEGG.BRITE; its EFO, MONDO and HP ids are Disease's and
+        # PhenotypicFeature's)
+        related = class_lineage(model, key) + [
+            k for k in model["classes"] if k != key and key in class_lineage(model, k)
+        ]
+        for k in related:
+            allowed += model["classes"][k].get("id_prefixes") or []
     for prefix, n in got.most_common():
         if prefix is None or n <= 0.05 * total:
             continue
