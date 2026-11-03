@@ -85,7 +85,9 @@ disabled conflation, and the semantic plan's declared Biolink version. Missing v
 before downloading source files. `--strict` excludes unresolved nodes. `--conflation` explicitly opts into
 gene/protein and other conflations. Optional `--infores` supplies missing source identity.
 ORION owns versioned storage, normalization artifacts, and stage success. Failed stages return
-nonzero. A scoped node writer uses ORION's disk merger during parsing and normalization to
+nonzero, and the runner prints the error ORION recorded in the workspace's `.meta.json` (for
+example `fetch: <HTTPError 403 ...>`) to stderr, which `kgb-transform` copies into
+`transformation_report.json`. A scoped node writer uses ORION's disk merger during parsing and normalization to
 retain properties from duplicate source IDs and canonical ID collisions. Registrations are
 restored afterward. Combined final graphs use ORION's graph workflow.
 
@@ -94,7 +96,8 @@ outcomes, but leave canonicalization quality and downstream evaluation to ORION 
 responsible teams. Validate graph structure, provenance, and lineage independently of the
 fraction of identifiers that resolve.
 
-ORION reuses completed stages by version. The current runner does not fingerprint local file
+ORION reuses completed stages by version. A failed or interrupted download is retried on the
+next run in the same `STORAGE`; ORION itself would not retry it. The current runner does not fingerprint local file
 contents, file bindings, or infores overrides. Use a fresh `STORAGE` directory when changing
 these runtime inputs to avoid reusing an earlier graph.
 
