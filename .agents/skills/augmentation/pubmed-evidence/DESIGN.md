@@ -241,9 +241,9 @@ Conflicts are left to the cleaning stage, which can weigh each edge by its publi
 - **`negated`** is Biolink's slot for an association that "is not true". The metadata stage
   already uses it for negative rows in source data.
 - **Every new edge** has `knowledge_level: knowledge_assertion`, `agent_type: text_mining_agent`
-  and `primary_knowledge_source: infores:kgbcia-placeholder`. The placeholder stands in until the
-  leads choose the team's infores ID; it is set in one place (`pubmed_evidence/config.py`) and can be overridden
-  with `--infores`. Its `id` is `kgbcia-augmentation:` plus its statement's hash.
+  and `primary_knowledge_source: infores:kgbcia-augmentor`, which is set in one place
+  (`pubmed_evidence/config.py`) and can be overridden with `--infores`. Its `id` is
+  `kgbcia-augmentation:` plus its statement's hash.
 - **Only reviewed claims become edges.** A contradiction or qualifier set needs an `accept`
   from the second pass. `apply --no-review` lifts that for runs that skipped the pass, but a
   `reject` still drops the claim.
@@ -285,7 +285,6 @@ saves little. Revisit if we move to full text and need to choose which paragraph
   This sets the scale.
 - Transformation team: whether TCRD's PMID columns are carried into `publications`.
 - Who holds the NCBI API key.
-- Leads: the team's infores ID, to replace `infores:kgbcia-placeholder`.
 - All teams: anything that ignores `negated` reads a negated edge as a positive link, including
   GNN link prediction and MCP neighbor queries. Negated edges also come from source data, so we
   need a team-wide rule, such as dropping `negated: true` edges before training.

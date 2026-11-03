@@ -10,9 +10,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Stands in for the team's infores ID until the leads choose one. Every new edge gets it as
-# `primary_knowledge_source`; `--infores` overrides it.
-INFORES = "infores:kgbcia-placeholder"
+# The augmentation agent's infores ID. Every new edge gets it as `primary_knowledge_source`;
+# `--infores` overrides it.
+INFORES = "infores:kgbcia-augmentor"
 NEW_EDGE_KNOWLEDGE_LEVEL = "knowledge_assertion"
 NEW_EDGE_AGENT_TYPE = "text_mining_agent"
 

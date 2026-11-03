@@ -47,7 +47,7 @@ Uses the KGX records in `shared/schema.py`.
 - **Output** (`--output`, default `data/augmentation`): `nodes.jsonl` unchanged, and
   `edges.jsonl` with every input edge in input order, supporting PMIDs appended to
   `publications`, followed by the new negated and then qualified edges. Every new edge has
-  `primary_knowledge_source: infores:kgbcia-placeholder` (`--infores`), `knowledge_level:
+  `primary_knowledge_source: infores:kgbcia-augmentor` (`--infores`), `knowledge_level:
   knowledge_assertion` and `agent_type: text_mining_agent`.
 - **Work directory** (`--work`, default `<output>/work`) and **caches** (`--cache-dir`, default
   `data/augmentation/cache`): described in the skill's
@@ -65,5 +65,5 @@ Uses the KGX records in `shared/schema.py`.
   expression). Gene–disease searches found papers for 18 of 20 pairs; Xenbase phenotype names
   found none, and dictyBase phenotypes have no names to search.
 - No gold set yet, so the models are still unvalidated defaults.
-- Open items (scope with the filter team, the infores ID, `negated` handling team-wide) are in
+- Open items (scope with the filter team, `negated` handling team-wide) are in
   the skill's `DESIGN.md`.

@@ -61,7 +61,7 @@ $S/apply_labels.py --input data/filter --output data/augmentation
 | `search_pubmed.py` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm` |
 | `label_abstracts.py` | `--model` (gpt-5.6-luna), `--prompt FILE`, `--sample N --seed S`, `--gold FILE`, `--dry-run`, `--workers` (8), `--limit N` |
 | `review_labels.py` | `--model` (gpt-5.6-terra), `--export FILE --reviewer NAME`, `--import FILE --reviewer NAME` |
-| `apply_labels.py` | `--infores` (infores:kgbcia-placeholder), `--no-review` |
+| `apply_labels.py` | `--infores` (infores:kgbcia-augmentor), `--no-review` |
 | `evaluate_models.py` | `--gold FILE`, `--run MODEL[@PROMPT_VERSION]` (repeatable) |
 | `run_all.py` | `--model`, `--review-model`, `--infores`, `--limit`, `--skip-review` |
 
