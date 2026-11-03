@@ -38,6 +38,9 @@ else:
 MANY = {"category", "equivalent_identifiers", "xref", "publications", "aggregator_knowledge_source"}
 ENUMS = {"knowledge_level", "agent_type"}
 IDENTITY = {"id", "subject", "object", "predicate", "category"}
+# Python's default "Python-urllib/3.x" User-Agent gets 403 Forbidden from JensenLab, Reactome
+# and WikiPathways; they accept a named client.
+USER_AGENT = "KGB-CIA/0.1 (+https://github.com/UNC-RENCI-KGAI/KGB-CIA)"
 
 
 class MergingNodeWriter(KGXFileWriter):
@@ -280,7 +283,9 @@ class SemanticSourceLoader(SourceDataLoader):
         url = str(dist.get("contentUrl") or "")
         if url.startswith(("https://", "http://", "ftp://")):
             temporary = destination.with_suffix(destination.suffix + ".part")
-            urllib.request.urlretrieve(url, temporary)
+            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(request) as response, temporary.open("wb") as target:
+                shutil.copyfileobj(response, target)
             temporary.replace(destination)
         else:
             parent = dist.get("containedIn")
