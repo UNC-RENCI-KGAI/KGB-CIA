@@ -706,6 +706,40 @@ def test_runner_rejects_missing_biolink_version(bundle, tmp_path, native_orion):
         runner.main([str(output), "Kgbcia_synthetic_source", str(tmp_path / "storage")])
 
 
+def test_runner_reports_why_a_download_failed_and_retries_it(
+    bundle, tmp_path, monkeypatch, native_orion, capsys
+):
+    import urllib.error
+
+    from orion import ingest_pipeline, normalization
+
+    monkeypatch.setattr(normalization, "get_current_node_norm_version", lambda: "test-api-version")
+    monkeypatch.setattr(normalization, "get_current_babel_version", lambda: "test-babel-version")
+    monkeypatch.setattr(ingest_pipeline.time, "sleep", lambda seconds: None)
+    output = tmp_path / "generated"
+    generator.main([str(bundle[0]), str(output)])
+    spec = importlib.util.spec_from_file_location("fetch_failure_runner", SCRIPTS / "run_orion.py")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    attempts = []
+
+    def refusing(code):
+        def refuse(url, *args, **kwargs):
+            attempts.append(code)
+            raise urllib.error.HTTPError(str(url), code, "Refused", {}, None)
+
+        return refuse
+
+    argv = [str(output), "Kgbcia_synthetic_source", str(tmp_path / "storage")]
+    for code in (403, 404):
+        for call in ("urlretrieve", "urlopen"):
+            monkeypatch.setattr(f"urllib.request.{call}", refusing(code))
+        assert runner.main(argv) == 1
+        assert f"fetch: <HTTPError {code}" in capsys.readouterr().err
+    # the second run downloaded again rather than stopping at "previously failed"
+    assert 404 in attempts
+
+
 def test_native_jsonl_skips_bad_line_and_keeps_physical_record_numbers(
     bundle,
     tmp_path,
