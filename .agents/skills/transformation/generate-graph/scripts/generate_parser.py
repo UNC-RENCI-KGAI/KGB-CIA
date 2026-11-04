@@ -295,6 +295,17 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
                 rs_name,
                 "No complete subject/object association; emit supported entities only",
             )
+        roles = [e["role"] for e in entities]
+        predicate_mapped = any(c["slot"] == "predicate" for c in row_fields)
+        if roles.count("biolink:subject") == roles.count("biolink:object") == 1 and not (
+            predicate_mapped
+        ):
+            skip(
+                rs_id,
+                rs_name,
+                "Subject/object association has no predicate field; its nodes are emitted, "
+                "its edges are not",
+            )
         all_columns = row_fields + [c for e in entities for c in e["fields"]]
         paths = [c["tokens"] for c in all_columns if "tokens" in c]
         common = list(paths[0]) if paths else []
@@ -349,6 +360,7 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
                 "row_fields": row_fields,
                 "entities": entities,
                 "key_fields": key_fields,
+                "predicate_mapped": predicate_mapped,
                 "mapping_prefix": f"{source}.{digest}",
             }
         )
