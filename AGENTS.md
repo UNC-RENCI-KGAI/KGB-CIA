@@ -54,9 +54,11 @@ stays in sync.
 - **Every node ID goes through NodeNorm** via `shared/nodenorm.py`.
 - **`evaluation/` is deliberately not a stage** and is not in `STAGES`.
 
-As of this writing every stage's `main` is a stub that prints "not implemented yet", and
-`make demo` only prints stage descriptions. The README mentions toy data in `tests/fixtures`;
-that directory does not exist yet.
+`kgb-transform` is the only stage command implemented; the other stages' `main` are stubs that
+print "not implemented yet". Semantic metadata comes from the `croissant-semantics` skill in
+`.agents/skills/metadata/`, run per source rather than through `kgb-metadata`. `make demo` only
+prints stage descriptions. The README mentions toy data in `tests/fixtures`; that directory does
+not exist yet.
 
 ## Design rules agreed by the team
 
