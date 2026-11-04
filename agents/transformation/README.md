@@ -9,9 +9,10 @@ remain outside transformation.
 
 Transformation only uses what the supplied semantic metadata declares. It never infers,
 guesses, or pattern-matches a value the metadata doesn't contain — including a source's
-infores identity: that comes only from a constant already present in the metadata, or an
-explicit `--infores` confirmed independently by whoever generates that source's parser, never
-derived from a name, URL, or file path. A source with no declared or confirmed identity is
+infores identity: that comes from the metadata's `rcv:infores` (bundles made before the
+metadata stage set it fall back to a single source constant), or an explicit `--infores`, never
+derived from a name, URL, or file path. An id the metadata marks `rcv:inforesProposed` (not yet
+in the infores catalog) is used, and listed for registering. A source with no identity at all is
 reported as `needs_infores`, not run with a fabricated one.
 
 ## Run it alone
@@ -56,8 +57,9 @@ The metadata compiler, shared extraction runtime, and ORION runner are implement
 `--input`, runs each `ready`/`partial` source through ORION in its own `uv run --script`
 process (ORION needs Python 3.12+), and reports `needs_infores`/`unsupported` sources and
 generation errors without treating them as pipeline failures. `kgb-transform`'s batch run never
-passes `--infores`, so a `needs_infores` source stays reported, not guessed, until someone
-confirms its identity out-of-band through the generate-graph skill directly. Reader coverage is
+passes `--infores`, so a `needs_infores` source stays reported, not guessed, until the metadata
+names its identity. Sources citing proposed ids are run, and named at the end of the run and in
+`transformation_report.json` (`infores_proposed`) for registering. Reader coverage is
 partial and disclosed in generation reports. Metadata defects are handed over without changing
 the supplied semantics. Unresolved NodeNorm identifiers do not by themselves indicate parser
 failure.

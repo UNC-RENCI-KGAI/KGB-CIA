@@ -44,7 +44,8 @@ before using the current runner.
 
 Inspect aggregate and per-source generation reports. Counts distinguish compiled and
 unsupported record sets; `skipped` also documents field and relationship gaps. `needs_infores`
-requires a confirmed identity at runtime or regeneration. `unsupported` means no extractable
+means the metadata names no identity (no `rcv:infores` and no single source constant);
+`infores_proposed` marks a source citing an id the infores catalog doesn't have yet. `unsupported` means no extractable
 record sets. Generation exit 0 means compilation completed, not that source coverage is complete.
 
 ## Files and parsing-only tests

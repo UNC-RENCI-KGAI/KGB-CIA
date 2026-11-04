@@ -354,7 +354,16 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
         )
     if infores is not None and not re.fullmatch(r"infores:[^\s]+", infores):
         raise ValueError("Source identity must be a valid infores CURIE")
+    # The metadata stage names the knowledge base's own id. A proposed one isn't in the infores
+    # catalog yet; graphs can still cite it (ORION reports it as a QC warning), so it runs.
+    proposed = False
+    if infores is None and document.get("rcv:infores") is not None:
+        infores = document["rcv:infores"]
+        if not isinstance(infores, str) or not re.fullmatch(r"infores:[^\s]+", infores):
+            raise ValueError(f"rcv:infores must be an infores CURIE, not {infores!r}")
+        proposed = bool(document.get("rcv:inforesProposed"))
     if infores is None:
+        # bundles from before the metadata stage named the id: a single source constant
         for slot in ("provided_by", "aggregator_knowledge_source", "primary_knowledge_source"):
             values = {
                 c["value"]
@@ -380,6 +389,7 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
         "source": source,
         "source_id": "Kgbcia_" + source,
         "infores": infores,
+        "infores_proposed": proposed,
         "source_version": str(
             document.get("version") or hashlib.sha256(path.read_bytes()).hexdigest()[:16]
         ),
@@ -481,6 +491,7 @@ if __name__ == "__main__":
         else "ready",
         "requires_infores": config["requires_infores"],
         "infores": config["infores"],
+        "infores_proposed": config["infores_proposed"],
         "skipped": config["skipped"],
     }
     dump(target / "generation_report.json", result)

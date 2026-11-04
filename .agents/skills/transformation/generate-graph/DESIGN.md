@@ -39,9 +39,10 @@ predicates are not promoted to Biolink terms. Unmapped fields and unsupported re
 reported. Bundle directory names identify packages because several bundles share `plan.kb`.
 
 A loader file can exist despite incomplete support. Reports distinguish unsupported sources,
-missing infores identity, partial mappings, and ready sources. An explicit override or an
-unambiguous mapped knowledge source establishes identity; source names do not generate infores
-CURIEs. Sources with no compiled record sets cannot run as successful empty ingests.
+missing infores identity, partial mappings, and ready sources. An explicit override, the
+metadata's `rcv:infores`, or (for older bundles) an unambiguous mapped knowledge source
+establishes identity; source names do not generate infores CURIEs. A proposed id
+(`rcv:inforesProposed`) runs and is reported as `infores_proposed`. Sources with no compiled record sets cannot run as successful empty ingests.
 
 ## Reader boundaries
 

@@ -33,8 +33,10 @@ limitation. Do not label that limitation as a metadata failure.
 
 ## Generate and inspect the package
 
-Run `scripts/generate_parser.py INPUT OUTPUT`. Supply `--infores` for a single bundle only
-when its identity is confirmed but absent from metadata. Inspect aggregate and per-source
+Run `scripts/generate_parser.py INPUT OUTPUT`. The source's identity is the metadata's
+`rcv:infores`; a proposed one (`rcv:inforesProposed`) is used and reported for registering.
+Supply `--infores` for a single bundle only when its identity is confirmed but absent from
+metadata. Inspect aggregate and per-source
 generation reports. Successfully writing Python does not prove a source has supported mappings.
 Reports distinguish unsupported sources, missing infores identities, and partial mappings.
 
