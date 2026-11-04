@@ -125,6 +125,7 @@ def native_orion(monkeypatch, tmp_path):
         pytest.fail("Native parser tests must not download data or call NodeNorm")
 
     monkeypatch.setattr("urllib.request.urlretrieve", no_network)
+    monkeypatch.setattr("urllib.request.urlopen", no_network)
     monkeypatch.setattr("requests.sessions.Session.request", no_network)
 
 
@@ -596,15 +597,18 @@ def test_native_archive_members_use_declared_parent(
     workspace.mkdir()
     downloads = []
 
-    def download(url, destination):
-        downloads.append(url)
-        shutil.copyfile(archive, destination)
+    def download(request):
+        # servers such as JensenLab and Reactome refuse Python's default User-Agent
+        downloads.append((request.full_url, request.get_header("User-agent")))
+        return archive.open("rb")
 
-    monkeypatch.setattr("urllib.request.urlretrieve", download)
+    monkeypatch.setattr("urllib.request.urlopen", download)
     loader = load_generated(output / result["parser"])(source_data_dir=str(workspace))
     loader.get_data()
     loader.load(str(workspace / "nodes.jsonl"), str(workspace / "edges.jsonl"))
-    assert downloads == ["https://example.test/source"]
+    assert downloads == [
+        ("https://example.test/source", "KGB-CIA/0.1 (+https://github.com/UNC-RENCI-KGAI/KGB-CIA)")
+    ]
     assert len((workspace / "edges.jsonl").read_text().splitlines()) == 1
 
 
