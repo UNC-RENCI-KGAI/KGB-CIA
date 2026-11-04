@@ -356,7 +356,8 @@ def check_roles(plan: dict, f: "Findings", model: dict | None) -> None:
 def check_predicates_present(plan: dict, f: "Findings") -> None:
     """A layout with a subject and an object needs a predicate, or it builds no edges: the
     transformation stage emits the entities as nodes and drops the relationship. Ends that can't
-    be nodes (no id, or no Biolink class) build no edge either way, so a predicate wouldn't help."""
+    be nodes (no id, or no Biolink class) build no edge either way, so a predicate wouldn't help.
+    row.no_predicate says why a layout deliberately has none, as an entity's no_id does."""
 
     def can_be_a_node(ent: dict) -> bool:
         types = as_list(ent.get("type"))
@@ -370,16 +371,22 @@ def check_predicates_present(plan: dict, f: "Findings") -> None:
         }
         if not {"subject", "object"} <= roles:
             continue
-        if (lay.get("row") or {}).get("predicate") or any(
-            spec.get("property") == "biolink:predicate"
-            for _, spec, kind in iter_assertions(lay)
-            if kind in ("constant", "column")
+        row = lay.get("row") or {}
+        if (
+            row.get("predicate")
+            or row.get("no_predicate")
+            or any(
+                spec.get("property") == "biolink:predicate"
+                for _, spec, kind in iter_assertions(lay)
+                if kind in ("constant", "column")
+            )
         ):
             continue
         f.error(
             f"layout {lay['id']}",
             "has a subject and an object but no predicate, so its rows build no edges; set "
-            "row.predicate, or map the column that holds it to biolink:predicate with codes",
+            "row.predicate, or map the column that holds it to biolink:predicate with codes; if "
+            "edges would overstate these rows, set row.no_predicate to the reason",
         )
 
 

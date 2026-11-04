@@ -109,7 +109,8 @@ the plan itself is kept next to the result as the record of what was asserted an
     have roles such as `biolink:subject` and `biolink:object`. `predicate` is only for a
     predicate that is the same for every row; when it varies, map the column that holds it
     (see `codes`). A layout needs one or the other: with a subject and an object but no
-    predicate it builds no edges, and `check.py` reports an error.
+    predicate it builds no edges, and `check.py` reports an error. When edges would overstate
+    the rows (unfiltered candidate pairs), set `no_predicate` to the reason instead.
   - **Rows are things** (a variant table, a gene list): `type` is the thing's class
     (`biolink:SequenceVariant`). Map the thing's own columns in `columns` with its properties
     (`biolink:id`, `biolink:name`, ...), and group the *other* things a row mentions into

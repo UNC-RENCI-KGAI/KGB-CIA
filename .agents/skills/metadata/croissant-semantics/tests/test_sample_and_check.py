@@ -1128,6 +1128,8 @@ def test_a_subject_and_object_need_a_predicate():
     assert not errs(entities=pair, columns={"rel": {"property": "biolink:predicate"}})
     derived = {"derived": [{"name": "p", "property": "biolink:predicate"}]}
     assert not errs(entities=pair, columns={"rel": derived})
+    # left out on purpose, with the reason
+    assert not errs(entities=pair, row={"no_predicate": "unfiltered candidates"})
     # nothing to relate: a node list, or an entity linked to a row that is a thing
     assert not errs(entities=pair[:1])
     assert not errs(entities=[{"name": "g", "role": "biolink:has_gene"}], row={"type": "x"})
