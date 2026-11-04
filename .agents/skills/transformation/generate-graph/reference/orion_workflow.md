@@ -142,3 +142,22 @@ uv run --no-project --python 3.12 --with robokop-orion==2.0.13 --with pytest \
 Tests use synthetic local files and block downloads. Live acquisition and NodeNorm calls are
 not part of the suite. Regenerate packages after runtime or schema updates to invalidate old
 ORION parsing caches.
+
+## Merging sources
+
+`kgb-transform` finishes by running `merge_graphs.py`, which writes `nodes.jsonl`, `edges.jsonl`
+and `merge-metadata.json` to `merged/`. To merge by hand:
+
+```bash
+scripts/merge_graphs.py data/transformation/graphs data/transformation/merged
+```
+
+ORION merges nodes on `id`, and edges on subject, predicate, object, primary knowledge source and
+qualifiers, so the same triple from two primary sources stays two edges. Lists such as
+`publications` and `kgbcia_source_records` are combined. Scalars that conflict keep the first
+value, in sorted source order, and `merge_warnings.dropped_properties` counts those lost. Unresolved
+nodes are kept, as in lenient normalization. A source with no stable graph is left out and listed
+in `sources_not_merged`.
+
+Plan for about 500 bytes per merged edge, for the output and again for temporary files, and for
+several GB of memory: the disk merger buffers 10 million edges at a time.

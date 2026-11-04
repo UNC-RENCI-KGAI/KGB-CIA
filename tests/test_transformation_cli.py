@@ -176,3 +176,38 @@ def test_run_succeeds_when_orion_run_succeeds(tmp_path, monkeypatch, capsys):
     # a proposed infores id runs, and is reported for registering
     assert handoff["sources"][0]["infores_proposed"] is True
     assert "proposed infores ids that need registering" in capsys.readouterr().out
+
+
+def test_run_merges_built_sources_and_reports_a_failed_merge(tmp_path, monkeypatch, capsys):
+    input_dir = tmp_path / "metadata"
+    (input_dir / "acme").mkdir(parents=True)
+    (input_dir / "acme" / "croissant.semantic.json").write_text("{}")
+    output_dir = tmp_path / "out"
+    source = {"source_id": "Kgbcia_acme", "status": "ready", "requires_infores": False}
+    report = {"sources": [{**source, "skipped": []}], "errors": []}
+    monkeypatch.setattr(transform.generate_parser, "main", _stub_generation(report, output_dir))
+    calls = []
+
+    def fake_run(cmd, **_):
+        calls.append(cmd)
+        failed = "merge_graphs.py" in cmd[3]
+        return SimpleNamespace(returncode=int(failed), stderr="no space left" if failed else "")
+
+    monkeypatch.setattr(transform.subprocess, "run", fake_run)
+    assert transform.run(input_dir, output_dir) == 1
+    assert calls[-1][3].endswith("merge_graphs.py")
+    handoff = json.loads((output_dir / "transformation_report.json").read_text())
+    assert handoff["merge"]["error"] == "no space left"
+
+
+def test_run_skips_the_merge_when_nothing_was_built(tmp_path, monkeypatch):
+    input_dir = tmp_path / "metadata"
+    (input_dir / "acme").mkdir(parents=True)
+    (input_dir / "acme" / "croissant.semantic.json").write_text("{}")
+    output_dir = tmp_path / "out"
+    source = {"source_id": "Kgbcia_acme", "status": "unsupported", "requires_infores": False}
+    report = {"sources": [{**source, "skipped": []}], "errors": []}
+    monkeypatch.setattr(transform.generate_parser, "main", _stub_generation(report, output_dir))
+    assert transform.run(input_dir, output_dir) == 0
+    handoff = json.loads((output_dir / "transformation_report.json").read_text())
+    assert handoff["merge"] is None

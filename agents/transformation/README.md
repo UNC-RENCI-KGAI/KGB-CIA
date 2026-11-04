@@ -45,8 +45,8 @@ equivalent, with `semantics_plan.json` and supporting reports when available, un
 
 Outputs, under `--output` (default `data/transformation`), are generated ORION loader
 packages, KGX node and edge files following `shared/schema.py`, generation reports, per-source
-`TransformReport` files, diagnostics, and `transformation_report.json` aggregating every
-source's status for the metadata team. Every emitted edge includes `kgbcia_source_records`,
+`TransformReport` files, diagnostics, `merged/` with the one graph built from every source, and
+`transformation_report.json` aggregating every source's status for the metadata team. Every emitted edge includes `kgbcia_source_records`,
 linking its source record to a mapping. Keep source data and generated outputs under
 gitignored `data/`.
 

@@ -826,3 +826,70 @@ def test_native_unmapped_primary_source_is_not_replaced_with_aggregator(
     )
     assert edges == []
     assert any("Mapped primary" in s.reason for s in report.skipped)
+
+
+def load_merge_script():
+    spec = importlib.util.spec_from_file_location("merge_graphs", SCRIPTS / "merge_graphs.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_graph(graphs, source, nodes, edges, *, status="stable"):
+    run_dir = graphs / source / source / "data" / "1"
+    normalized = run_dir / "parsed_p" / "normalized_n"
+    normalized.mkdir(parents=True)
+    meta = {
+        "fetch_status": "stable",
+        "parsings": {
+            "p": {
+                "parsing_status": "stable",
+                "normalizations": {"n": {"normalization_status": status}},
+            }
+        },
+    }
+    (run_dir / f"{source}.meta.json").write_text(json.dumps(meta))
+    for name, rows in (("nodes", nodes), ("edges", edges)):
+        text = "".join(json.dumps(row) + "\n" for row in rows)
+        (normalized / f"normalized_{name}.jsonl").write_text(text)
+
+
+def test_stable_normalization_skips_unfinished_graphs(tmp_path):
+    write_graph(tmp_path, "done", [], [])
+    write_graph(tmp_path, "failed", [], [], status="failed")
+    merge = load_merge_script()
+    assert merge.stable_normalization(tmp_path / "done").name == "normalized_n"
+    assert merge.stable_normalization(tmp_path / "failed") is None
+
+
+def test_native_merge_follows_orion_rules(tmp_path, native_orion):
+    def edge(pks, records, **extra):
+        triple = {"subject": "A:1", "predicate": "biolink:related_to", "object": "B:1"}
+        return {
+            **triple,
+            "primary_knowledge_source": pks,
+            "kgbcia_source_records": records,
+            "publications": records,
+            **extra,
+        }
+
+    nodes = [
+        {"id": "A:1", "category": ["biolink:Gene"]},
+        {"id": "B:1", "category": ["biolink:Gene"]},
+    ]
+    graphs = tmp_path / "graphs"
+    # "knowledge" holds "edge": ORION's own file sorting would read these nodes as edges
+    write_graph(graphs, "knowledge_source", nodes, [edge("infores:a", ["one"])])
+    write_graph(graphs, "other", nodes[:1], [edge("infores:a", ["two"]), edge("infores:b", ["x"])])
+    write_graph(graphs, "unfinished", [{"id": "C:1"}], [], status="failed")
+    output = tmp_path / "merged"
+    assert load_merge_script().main([str(graphs), str(output)]) == 0
+
+    merged_nodes = [json.loads(line) for line in (output / "nodes.jsonl").read_text().splitlines()]
+    edges = [json.loads(line) for line in (output / "edges.jsonl").read_text().splitlines()]
+    assert sorted(n["id"] for n in merged_nodes) == ["A:1", "B:1"]
+    assert len(edges) == 2  # a second primary source stays a separate edge
+    same = next(e for e in edges if e["primary_knowledge_source"] == "infores:a")
+    assert sorted(same["kgbcia_source_records"]) == ["one", "two"]
+    metadata = json.loads((output / "merge-metadata.json").read_text())
+    assert metadata["sources_not_merged"] == ["unfinished"] and metadata["edges_diff"] == 1
