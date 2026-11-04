@@ -127,6 +127,7 @@ KNOWN = {
         "codes",
         "null_values",
         "true_values",
+        "absent_values",
         "atomic",
         "pattern_note",
         "description",
@@ -263,6 +264,8 @@ def apply_column(
         notes.append(annotation(fid, f"null_value_{i}", "rcv:nullValue", null))
     for i, val in enumerate(as_list(spec.get("true_values"))):
         notes.append(annotation(fid, f"true_value_{i}", "rcv:trueValue", val))
+    for i, val in enumerate(as_list(spec.get("absent_values"))):
+        notes.append(annotation(fid, f"absent_value_{i}", "rcv:absentValue", str(val)))
     if spec.get("list_separator"):
         notes.append(annotation(fid, "list_separator", "rcv:listSeparator", spec["list_separator"]))
     if spec.get("item_pattern"):

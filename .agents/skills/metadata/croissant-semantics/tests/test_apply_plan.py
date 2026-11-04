@@ -306,6 +306,18 @@ def test_column_library_specs_are_reused_with_overrides():
         apply_plan(croissant(), p)
 
 
+def test_absent_values_become_text_annotations_on_a_column_with_no_property():
+    p = plan()
+    p["layouts"][0]["columns"]["PMIDs"] = {"absent_values": [0, "Not detected"]}
+    out, _ = apply_plan(croissant(), p)
+    pm = next(f for f in rs_by_id(out, "rs_human")["field"] if f["name"] == "PMIDs")
+    notes = [a for a in pm["annotation"] if a["equivalentProperty"] == "rcv:absentValue"]
+    assert [(a["name"], a["value"]) for a in notes] == [
+        ("absent_value_0", "0"),
+        ("absent_value_1", "Not detected"),
+    ]
+
+
 def test_null_values_become_annotations():
     p = plan()
     p["layouts"][0]["columns"]["PMIDs"]["null_values"] = ["N/A", "-"]

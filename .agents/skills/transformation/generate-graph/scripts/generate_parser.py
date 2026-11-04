@@ -161,6 +161,8 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
                     spec.setdefault("null_values", []).append(annotation["value"])
                 elif name.startswith("true_value_"):
                     spec.setdefault("true_values", []).append(annotation["value"])
+                elif name.startswith("absent_value_"):
+                    spec.setdefault("absent_values", []).append(annotation["value"])
                 else:
                     spec[name] = annotation["value"]
             elif name == "id_prefix":
@@ -306,7 +308,16 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
                 "Subject/object association has no predicate field; its nodes are emitted, "
                 "its edges are not",
             )
-        all_columns = row_fields + [c for e in entities for c in e["fields"]]
+        # may be columns with no Biolink property, which aren't otherwise read
+        absence_fields = []
+        for f in raw_fields:
+            notes = [a.get("name", "") for a in f.get("annotation", [])]
+            if any(n.startswith("absent_value_") for n in notes):
+                try:
+                    absence_fields.append(column(f))
+                except ValueError as error:
+                    skip(f["@id"], f.get("name"), str(error))
+        all_columns = row_fields + [c for e in entities for c in e["fields"]] + absence_fields
         paths = [c["tokens"] for c in all_columns if "tokens" in c]
         common = list(paths[0]) if paths else []
         for tokens in paths[1:]:
@@ -361,6 +372,7 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
                 "entities": entities,
                 "key_fields": key_fields,
                 "predicate_mapped": predicate_mapped,
+                "absence_fields": absence_fields,
                 "mapping_prefix": f"{source}.{digest}",
             }
         )

@@ -324,6 +324,32 @@ def test_native_association_without_a_predicate_emits_nodes_only(
     assert counts["diagnostic_count"] == 0
 
 
+def test_native_rows_reporting_absence_build_nothing(bundle, tmp_path, monkeypatch, native_orion):
+    level = field("level", "unused")
+    level["equivalentProperty"] = "rcv:synthetic/level"
+    level["annotation"] = [
+        {"name": "absent_value_0", "value": "0"},
+        {"name": "absent_value_1", "value": ""},
+        {"name": "absent_value_2", "value": "Not detected"},
+    ]
+    bundle[1]["recordSet"][0]["field"].append(level)
+    nodes, edges, report, counts, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "gene_id\tdisease_id\tpublications\tlevel\n"
+        "1017\t0001\t\t2.5\n"
+        "1018\t0002\t\t0.0\n"
+        "1019\t0003\t\tNot detected\n"
+        "1020\t0004\t\t\n",
+    )
+    assert [e["subject"] for e in edges] == ["NCBIGene:1017"]
+    assert {n["id"] for n in nodes} == {"NCBIGene:1017", "MONDO:0001"}
+    assert counts["diagnostic_count"] == 3
+    assert any("level reports absence" in s.reason for s in report.skipped)
+
+
 def test_native_diagnostics_keep_examples_then_a_count(bundle, tmp_path, monkeypatch, native_orion):
     rows = "".join(f"\t{n:04}\t\n" for n in range(250))
     _, _, _, counts, workspace = run_loader(
