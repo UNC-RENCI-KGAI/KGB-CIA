@@ -178,6 +178,9 @@ dependencies). Use `--help` on any of them.
 4. **Decide the semantics**, in this order (`reference/vocabulary.md` has the details):
    - *Entities*: which columns describe one thing (an id with its name, symbol, taxon)? Group
      them; give the group a class; mark its id column `biolink:id` with its prefix and form.
+     The ids must come out as CURIEs with a Biolink prefix, or NodeNorm can't resolve them:
+     not the source's own tag (KEGG's `ko:`, `hsa:`) and not `native` when a registered
+     namespace fits (`reference/plan-format.md`).
    - *Row*: if a row relates two entities, type it as the most specific fitting Biolink
      association, give the entities their roles (`biolink:subject`, `biolink:object`), and add
      the predicate (constant, or a code column mapped with `codes`). Check the association's

@@ -568,17 +568,12 @@ def cmd_identify(args) -> None:
     _identify(args.values, args.limit)
 
 
-def _identify(values: list[str], limit: int) -> None:
+def identify(values: list[str]) -> list[tuple]:
+    """Registered prefixes whose id pattern fits every value, most specific first, as
+    (not_in_biolink, pattern_length, prefix, biolink_spelling_or_None, name, pattern)."""
     import bioregistry
 
     bl = {k.lower(): k for k in biolink_prefixes()}
-    if all(v.isdigit() for v in values):
-        print(
-            "All values are plain integers. Many registries use numeric ids, so the prefix must "
-            "come from "
-            "the column name or the knowledge base's documentation, not the values."
-        )
-        return
     hits = []
     for prefix, resource in bioregistry.read_registry().items():
         pattern = resource.get_pattern()
@@ -610,7 +605,18 @@ def _identify(values: list[str], limit: int) -> None:
                 )
             )
     hits.sort()
-    hits = [h[1:] for h in hits]
+    return [h[1:] for h in hits]
+
+
+def _identify(values: list[str], limit: int) -> None:
+    if all(v.isdigit() for v in values):
+        print(
+            "All values are plain integers. Many registries use numeric ids, so the prefix must "
+            "come from "
+            "the column name or the knowledge base's documentation, not the values."
+        )
+        return
+    hits = identify(values)
     if not hits:
         print(
             "No registered prefix has a specific pattern that fits; the prefix must come from "
