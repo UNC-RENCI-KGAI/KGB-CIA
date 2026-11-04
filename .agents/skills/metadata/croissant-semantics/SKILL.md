@@ -183,7 +183,8 @@ dependencies). Use `--help` on any of them.
      namespace fits (`reference/plan-format.md`).
    - *Row*: if a row relates two entities, type it as the most specific fitting Biolink
      association, give the entities their roles (`biolink:subject`, `biolink:object`), and add
-     the predicate (constant, or a code column mapped with `codes`). Check the association's
+     the predicate (constant, or a code column mapped with `codes`); without one the layout
+     builds no edges. Check the association's
      slot usage (`vocab.py class X`): its subject and object ranges must fit your entities'
      classes. Codes that negate or infer (`is_not_…`, `…_via_orthology`) need marking, not
      the direct predicate alone. If a row *is* a thing (a
