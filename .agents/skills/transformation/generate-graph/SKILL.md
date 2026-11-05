@@ -68,6 +68,13 @@ Mapping counts describe emitted source records; file counts describe merged node
 Entry-level publications must not become relationship evidence without an explicit
 association mapping.
 
+## Merge into one graph
+
+`scripts/merge_graphs.py GRAPHS OUTPUT` merges each source's stable normalized graph with ORION's
+`KGXFileMerger` and disk merger, so ORION's merge rules decide what counts as the same node or
+edge. Don't use ORION's `merge_kgx_files` for the full graph: it holds everything in memory. See
+`reference/orion_workflow.md`.
+
 ## Run through ORION
 
 Use the generated loader for parsing-only tests or generated `run_orion.py` for native
