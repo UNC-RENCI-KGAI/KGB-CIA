@@ -366,6 +366,16 @@ def check_predicates_present(plan: dict, f: "Findings") -> None:
         return not ent.get("no_id") and any(str(t).startswith("biolink:") for t in types)
 
     for lay in plan.get("layouts") or []:
+        row = lay.get("row") or {}
+        for ent in lay.get("entities") or []:
+            end = str(ent.get("role") or "").removeprefix("biolink:") in ("subject", "object")
+            if end and ent.get("no_id") and not row.get("no_predicate"):
+                f.warn(
+                    f"layout {lay['id']}",
+                    f"{ent.get('name')} is known only by name, so this layout builds no edges; "
+                    "map its names with vocab.py names (id_form native with codes), or set "
+                    "row.no_predicate to why they can't be",
+                )
         roles = {
             str(e.get("role") or "").removeprefix("biolink:")
             for e in lay.get("entities") or []
@@ -373,7 +383,6 @@ def check_predicates_present(plan: dict, f: "Findings") -> None:
         }
         if not {"subject", "object"} <= roles:
             continue
-        row = lay.get("row") or {}
         if (
             row.get("predicate")
             or row.get("no_predicate")
@@ -1077,6 +1086,7 @@ def is_ontology(prefix: str) -> bool:
 def emitted_prefix(value: str, row: dict, spec: dict, prefixes: dict) -> str | None:
     """The CURIE prefix transformation gives this node id (the same rules as its runtime), or
     None when the id is left without a namespace."""
+    mapped = value in (spec.get("codes") or {})
     if spec.get("codes"):
         value = str(spec["codes"].get(value, value))
     form = spec.get("id_form")
@@ -1091,7 +1101,7 @@ def emitted_prefix(value: str, row: dict, spec: dict, prefixes: dict) -> str | N
     if form == "url":
         hits = [p for p, uri in prefixes.items() if isinstance(uri, str) and value.startswith(uri)]
         return max(hits, key=lambda p: len(prefixes[p])) if hits else None
-    if form == "native":
+    if form == "native" and not mapped:
         return None  # the source's own tag, not a namespace
     return m.group(1) if (m := CURIE.match(value)) and not value.startswith("http") else None
 
@@ -1205,6 +1215,31 @@ def check_node_prefixes(
             )
 
 
+ABSENT_WORDS = {"not detected", "not expressed", "undetected", "negative", "absent"}
+
+
+def check_absent_rows(lay: dict, rows: list[dict], specs: dict, f: Findings) -> None:
+    """Rows that report a relationship wasn't found become false edges without absent_values."""
+    ends = {str(e.get("role") or "").removeprefix("biolink:") for e in lay.get("entities") or []}
+    if not {"subject", "object"} <= ends or (lay.get("row") or {}).get("no_predicate"):
+        return
+    if any(spec.get("absent_values") for spec in specs.values()):
+        return
+    for col in rows[0]:
+        if (specs.get(col) or {}).get("property") == "biolink:id":
+            continue
+        values = [str(r.get(col) or "").strip() for r in rows]
+        words = {v for v in values if v.casefold() in ABSENT_WORDS}
+        zeros = sum(1 for v in values if re.fullmatch(r"0+(\.0+)?", v))
+        if words or zeros > 0.05 * len(values):
+            what = sorted(words) if words else f"0 in {zeros} of {len(values)} sampled rows"
+            f.warn(
+                f"{lay['id']} {col}",
+                f"has {what}: if that reports the relationship wasn't found, set absent_values, "
+                "or those rows become false edges; if it doesn't, explain this warning",
+            )
+
+
 def check_data(
     original: dict, plan: dict, f: Findings, max_mb: float, model: dict | None = None
 ) -> None:
@@ -1255,6 +1290,7 @@ def check_data(
                 "check them another way and explain this warning, or say in notes.md why not",
             )
             continue
+        check_absent_rows(lay, rows, specs, f)
         passed = []
         # ids of the entities a row is about (subject/object); linked extras (a variant an allele
         # may have) may be empty

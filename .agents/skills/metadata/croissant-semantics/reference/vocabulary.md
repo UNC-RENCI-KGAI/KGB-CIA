@@ -67,6 +67,18 @@ the type only reaches option 3 or 4.
 - **No registered id.** A table of things whose only id is the knowledge base's own string key
   (a BRCA Exchange variant key) can still mark that column `biolink:id`, with
   `id_form: native` and the meaning in `basis`. Don't invent a prefix.
+- **Ids wrapped in something else.** Strip the wrapper with `item_pattern`: an IRI in angle
+  brackets (`<http://purl\.obolibrary\.org/obo/GO_(\d+)>`), or a taxon before the id
+  (`9606\.(ENSP\d+)`, which also keeps human rows only; the others drop with a diagnostic).
+- **One column, a different id family per file.** Profile with `--per-file --prefixes`, and when
+  species or files differ, split with `match.record_set_name`, one entry per family, rather than
+  marking the whole column `native`. Keep `native` for files whose values really are names.
+- **A tag that looks like a registered prefix.** Check that it means what the registry says
+  before using it. A cluster id written `CL:…` isn't a Cell Ontology term; such ids make false
+  nodes, so leave them out.
+- **Ids NodeNorm won't resolve.** After an honest try, leave them as they are and say so in
+  `notes.md`. Keep rows whose other end matters, and drop a layout only when neither end can
+  resolve and its rows add nothing.
 - A column spec may carry only `id_prefix` (and `list_separator`) with no `property`, for an id
   column whose role in the row you can't establish; the prefix is still useful.
 

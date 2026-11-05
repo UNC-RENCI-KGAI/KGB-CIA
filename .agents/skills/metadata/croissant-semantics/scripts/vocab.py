@@ -14,6 +14,9 @@
     vocab.py identify FBgn0031086 12345 # which registered prefixes a bare id could belong to
     vocab.py associations --subject ChemicalEntity --object Disease  # association classes that fit
     vocab.py term ECO:0000315           # an ontology term by CURIE (exact)
+    vocab.py names "Adrenal Gland" --type AnatomicalEntity --type Cell --prefixes UBERON,CL
+                                        # map names to ids NodeNorm resolves (NameRes, exact
+                                        # label or synonym only); --file F takes one per line
     vocab.py infores ChEMBL             # infores ids for a source name (knowledge_source)
     vocab.py infores-entry CROISSANT    # a catalog entry proposing an id the catalog lacks
     vocab.py unit "per molar second"    # QUDT units by label, UCUM code or symbol
@@ -669,6 +672,55 @@ def cmd_term(args) -> None:
         print("  OBSOLETE")
 
 
+NAMERES_URL = "https://name-resolution-sri.renci.org/bulk-lookup"
+NODENORM_URL = "https://nodenormalization-sri.renci.org/get_normalized_nodes"
+
+
+def _fold(name: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", name.casefold()).split())
+
+
+def exact_match(name: str, hits: list[dict]) -> str | None:
+    """The best-ranked NameRes hit whose label or a synonym is this name, ignoring case and
+    punctuation. Closest isn't good enough: a wrong id reads as a true fact in the graph."""
+    wanted = _fold(name)
+    for hit in hits:
+        if wanted in {_fold(s) for s in [hit.get("label") or "", *(hit.get("synonyms") or [])]}:
+            return hit.get("curie")
+    return None
+
+
+def cmd_names(args) -> None:
+    names = list(args.names)
+    if args.file:
+        names += [n.strip() for n in Path(args.file).read_text().splitlines() if n.strip()]
+    names = list(dict.fromkeys(names))
+    body = {"biolink_types": args.type, "limit": 20}
+    if args.prefixes:
+        body["only_prefixes"] = args.prefixes.replace(",", "|")
+    found = {}
+    for start in range(0, len(names), 100):
+        batch = names[start : start + 100]
+        r = requests.post(NAMERES_URL, json={**body, "strings": batch}, timeout=120)
+        r.raise_for_status()
+        for name, hits in r.json().items():
+            if curie := exact_match(name, hits):
+                found[name] = curie
+    curies = sorted(set(found.values()))
+    known = {}
+    for start in range(0, len(curies), 500):
+        r = requests.post(NODENORM_URL, json={"curies": curies[start : start + 500]}, timeout=120)
+        r.raise_for_status()
+        known.update(r.json())
+    codes = {n: c for n, c in found.items() if known.get(c)}
+    result = {"codes": codes, "unmapped": [n for n in names if n not in codes]}
+    if args.json:
+        Path(args.json).write_text(json.dumps(result, indent=1, ensure_ascii=False) + "\n")
+    print(f"{len(codes)} of {len(names)} names mapped")
+    if not args.json:
+        print(json.dumps(result, indent=1, ensure_ascii=False))
+
+
 def cmd_ols(args) -> None:
     params = {"q": args.text, "rows": args.limit}
     if args.ontology:
@@ -899,6 +951,13 @@ def main() -> None:
     p = sub.add_parser("term", help="an ontology term by CURIE, e.g. ECO:0000315")
     p.add_argument("curie")
     p.set_defaults(fn=cmd_term)
+    p = sub.add_parser("names", help="map names to ids NodeNorm resolves, exact matches only")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--file", help="one name per line")
+    p.add_argument("--type", action="append", default=[], help="Biolink class, repeatable")
+    p.add_argument("--prefixes", help="comma-separated, e.g. UBERON,CL")
+    p.add_argument("--json", help="write {codes, unmapped} to this file")
+    p.set_defaults(fn=cmd_names)
     p = sub.add_parser("infores", help="information-resource ids for a source name")
     p.add_argument("text")
     p.add_argument("--limit", type=int, default=10)

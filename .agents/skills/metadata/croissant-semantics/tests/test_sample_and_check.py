@@ -1,5 +1,6 @@
 """Tests for sample.py parsing and check.py's offline checks. No network."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -1251,6 +1252,11 @@ def test_node_ids_nodenorm_cant_resolve_are_flagged(monkeypatch):
     # ids with no namespace at all (STRING's COGs marked native)
     (w,) = warnings(["COG0001", "COG0002"], {"id_form": "native"}, "biolink:GeneFamily")
     assert "have no namespace" in w and "may fit Biolink's COG;" in w
+    # native names that codes map to CURIEs do get a namespace (HPA's tissue names)
+    codes = {"Liver": "MONDO:0000001", "Lung": "MONDO:0000002"}
+    assert (
+        warnings(["Liver", "Lung"], {"id_form": "native", "codes": codes}, "biolink:Disease") == []
+    )
     # CURIEs with a Biolink prefix marked native, and IRIs given no form
     (w,) = warnings(["MONDO:0000001", "MONDO:0000002"], {"id_form": "native"}, "biolink:Disease")
     assert "already CURIEs (MONDO): use id_form curie" in w
@@ -1317,3 +1323,79 @@ def test_a_subject_and_object_need_a_predicate():
     # an end that can't be a node builds no edge, whatever the predicate
     assert not errs(entities=[gene, {**pair[1], "no_id": "names only"}])
     assert not errs(entities=[gene, {**pair[1], "type": "rcv:x/Cluster"}])
+
+
+def test_a_file_two_knowledge_bases_read_is_planned_once(tmp_path):
+    import inventory
+
+    def write(name, urls, extra_sets=0):
+        dists = [
+            {"@id": f"f{i}", "@type": "cr:FileObject", "contentUrl": u} for i, u in enumerate(urls)
+        ]
+        sets = [
+            {
+                "@id": f"rs{i}",
+                "name": f"set{i}",
+                "field": [{"name": "a", "source": {"fileObject": {"@id": f"f{i}"}}}],
+            }
+            for i in range(len(urls))
+        ]
+        sets += [{"@id": f"x{i}", "name": f"x{i}", "field": []} for i in range(extra_sets)]
+        path = tmp_path / name / "croissant.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"distribution": dists, "recordSet": sets}))
+        return str(path)
+
+    big = write("big", ["u1", "u2", "u3"])
+    small = write("small", ["u1", "u4"])
+    copy = write("copy", ["u1", "u2"])
+    alone = write("alone", ["u9"])
+
+    assert inventory.shared_files(big, str(tmp_path))["record_sets_to_leave_out"] == []
+    found = inventory.shared_files(small, str(tmp_path))
+    assert found["shared_with"] == {"big": 1, "copy": 1}
+    assert found["record_sets_to_leave_out"] == ["set0"]
+    assert found["record_sets_to_plan"] == ["set1"]
+    assert inventory.shared_files(copy, str(tmp_path))["record_sets_to_plan"] == []
+    assert inventory.shared_files(alone, str(tmp_path))["shared_with"] == {}
+
+
+def test_exact_names_only():
+    import vocab
+
+    hits = [
+        {"curie": "UBERON:1", "label": "right adrenal gland", "synonyms": []},
+        {"curie": "UBERON:2", "label": "adrenal gland", "synonyms": ["Adrenal"]},
+    ]
+    assert vocab.exact_match("Adrenal Gland", hits) == "UBERON:2"
+    assert vocab.exact_match("adrenal", hits) == "UBERON:2"
+    assert vocab.exact_match("gland", hits) is None
+
+
+def test_warns_about_edges_lost_or_false():
+    import check
+
+    entities = [
+        {"name": "gene", "role": "biolink:subject", "type": "biolink:Gene"},
+        {
+            "name": "site",
+            "role": "biolink:object",
+            "type": "biolink:AnatomicalEntity",
+            "no_id": "x",
+        },
+    ]
+    f = Findings()
+    check.check_predicates_present({"layouts": [{"id": "l", "entities": entities}]}, f)
+    assert any("vocab.py names" in m for level, _, m in f.items if level == "warning")
+
+    lay = {"id": "l", "entities": entities}
+    f = Findings()
+    check.check_absent_rows(lay, [{"level": "Not detected", "g": "a"}], {}, f)
+    assert any("absent_values" in m for level, _, m in f.items if level == "warning")
+    f = Findings()
+    check.check_absent_rows(lay, [{"level": "x"}], {"level": {"absent_values": ["x"]}}, f)
+    assert not f.items
+    f = Findings()
+    rows = [{"nTPM": "0.0"}, {"nTPM": "4.1"}]
+    check.check_absent_rows(lay, rows, {}, f)
+    assert any("nTPM" in where for _, where, _ in f.items)
