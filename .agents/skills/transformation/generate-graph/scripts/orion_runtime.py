@@ -140,6 +140,23 @@ def raw_values(field, row):
     return value if isinstance(value, list) else [value]
 
 
+def is_absent(value, absent):
+    text = "" if value is None else str(value).strip()
+    if text in absent:
+        return True
+    try:
+        number = float(text)
+    except ValueError:
+        return False
+    for candidate in absent:
+        try:
+            if float(candidate) == number:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
 def values(field, row, prefixes):
     output = []
     for raw in raw_values(field, row):
@@ -362,6 +379,17 @@ class SemanticSourceLoader(SourceDataLoader):
         if key not in self._skip_keys:
             self.skips.append({"ref": ref, "name": None, "reason": reason})
             self._skip_keys.add(key)
+
+    def states_absence(self, rs, row, number):
+        """Whether the row reports the relationship wasn't found (the plan's absent_values)."""
+        for field in rs.get("absence_fields", []):
+            found = raw_values(field, row)
+            if found and all(is_absent(value, field["absent_values"]) for value in found):
+                self.diagnostic(
+                    rs["id"], f"Row skipped: {field['name']} reports absence", record=number
+                )
+                return True
+        return False
 
     def rows(self, rs, path):
         if rs["reader"] in {"json", "jsonl"}:
@@ -651,6 +679,8 @@ class SemanticSourceLoader(SourceDataLoader):
             for rs in self.mapping["record_sets"]:
                 for path in self.paths(rs["file"]):
                     for number, row in self.rows(rs, path):
+                        if self.states_absence(rs, row, number):
+                            continue
                         node_ids = [
                             self.emit_nodes(rs, entity, row, number) for entity in rs["entities"]
                         ]

@@ -113,7 +113,7 @@ Supported constructs include declared table dialects, JSON/JSONL key/index/wildc
 code tables, prefix columns, CSVW file nulls plus field null annotations, boolean mappings,
 lists, constants, grouped associations,
 and typed entity-role relationships. Header checks omit absent columns. JSON records stay
-aligned under a shared array root in both JSON and JSONL. Unknown codes and compound IDs become diagnostics.
+aligned under a shared array root in both JSON and JSONL. Unknown codes and compound IDs become diagnostics. Rows whose column holds one of its `rcv:absentValue`s report that the relationship wasn't found: they're skipped, with a diagnostic, even if that column has no Biolink property.
 Two multivalued endpoints are not cross-joined without explicit pairing semantics.
 
 XML/RDF, SQL, specialized dialects, and joins need reader adapters when explicit extraction

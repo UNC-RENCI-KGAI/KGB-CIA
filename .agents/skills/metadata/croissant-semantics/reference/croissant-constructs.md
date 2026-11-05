@@ -15,6 +15,7 @@ whose prefix is in `@context`; validators check structure, not meaning.
 | `list_separator` | An `annotation`: `equivalentProperty rcv:listSeparator`, `value` the separator |
 | `prefix_column` | An `annotation` `sh:prefix` whose value is read per row from the other column (its `source`) |
 | `true_values`, `null_values` | `annotation`s `rcv:trueValue` / `rcv:nullValue`, one per value |
+| `absent_values` | `annotation`s `rcv:absentValue`, one per value, as text |
 | `atomic` | Replaces the field's atomic `dataType` |
 | `id_form` `url`, `mixed` or `native` | An `annotation`: `equivalentProperty rcv:idForm`, `value` the form |
 | `codes` | A record set `codes_<hash>` typed `sc:Enumeration` with inline `data` (`name` → `url`), shared by every column (in any layout) with the same mapping, and `references` from the column to its `name` field |
@@ -52,6 +53,8 @@ Tools that don't know them still read the file; they just don't act on them.
 - **`qudt:hasUnit` annotation**: the unit of a numeric column.
 - **`rcv:listSeparator` annotation**: cells hold several values joined by this character.
 - **`rcv:nullValue` / `rcv:trueValue` annotations**: values meaning "no value" / "true".
+- **`rcv:absentValue` annotation**: a row with this value in this column reports that the
+  relationship was not found, so it builds no edge.
 - **`rcv:idForm` annotation**: the ids are full IRIs (`url`) or a mix of CURIEs and bare ids
   (`mixed`), so no single prefix applies.
 - **File dialects**: `csvw:dialect` (W3C CSVW properties) on a FileObject or FileSet, the
