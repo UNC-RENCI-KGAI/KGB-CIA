@@ -1107,3 +1107,32 @@ def test_emitted_prefix_follows_the_transformation_rules():
     assert emitted_prefix(url, {}, {"id_form": "url"}, prefixes) == "MONDO"
     assert emitted_prefix("path:map00010", {}, {"id_form": "native"}, {}) is None
     assert emitted_prefix("a", {}, {"codes": {"a": "MONDO:1"}}, {}) == "MONDO"
+
+
+def test_a_subject_and_object_need_a_predicate():
+    import check
+
+    def errs(**layout):
+        f = Findings()
+        check.check_predicates_present(plan_with(**layout), f)
+        return [m for level, _, m in f.items if level == "error"]
+
+    gene = {"name": "a", "type": "biolink:Gene", "role": "biolink:subject"}
+    pair = [gene, {"name": "b", "type": "biolink:Disease", "role": "biolink:object"}]
+    (e,) = errs(entities=pair, row={"type": "biolink:Association"})
+    assert "no predicate" in e
+    # a constant for every row, in either spelling, or a column holding it
+    assert not errs(entities=pair, row={"predicate": "biolink:related_to"})
+    constant = {"name": "p", "property": "biolink:predicate", "value": "biolink:related_to"}
+    assert not errs(entities=pair, constants=[constant])
+    assert not errs(entities=pair, columns={"rel": {"property": "biolink:predicate"}})
+    derived = {"derived": [{"name": "p", "property": "biolink:predicate"}]}
+    assert not errs(entities=pair, columns={"rel": derived})
+    # left out on purpose, with the reason
+    assert not errs(entities=pair, row={"no_predicate": "unfiltered candidates"})
+    # nothing to relate: a node list, or an entity linked to a row that is a thing
+    assert not errs(entities=pair[:1])
+    assert not errs(entities=[{"name": "g", "role": "biolink:has_gene"}], row={"type": "x"})
+    # an end that can't be a node builds no edge, whatever the predicate
+    assert not errs(entities=[gene, {**pair[1], "no_id": "names only"}])
+    assert not errs(entities=[gene, {**pair[1], "type": "rcv:x/Cluster"}])

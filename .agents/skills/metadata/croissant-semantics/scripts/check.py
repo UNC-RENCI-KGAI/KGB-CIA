@@ -353,6 +353,43 @@ def check_roles(plan: dict, f: "Findings", model: dict | None) -> None:
         check_predicate_fit(lay, f, model)
 
 
+def check_predicates_present(plan: dict, f: "Findings") -> None:
+    """A layout with a subject and an object needs a predicate, or it builds no edges: the
+    transformation stage emits the entities as nodes and drops the relationship. Ends that can't
+    be nodes (no id, or no Biolink class) build no edge either way, so a predicate wouldn't help.
+    row.no_predicate says why a layout deliberately has none, as an entity's no_id does."""
+
+    def can_be_a_node(ent: dict) -> bool:
+        types = as_list(ent.get("type"))
+        return not ent.get("no_id") and any(str(t).startswith("biolink:") for t in types)
+
+    for lay in plan.get("layouts") or []:
+        roles = {
+            str(e.get("role") or "").removeprefix("biolink:")
+            for e in lay.get("entities") or []
+            if can_be_a_node(e)
+        }
+        if not {"subject", "object"} <= roles:
+            continue
+        row = lay.get("row") or {}
+        if (
+            row.get("predicate")
+            or row.get("no_predicate")
+            or any(
+                spec.get("property") == "biolink:predicate"
+                for _, spec, kind in iter_assertions(lay)
+                if kind in ("constant", "column")
+            )
+        ):
+            continue
+        f.error(
+            f"layout {lay['id']}",
+            "has a subject and an object but no predicate, so its rows build no edges; set "
+            "row.predicate, or map the column that holds it to biolink:predicate with codes; if "
+            "edges would overstate these rows, set row.no_predicate to the reason",
+        )
+
+
 def _slot_constraint(model: dict, slot: str, which: str) -> str | None:
     """A Biolink slot's domain or range, inherited along is_a."""
     key = slot.removeprefix("biolink:").replace("_", " ")
@@ -2387,6 +2424,7 @@ def main() -> None:
     try:
         progress("checking the plan")
         check_plan(plan, f, model)
+        check_predicates_present(plan, f)
         check_units(plan, f)
         try:
             import vocab
