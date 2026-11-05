@@ -258,6 +258,187 @@ def test_infores_ids_must_be_in_the_catalog():
     assert len(warns) == 1 and "deprecated" in warns[0]
 
 
+def test_the_knowledge_base_names_its_own_infores_id():
+    from check import check_source_infores
+
+    catalog = {"infores:hgnc": {"status": "released", "name": "HGNC"}}
+    aggregator = {
+        "name": "agg",
+        "property": "biolink:aggregator_knowledge_source",
+        "value": "infores:hgnc",
+    }
+    hcop = {"kb": "orthologs", "layouts": [{"id": "l", "constants": [aggregator]}]}
+
+    def findings(plan, out):
+        f = Findings()
+        check_source_infores(plan, out, f, catalog, "orthologs")
+        return [(lv, m) for lv, _, m in f.items]
+
+    hgnc = {**hcop, "infores": "infores:hgnc"}
+    assert findings(hgnc, {"rcv:infores": "infores:hgnc"}) == [
+        ("note", "infores:hgnc (HGNC), infores catalog v1.1.14")
+    ]
+    # none: the error names what the plan's own constants say
+    [(level, msg)] = findings(hcop, {"name": "HCOP"})
+    assert level == "error" and "evidence gives infores:hgnc" in msg
+    # not in the catalog, or contradicting the plan's own constants
+    made_up = {**hcop, "infores": "infores:made-up"}
+    found = findings(made_up, {"rcv:infores": "infores:made-up"})
+    assert found[1][0] == "error" and "isn't in infores catalog v1.1.14" in found[1][1]
+    assert found[0][0] == "warning" and "constant gives infores:hgnc" in found[0][1]
+    # a croissant written from an older plan
+    errs = [m for lv, m in findings(hgnc, {}) if lv == "error"]
+    assert len(errs) == 1 and "re-run apply_plan.py" in errs[0]
+
+
+def test_a_plans_evidence_suggests_its_infores_id():
+    from vocab import suggest_infores
+
+    catalog = {
+        "infores:ncbi-gene": {"name": "NCBI Gene", "status": "released"},
+        "infores:ensembl-gene": {"name": "Ensembl gene", "status": "released"},
+        "infores:hgnc": {"name": "HGNC", "status": "released"},
+        "infores:kegg": {"name": "KEGG", "status": "released"},
+        "infores:bioplex-old": {"name": "BioPlex (old)", "status": "deprecated"},
+    }
+
+    def plan(slot=None, value=None):
+        consts = [{"name": "c", "property": f"biolink:{slot}", "value": value}] if slot else []
+        return {"layouts": [{"id": "l", "constants": consts}]}
+
+    def suggest(p, names, titles=()):
+        return suggest_infores(p, names, list(titles), catalog)
+
+    # the plan names itself as aggregator (HCOP's orthologs come from HGNC)
+    agg = plan("aggregator_knowledge_source", "infores:hgnc")
+    assert suggest(agg, ["orthologs"], ["HCOP"])["infores"] == "infores:hgnc"
+    # dashes, spaces and underscores are the same name
+    assert suggest(plan(), ["ncbi_gene"])["infores"] == "infores:ncbi-gene"
+    # a single primary source, when no name matches
+    kegg = plan("primary_knowledge_source", "infores:kegg")
+    assert suggest(kegg, ["kegg-pathways"], ["KEGG PATHWAY Database"])["infores"] == "infores:kegg"
+    # a slice of a registered resource takes its id
+    ensembl = suggest(plan(), ["ensembl-gene-ids"])
+    assert ensembl["infores"] == "infores:ensembl-gene" and not ensembl["proposed"]
+    # nothing: proposed, naming similar entries
+    bioplex = suggest(plan(), ["bioplex"], ["BioPlex"])
+    assert bioplex["infores"] == "infores:bioplex" and bioplex["proposed"]
+    assert "infores:bioplex-old" in bioplex["why"]
+
+
+def test_proposed_infores_ids_and_catalog_entries_follow_the_catalog_style():
+    import yaml
+    from vocab import infores_entry, is_infores_style, proposed_infores
+
+    assert proposed_infores("BioPlex") == "infores:bioplex"
+    assert proposed_infores("Expression Atlas (EBI)") == "infores:expression-atlas-ebi"
+    assert is_infores_style("infores:dark-kinase-knowledgebase")
+    assert not is_infores_style("infores:Dark_Kinase")
+    croissant = {
+        "name": "BioPlex",
+        "description": "Protein  interactions\nfrom AP-MS.",
+        "url": "https://bioplex.hms.harvard.edu/",
+    }
+    stanza = infores_entry(croissant, "infores:bioplex", "knowledge_assertion", "not_provided")
+    assert stanza.startswith("  - status: released\n")
+    assert "    xref:\n      - https://bioplex" in stanza  # indented, as the catalog's lint wants
+    [entry] = yaml.safe_load(stanza)
+    assert entry == {
+        "status": "released",
+        "name": "BioPlex",
+        "id": "infores:bioplex",
+        "description": "Protein interactions from AP-MS.",
+        "xref": ["https://bioplex.hms.harvard.edu/"],
+        "knowledge_level": "knowledge_assertion",
+        "agent_type": "not_provided",
+    }
+
+
+def test_edge_provenance_keeps_the_layouts_values_and_suggests_the_catalogs():
+    from check import check_edge_provenance
+
+    catalog = {
+        "infores:go": {"knowledge_level": "knowledge_assertion", "agent_type": "manual_agent"},
+        "infores:chembl": {"knowledge_level": "knowledge_assertion", "agent_type": "not_provided"},
+        "infores:gtopdb": {"knowledge_level": "mixed", "agent_type": "not_provided"},
+    }
+    edge = {"name": "gene", "role": "biolink:subject", "columns": {}}
+    go = {"infores": "infores:go"}
+
+    def const(slot, value):
+        return {"name": slot, "property": f"biolink:{slot}", "value": f"biolink:{value}"}
+
+    def findings(plan):
+        f = Findings()
+        check_edge_provenance(plan, f, catalog)
+        return [m for _, _, m in f.items]
+
+    # none mapped, no source named: the knowledge base itself is the primary source
+    [msg] = findings({**go, **plan_with(entities=[edge])})
+    assert "knowledge_level biolink:knowledge_assertion" in msg
+    assert "agent_type biolink:manual_agent" in msg and "layout constants" in msg
+    # the layout agrees with the catalog, or makes no edges: nothing to say
+    agree = [const("knowledge_level", "knowledge_assertion"), const("agent_type", "manual_agent")]
+    assert findings({**go, **plan_with(entities=[edge], constants=agree)}) == []
+    assert findings({**go, **plan_with()}) == []
+    # the layout disagrees: its values stand, and the difference is flagged
+    differ = [const("knowledge_level", "prediction"), const("agent_type", "manual_agent")]
+    [msg] = findings({**go, **plan_with(entities=[edge], constants=differ)})
+    assert "the layout's values stand" in msg
+    assert "infores:go knowledge_level biolink:prediction (catalog: knowledge_assertion)" in msg
+    # ... and with agent_type missing, the catalog's (for curated statements) isn't suggested
+    flagged, missing = findings({**go, **plan_with(entities=[edge], constants=differ[:1])})
+    assert "values stand" in flagged
+    assert (
+        "infores:go as knowledge_assertion" in missing and "these edges are prediction" in missing
+    )
+    assert "manual_agent" not in missing
+    # a source column: per-source values; "mixed" isn't a Biolink value, so not suggested
+    src = {
+        "property": "biolink:primary_knowledge_source",
+        "codes": {"ChEMBL": "infores:chembl", "IUPHAR": "infores:gtopdb"},
+    }
+    at = const("agent_type", "not_provided")
+    [msg] = findings(plan_with(entities=[edge], columns={"src": src}, constants=[at]))
+    assert "infores:chembl: knowledge_level biolink:knowledge_assertion" in msg
+    assert "gtopdb" not in msg and "derived field" in msg
+    # per-source values the layout codes on the source column are compared per source
+    kl = {
+        "name": "kl",
+        "property": "biolink:knowledge_level",
+        "codes": {"ChEMBL": "biolink:prediction", "IUPHAR": "biolink:prediction"},
+    }
+    coded = {**src, "derived": [kl]}
+    [msg] = findings(plan_with(entities=[edge], columns={"src": coded}, constants=[at]))
+    assert "infores:chembl knowledge_level biolink:prediction (catalog: knowledge_assertion)" in msg
+    assert "gtopdb" not in msg
+    # nothing usable in the catalog
+    [msg] = findings({"infores": "infores:gtopdb", **plan_with(entities=[edge], constants=[at])})
+    assert "gives none" in msg and "not_provided" in msg
+
+
+def test_a_proposed_infores_id_is_flagged_until_registered():
+    from check import check_source_infores
+
+    catalog = {"infores:hgnc": {"status": "released", "name": "HGNC"}}
+
+    def findings(iid, explained=None):
+        plan = {"infores": iid, "infores_proposed": True}
+        f = Findings(explained)
+        check_source_infores(plan, {"rcv:infores": iid, "rcv:inforesProposed": True}, f, catalog)
+        return [(lv, m) for lv, _, m in f.items]
+
+    [(level, msg)] = findings("infores:bioplex")
+    assert level == "warning" and "information-resource-registry" in msg
+    # explaining it doesn't hide it: it's for the user to act on
+    explained = [{"where": "plan infores", "message": "proposed", "reason": "known"}]
+    assert [lv for lv, _ in findings("infores:bioplex", explained)] == ["warning"]
+    [(level, msg)] = findings("infores:hgnc")
+    assert level == "error" and "drop infores_proposed" in msg
+    [(level, msg)] = findings("infores:BioPlex_3")
+    assert level == "error" and "infores:bioplex-3" in msg
+
+
 def test_gzip_only_tables_need_a_dialect():
     from check import check_formats
 

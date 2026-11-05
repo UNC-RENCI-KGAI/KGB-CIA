@@ -10,6 +10,7 @@ the plan itself is kept next to the result as the record of what was asserted an
 ```json
 {
   "kb": "ctd",
+  "infores": "infores:ctd",
   "croissant": "kbs/ctd/croissant.json",
   "biolink_version": "v4.4.6",
   "prefixes": { "NCBIGene": "http://identifiers.org/ncbigene/", "MESH": "http://id.nlm.nih.gov/mesh/" },
@@ -23,6 +24,17 @@ the plan itself is kept next to the result as the record of what was asserted an
 }
 ```
 
+- `infores`: the knowledge base's own information-resource id, from `vocab.py infores NAME`,
+  which searches the infores catalog at the release pinned in `vocab.py` (`INFORES_VERSION`).
+  Required: `apply_plan.py` writes it on the dataset as `rcv:infores`, and graph builders cite
+  it as the source of every record they read from these files. It's the knowledge base's
+  identity, not a statement about its rows: when rows come from other sources (an aggregator
+  such as DrugCentral), map those per layout with `biolink:primary_knowledge_source` as below.
+- `infores_proposed`: `true` when the catalog has no entry for the knowledge base, so `infores`
+  is an id proposed in the catalog's style (`infores:bioplex`). `apply_plan.py` marks it
+  `rcv:inforesProposed` on the dataset; `check.py` warns until it's registered. Its catalog
+  entry (`vocab.py infores-entry`) goes in `notes.md` for the user to submit; once it's merged,
+  raise `INFORES_VERSION` in `vocab.py` and drop this key.
 - `prefixes`: every CURIE prefix used anywhere in the plan (types, properties, id prefixes,
   code mappings, constant values) **and** every prefix that appears in the data's CURIE values.
   `biolink`, `skos`, `sh`, `qudt`, `unit`, `rcv`, `infores`, `csvw`, `rdfs`, `sc`, `cr` are built in.
@@ -247,6 +259,24 @@ try the full name too: CSAR is `infores:community-sar`). The check rejects ids t
 the catalog. For a source with no infores id, leave it unmapped. The check warns about it, and `notes.md` lists it as a question for the maintainers
 (a new infores entry is the fix). Don't invent infores ids, and don't make local terms for
 sources unless the knowledge base documents them as its own.
+
+How each source made its statements goes on the same column, as `derived` fields coded per
+source, starting from the catalog's values for each (`vocab.py infores NAME` shows them). Values
+you set stand; `check.py` flags those that differ from the catalog's. A `knowledge_level` or
+`agent_type` value that isn't a Biolink one (`curated`, the catalog's `mixed` or `other`) is
+written as the closest Biolink value (`knowledge_assertion`, `not_provided`), with a warning:
+
+```json
+"source": {
+  "property": "biolink:primary_knowledge_source",
+  "codes": { "ChEMBL": "infores:chembl", "DrugMatrix": "infores:drugmatrix" },
+  "derived": [ { "name": "knowledge_level", "property": "biolink:knowledge_level",
+                 "codes": { "ChEMBL": "biolink:knowledge_assertion",
+                            "DrugMatrix": "biolink:knowledge_assertion" },
+                 "basis": "infores catalog values for each source", "source": "documentation",
+                 "confidence": "medium" } ]
+}
+```
 
 ### Repeated groups of columns
 

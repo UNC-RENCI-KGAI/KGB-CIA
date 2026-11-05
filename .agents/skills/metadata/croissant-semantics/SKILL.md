@@ -51,6 +51,26 @@ dependencies). Use `--help` on any of them.
    croissant) and how record sets spread over layouts. Large knowledge bases have hundreds of
    layouts; work from the top of the list.
 
+   Find the knowledge base's own infores id now (`vocab.py infores NAME`; try its full name, its
+   acronym and its url) and set it as the plan's `infores`. It names the resource whose files
+   these are, and graph builders cite it as the source of everything read from them: without
+   it, the transformation stage won't build the knowledge base at all. When several entries
+   match, pick the one for the resource that publishes these files, not a service that
+   re-serves it (`infores:reactome`, not `infores:automat-reactome`). `check.py` compares it
+   with what the rest of your plan says: a single aggregator or provided_by constant names the
+   knowledge base too (HCOP's orthologs are aggregated by `infores:hgnc`), and a mismatch is a
+   warning to resolve.
+
+   When none does, propose one: `infores:` and the knowledge base's short name in lowercase
+   words joined by dashes (`infores:bioplex`, `infores:expression-atlas`), with
+   `"infores_proposed": true` in the plan. Then write its catalog entry with
+   `vocab.py infores-entry CROISSANT --id infores:NAME`, adding `--knowledge-level` and
+   `--agent-type` when the documentation makes them clear, and put it in `notes.md` under a
+   heading **Infores id to register**, near the top. Say there that the user should register it
+   with a pull request to the infores registry (the command prints where), and that the id may
+   change in review. `check.py` keeps a warning on a proposed id until it's registered; don't
+   explain it away.
+
 2. **Pick the layouts to do.** Aim for the layouts that cover most record sets and the core
    content (associations and the main entity tables) — typically the top 5–15, or until the
    remaining layouts are minor (readme-like files, logs, per-release counts). If there are many
@@ -191,6 +211,18 @@ dependencies). Use `--help` on any of them.
      variant, a gene, with a unique id per row), type the row with that thing's class, map its own columns directly, and
      link the other things it mentions as entities with roles like `biolink:has_gene`. Many
      layouts sharing columns? Define specs once in `column_library`.
+   - *How the statements were made*: every layout that makes edges gets `biolink:knowledge_level`
+     and `biolink:agent_type` (a downstream graph says `not_provided` otherwise, and the
+     explanation of each edge is lost). Start from the infores catalog's values for the edges'
+     primary knowledge source (`vocab.py infores NAME` shows both; the knowledge base's own entry
+     when its rows don't name another source), as layout constants, or as a derived field coded
+     per source when a column names the source. What the layout says always stands over the
+     catalog: the catalog describes a resource's usual statements, so HGNC's `manual_agent`
+     doesn't fit the orthology predictions it collects. `check.py` suggests the catalog's values
+     where the layout has none, and flags where the layout's differ, for you to confirm against
+     the documentation (and mention in `notes.md`). A value that isn't a Biolink one (`curated`,
+     the catalog's `mixed`) is written as the closest Biolink value, with a warning; put that
+     value in the plan.
    - *Dialect*: for tables that aren't plain CSV/TSV with a header row, the layout's `dialect`.
      When the croissant labels a file with a type mlcroissant can't read (`text/plain` for a TSV,
      gzip alone, `application/parquet`), the layout's `encoding_format` corrects it.
