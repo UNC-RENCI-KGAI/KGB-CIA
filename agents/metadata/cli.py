@@ -1,12 +1,15 @@
-"""Command-line entry point for the Metadata agent.
+"""Pipeline CLI for the metadata stage's semantics step.
 
-Replace the body of `main` with the real agent. Keep the signature so `shared/pipeline.py`
-and the `kgb-*` console scripts keep working.
+Thin wrapper around `semantics.run`, which applies and checks each source's semantics plan and
+skips sources whose inputs haven't changed. Keep DESCRIPTION and main's signature.
 """
 
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+
+from agents.metadata import semantics
 
 DESCRIPTION = (
     "Describe each source file and its columns as Croissant metadata. Purely descriptive; "
@@ -16,12 +19,28 @@ DESCRIPTION = (
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=DESCRIPTION)
-    parser.add_argument("--input", help="path to the previous stage's output")
-    parser.add_argument("--output", help="where to write this stage's output")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path("data/croissants"),
+        help="prepared croissants, one directory per source (default: data/croissants)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/metadata"),
+        help="semantic Croissant bundles, one directory per source (default: data/metadata)",
+    )
+    parser.add_argument(
+        "--plans",
+        type=Path,
+        help="earlier bundles to take a source's semantics_plan.json from when it has none yet",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="apply and check every source even if unchanged"
+    )
     args = parser.parse_args(argv)
-    print("Metadata agent: not implemented yet")
-    print(f"  input={args.input} output={args.output}")
-    return 0
+    return semantics.run(args.input, args.output, args.plans, args.force)
 
 
 if __name__ == "__main__":
