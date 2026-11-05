@@ -16,7 +16,8 @@ Checks, in order:
   2. Data (unless --no-data): reads a sample of each layout (with the layout's dialect, if any)
      and checks that the dialect reads the files into the croissant's columns, id columns
      against their declared prefix (Bioregistry pattern for bare ids, the prefix itself for
-     CURIEs) and that code columns only hold codes the plan maps.
+     CURIEs), that node ids end up with a Biolink prefix NodeNorm can resolve, and that code
+     columns only hold codes the plan maps.
   3. Croissant: mlcroissant validate on OUT (unless --no-validate). With --load-records, reads a
      few records of one record set per layout through mlcroissant. It doesn't download whole
      files: it takes the first complete lines (about 2 MB) of each file and points a small copy
@@ -40,11 +41,13 @@ import dialects  # noqa: E402
 from apply_plan import (
     ATOMIC,
     CONTEXT_TERMS,
+    EDGE_PROVENANCE,
     VOCAB,
     PlanError,
     answers_path,
     match_record_sets,
     merge_answers,
+    normalize_edge_provenance,
     resolve_plan,
 )
 from common import (
@@ -352,6 +355,43 @@ def check_roles(plan: dict, f: "Findings", model: dict | None) -> None:
         check_predicate_fit(lay, f, model)
 
 
+def check_predicates_present(plan: dict, f: "Findings") -> None:
+    """A layout with a subject and an object needs a predicate, or it builds no edges: the
+    transformation stage emits the entities as nodes and drops the relationship. Ends that can't
+    be nodes (no id, or no Biolink class) build no edge either way, so a predicate wouldn't help.
+    row.no_predicate says why a layout deliberately has none, as an entity's no_id does."""
+
+    def can_be_a_node(ent: dict) -> bool:
+        types = as_list(ent.get("type"))
+        return not ent.get("no_id") and any(str(t).startswith("biolink:") for t in types)
+
+    for lay in plan.get("layouts") or []:
+        roles = {
+            str(e.get("role") or "").removeprefix("biolink:")
+            for e in lay.get("entities") or []
+            if can_be_a_node(e)
+        }
+        if not {"subject", "object"} <= roles:
+            continue
+        row = lay.get("row") or {}
+        if (
+            row.get("predicate")
+            or row.get("no_predicate")
+            or any(
+                spec.get("property") == "biolink:predicate"
+                for _, spec, kind in iter_assertions(lay)
+                if kind in ("constant", "column")
+            )
+        ):
+            continue
+        f.error(
+            f"layout {lay['id']}",
+            "has a subject and an object but no predicate, so its rows build no edges; set "
+            "row.predicate, or map the column that holds it to biolink:predicate with codes; if "
+            "edges would overstate these rows, set row.no_predicate to the reason",
+        )
+
+
 def _slot_constraint(model: dict, slot: str, which: str) -> str | None:
     """A Biolink slot's domain or range, inherited along is_a."""
     key = slot.removeprefix("biolink:").replace("_", " ")
@@ -631,6 +671,208 @@ def check_infores(plan: dict, f: "Findings", catalog: dict | None) -> None:
             f.warn(iid, f"infores status is {entry.get('status')!r}, not released")
 
 
+def check_source_infores(
+    plan: dict, out: dict, f: "Findings", catalog: dict | None, bundle: str | None = None
+) -> None:
+    """The plan names the knowledge base's own infores id, from the catalog or proposed when the
+    catalog has none, and the croissant carries it as rcv:infores. Graph builders cite it as the
+    source of every record, so a proposed id is flagged until it's registered. The id is compared
+    with what the plan's own evidence says (vocab.suggest_infores: its aggregator or provided_by
+    constants, its names); bundle is the output directory's name."""
+    import vocab
+
+    iid = plan.get("infores")
+    evidence = None
+    if catalog is not None:
+        names, titles = [plan.get("kb"), bundle], [text(out.get("name"))]
+        evidence = vocab.suggest_infores(plan, names, titles, catalog)
+    if iid is None:
+        hint = ""
+        if evidence:
+            hint = f". The plan's evidence gives {evidence['infores']} ({evidence['why']})" + (
+                ', proposed with "infores_proposed": true' if evidence["proposed"] else ""
+            )
+        f.error(
+            "plan infores",
+            "the plan doesn't say which information resource the knowledge base is: set infores "
+            "to its id (vocab.py infores NAME), or, if the catalog has none, propose one with "
+            '"infores_proposed": true' + hint,
+        )
+        return
+    proposed = bool(plan.get("infores_proposed"))
+    if out.get("rcv:infores") != iid or bool(out.get("rcv:inforesProposed")) != proposed:
+        f.error(
+            "croissant rcv:infores",
+            f"doesn't match the plan's infores ({iid}"
+            + (", proposed" if proposed else "")
+            + "); re-run apply_plan.py",
+        )
+    if catalog is None:
+        f.warn("plan infores", f"couldn't load the infores catalog; {iid} unchecked")
+        return
+    if evidence and not evidence["proposed"] and evidence["infores"] != iid:
+        f.warn(
+            "plan infores",
+            f"the plan's infores is {iid}, but {evidence['why']} gives {evidence['infores']}: use "
+            f"that, or explain why the knowledge base is {iid}",
+        )
+    entry = catalog.get(iid)
+    if proposed:
+        if entry is not None:
+            f.error(
+                "plan infores",
+                f"{iid} is in infores catalog {vocab.INFORES_VERSION} ({entry.get('name')}): "
+                "check it's this knowledge base, then drop infores_proposed",
+            )
+        elif not vocab.is_infores_style(iid):
+            f.error(
+                "plan infores",
+                f"proposed {iid} doesn't follow the catalog's style: lowercase words joined by "
+                f"dashes, such as {vocab.proposed_infores(iid.removeprefix('infores:'))}",
+            )
+        else:
+            # not f.warn: an `explained` entry can't turn this into a note. It stays a warning,
+            # for the user to act on, until the id is registered
+            f.items.append(
+                (
+                    "warning",
+                    "plan infores",
+                    f"{iid} is proposed, not registered: the graph will cite an id no other "
+                    f"resource knows. Ask the user to register it with a pull request to "
+                    f"{vocab.INFORES_REGISTRY} (entry from vocab.py infores-entry CROISSANT, in "
+                    f"notes.md), then raise INFORES_VERSION and drop infores_proposed",
+                )
+            )
+        return
+    if entry is None:
+        f.error(
+            "plan infores",
+            f"{iid} isn't in infores catalog {vocab.INFORES_VERSION}; find the right id with "
+            'vocab.py infores NAME, or propose one with "infores_proposed": true',
+        )
+    elif entry.get("status") != "released":
+        f.warn("plan infores", f"{iid} has infores status {entry.get('status')!r}, not released")
+    else:
+        f.note(
+            "plan infores", f"{iid} ({entry.get('name')}), infores catalog {vocab.INFORES_VERSION}"
+        )
+
+
+EDGE_SLOTS = ("knowledge_level", "agent_type")
+
+
+def check_edge_provenance(plan: dict, f: "Findings", catalog: dict | None) -> None:
+    """Every layout that makes edges (entities with roles) says how its statements were made:
+    knowledge_level and agent_type. The layout's values always stand; where they differ from the
+    infores catalog's for the edges' primary knowledge source (the layout's constant, each code
+    of its source column, or else the knowledge base itself), that's flagged for review. Where
+    the layout has none, the catalog's are suggested."""
+    import vocab
+
+    # Biolink's values; the catalog also uses mixed and other, which aren't
+    valid = {
+        s: set(EDGE_PROVENANCE[f"biolink:{s}"]["values"]) - {"not_provided"} for s in EDGE_SLOTS
+    }
+    for lay in plan.get("layouts") or []:
+        if not any(ent.get("role") for ent in lay.get("entities") or []):
+            continue
+        mapped, sources, per_row = set(), set(), False
+        stated = {s: set() for s in EDGE_SLOTS}  # layout constants
+        by_source: dict[str, dict] = {}  # infores id -> slot -> value, from per-source codes
+        for _, spec, _ in iter_assertions(lay):
+            prop = str(spec.get("property") or "").removeprefix("biolink:")
+            mapped.add(prop)
+            if prop in EDGE_SLOTS and spec.get("value"):
+                stated[prop].add(str(spec["value"]).removeprefix("biolink:"))
+            if prop != "primary_knowledge_source":
+                continue
+            if "value" in spec:
+                sources.add(spec["value"])
+                continue
+            per_row = True
+            codes = spec.get("codes") or {}
+            sources.update(v for v in codes.values() if v)
+            for d in spec.get("derived") or []:
+                slot = str(d.get("property") or "").removeprefix("biolink:")
+                for code, value in (d.get("codes") or {}).items() if slot in EDGE_SLOTS else ():
+                    if codes.get(code):
+                        by_source.setdefault(codes[code], {})[slot] = str(value).removeprefix(
+                            "biolink:"
+                        )
+        if not sources and not per_row and plan.get("infores"):
+            sources = {plan["infores"]}
+        where = f"layout {lay.get('id')}"
+        missing = [s for s in EDGE_SLOTS if s not in mapped]
+        if catalog is None or not sources:
+            if missing:
+                f.warn(
+                    where, f"edges have no {' and '.join(missing)}: map them from the documentation"
+                )
+            continue
+
+        def ours(src: str, slot: str, by_source=by_source, stated=stated) -> str | None:
+            """The layout's value for a source's edges: per source, else its one constant."""
+            mine = by_source.get(src, {}).get(slot)
+            return mine or (next(iter(stated[slot])) if len(stated[slot]) == 1 else None)
+
+        differ, suggested, unlike = [], {}, {}
+        for src in sorted(sources):
+            entry = catalog.get(src) or {}
+            theirs = {s: entry.get(s) for s in EDGE_SLOTS if entry.get(s) in valid[s]}
+            for slot, value in theirs.items():
+                if ours(src, slot) and ours(src, slot) != value:
+                    differ.append(f"{src} {slot} biolink:{ours(src, slot)} (catalog: {value})")
+            if not missing:
+                continue
+            kl = ours(src, "knowledge_level")
+            if kl and theirs.get("knowledge_level") and kl != theirs["knowledge_level"]:
+                # the catalog describes the resource's usual statements (HGNC: curated, by
+                # hand), not these (HGNC's orthology predictions); its agent_type won't fit
+                unlike[src] = (theirs["knowledge_level"], kl)
+            elif values := {s: theirs[s] for s in missing if s in theirs}:
+                suggested[src] = values
+        if differ:
+            f.warn(
+                where,
+                f"the layout's values stand, but differ from infores catalog "
+                f"{vocab.INFORES_VERSION}: {'; '.join(differ)}. Check them against the "
+                "documentation",
+            )
+        if not missing:
+            continue
+        need = " and ".join(missing)
+        if suggested:
+            said = "; ".join(
+                f"{src}: " + ", ".join(f"{s} biolink:{v}" for s, v in values.items())
+                for src, values in suggested.items()
+            )
+            how = "layout constants"
+            if per_row:
+                how = "a derived field on the source column, coded per source"
+            f.warn(
+                where,
+                f"edges have no {need}; infores catalog {vocab.INFORES_VERSION} says {said}. Add "
+                f"them as {how} (or values the documentation supports better)",
+            )
+        elif unlike:
+            f.warn(
+                where,
+                f"edges have no {need}. Infores catalog {vocab.INFORES_VERSION} describes "
+                + ", ".join(f"{s} as {cat}" for s, (cat, _) in unlike.items())
+                + ", but these edges are "
+                + ", ".join(sorted({mine for _, mine in unlike.values()}))
+                + ", so its values don't fit them: map them from the documentation, or set "
+                "biolink:not_provided",
+            )
+        else:
+            f.warn(
+                where,
+                f"edges have no {need}, and infores catalog {vocab.INFORES_VERSION} gives none for "
+                f"{', '.join(sorted(sources))}: map them from the documentation, or set "
+                "biolink:not_provided to say they aren't known",
+            )
+
+
 _INFORES: list = []  # the catalog, loaded once by the first data check that needs it
 
 
@@ -832,6 +1074,137 @@ def is_ontology(prefix: str) -> bool:
     return _ONTOLOGY[prefix]
 
 
+def emitted_prefix(value: str, row: dict, spec: dict, prefixes: dict) -> str | None:
+    """The CURIE prefix transformation gives this node id (the same rules as its runtime), or
+    None when the id is left without a namespace."""
+    if spec.get("codes"):
+        value = str(spec["codes"].get(value, value))
+    form = spec.get("id_form")
+    if spec.get("prefix_column"):
+        pre = str(row.get(spec["prefix_column"]) or "").strip()
+        return (spec.get("prefix_codes") or {}).get(pre, pre) or None
+    if spec.get("id_prefix"):
+        own = CURIE.match(value)
+        return own.group(1) if form == "mixed" and own else spec["id_prefix"]
+    if form == "obo":
+        return m.group(1) if (m := OBO_ID.match(value)) else None
+    if form == "url":
+        hits = [p for p, uri in prefixes.items() if isinstance(uri, str) and value.startswith(uri)]
+        return max(hits, key=lambda p: len(prefixes[p])) if hits else None
+    if form == "native":
+        return None  # the source's own tag, not a namespace
+    return m.group(1) if (m := CURIE.match(value)) and not value.startswith("http") else None
+
+
+def _biolink_fits(values: list[str]) -> list[str]:
+    """Biolink prefixes whose own registered id pattern fits every value: those whose pattern
+    names the values' leading letters first (COG for COG0001), then the most specific."""
+    import bioregistry
+    import vocab
+
+    values = list(dict.fromkeys(values))[:20]
+    # integers fit many registries' patterns; their namespace comes from documentation
+    if not values or all(v.isdigit() for v in values):
+        return []
+    fits = []
+    for prefix in vocab.biolink_prefixes():
+        pattern = bioregistry.get_pattern(bioregistry.normalize_prefix(prefix) or prefix)
+        try:
+            rx = re.compile(pattern) if pattern else None
+        except re.error:
+            continue
+        if rx is None or sum(bool(rx.fullmatch(p)) for p in vocab.CATCH_ALL_PROBES) >= 2:
+            continue
+        if all(rx.fullmatch(v) for v in values):
+            fits.append((-vocab._anchor(pattern, values), len(pattern), prefix))
+    fits.sort()
+    if fits and fits[0][0] < 0:
+        # patterns naming the values' letters (rs for DBSNP, COG) beat ones that merely allow them
+        fits = [fit for fit in fits if fit[0] == fits[0][0]]
+    return [prefix for *_, prefix in fits[:2]]
+
+
+def check_node_prefixes(
+    where: str, pairs: list, spec: dict, etype: str, model: dict | None, plan: dict, f: Findings
+) -> None:
+    """Node ids NodeNorm can't resolve: no namespace, a prefix Biolink doesn't have, or one
+    Biolink doesn't list for the node's category. Their nodes stay unresolved in the graph."""
+    import bioregistry
+    import vocab
+
+    if not pairs:
+        return
+    biolink = vocab.biolink_prefixes()
+    lower = {p.lower(): p for p in biolink}
+    emitted = [(v, emitted_prefix(v, r, spec, plan.get("prefixes") or {})) for v, r in pairs]
+    got = Counter(p for _, p in emitted)
+    total = len(pairs)
+
+    def advice(values):
+        iris = [v for v in values if v.lstrip("<").startswith(("http://", "https://"))]
+        if len(iris) >= len(values) / 2:
+            return "; the values are IRIs: use id_form url and declare their namespaces"
+        tagged = [v for v in values if CURIE.match(v)]
+        tags = Counter(CURIE.match(v).group(1) for v in tagged)
+        if tags and all(t in biolink for t in tags) and len(tagged) >= len(values) / 2:
+            # already CURIEs with Biolink prefixes (GO:0006139), only marked native or bare
+            return f"; they are already CURIEs ({', '.join(tags)}): use id_form curie"
+        # the source's own tag in front of a registered id (KEGG's ko:K00001, md:M00001)
+        if len(tagged) < len(values) / 2:
+            fits = _biolink_fits(values)
+            return f"; set id_prefix{suggest(fits)}" if fits else ""
+        tag = CURIE.match(tagged[0]).group(1)
+        fits = _biolink_fits([CURIE.match(v).group(2) for v in tagged])
+        strip = f"; strip the source's {tag}: tag with item_pattern '{tag}:(.+)' and set id_prefix"
+        return strip + suggest(fits)
+
+    def suggest(fits):
+        if not fits:
+            return ""
+        return f" (the ids may fit Biolink's {' or '.join(fits)}; confirm with vocab.py prefix)"
+
+    if got[None] > 0.05 * total:
+        bare = list(dict.fromkeys(v for v, p in emitted if p is None))
+        f.warn(
+            where,
+            f"{got[None]}/{total} sampled {etype} ids have no namespace (e.g. {bare[:3]}), so "
+            "NodeNorm can't resolve them and their nodes stay unresolved" + advice(bare),
+        )
+    allowed = []
+    key = _class_key(model, etype) if model else None
+    if key:
+        # a class's own prefixes, its ancestors', and its subclasses' (DiseaseOrPhenotypicFeature
+        # lists only MESH, UMLS and KEGG.BRITE; its EFO, MONDO and HP ids are Disease's and
+        # PhenotypicFeature's)
+        related = class_lineage(model, key) + [
+            k for k in model["classes"] if k != key and key in class_lineage(model, k)
+        ]
+        for k in related:
+            allowed += model["classes"][k].get("id_prefixes") or []
+    for prefix, n in got.most_common():
+        if prefix is None or n <= 0.05 * total:
+            continue
+        if prefix not in biolink:
+            norm = bioregistry.normalize_prefix(prefix)
+            same = lower.get(prefix.lower()) or next(
+                (b for b in biolink if norm and bioregistry.normalize_prefix(b) == norm), None
+            )
+            values = [v for v, p in emitted if p == prefix]
+            f.warn(
+                where,
+                f"{n}/{total} sampled {etype} ids get prefix {prefix}, which isn't a Biolink "
+                "prefix, so NodeNorm can't resolve them"
+                + (f"; Biolink writes it {same}" if same else advice(values)),
+            )
+        elif allowed and prefix not in allowed and not spec.get("id_prefix"):
+            # (a declared id_prefix is checked against the category in check_plan)
+            f.warn(
+                where,
+                f"{n}/{total} sampled ids use {prefix}, which Biolink doesn't list as an id prefix "
+                f"for {etype} (it lists {', '.join(allowed[:8])})",
+            )
+
+
 def check_data(
     original: dict, plan: dict, f: Findings, max_mb: float, model: dict | None = None
 ) -> None:
@@ -915,6 +1288,17 @@ def check_data(
         row_ids = [
             c for c, sp in (lay.get("columns") or {}).items() if sp.get("property") == "biolink:id"
         ]
+        # node id columns and the Biolink category of the node each one names
+        node_types = {
+            c: t
+            for e in lay.get("entities") or []
+            for t in as_list(e.get("type"))[:1]
+            if str(t).startswith("biolink:")
+            for c, sp in (e.get("columns") or {}).items()
+            if sp.get("property") in ("biolink:id", "sc:identifier")
+        }
+        if rows_are_things:
+            node_types.update({c: row_type for c in row_ids})
         checks = [(col, spec, f"{lay['id']} {col}") for col, spec in specs.items()]
         checks += [
             (col, d, f"{lay['id']} {col} -> {d.get('name')}")
@@ -1137,6 +1521,8 @@ def check_data(
                         f"{list(dict.fromkeys(values))[:3]}); add id_prefix or codes, or use "
                         "another property",
                     )
+            if col in node_types and spec in specs.values():
+                check_node_prefixes(where, pairs, spec, node_types[col], model, plan, f)
             if spec.get("id_prefix") == "infores" or (
                 form in ("curie", "mixed") and any(v.startswith("infores:") for v in values)
             ):
@@ -2221,6 +2607,9 @@ def main() -> None:
         )
     out = load_croissant(args.out)
     f = Findings(plan.get("explained"))
+    # as apply_plan.py writes them, so the checks see what's in the croissant
+    for where, msg in normalize_edge_provenance(plan):
+        f.warn(where, f"{msg} (put that in the plan)")
     for ln in answer_lines:
         (f.warn if "matched no layout" in ln else f.note)("maintainer answers", ln)
     for e in plan.get("explained") or []:
@@ -2242,6 +2631,7 @@ def main() -> None:
     try:
         progress("checking the plan")
         check_plan(plan, f, model)
+        check_predicates_present(plan, f)
         check_units(plan, f)
         try:
             import vocab
@@ -2251,6 +2641,8 @@ def main() -> None:
             progress(f"couldn't load the infores catalog: {e}")
             catalog = None
         check_infores(plan, f, catalog)
+        check_source_infores(plan, out, f, catalog, Path(args.out).parent.name)
+        check_edge_provenance(plan, f, catalog)
         check_formats(original, plan, f)
         check_roles(plan, f, model)
         check_code_merges(plan, f)
