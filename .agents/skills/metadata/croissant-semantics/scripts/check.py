@@ -604,6 +604,11 @@ def identifier_valued(model: dict, slot: str) -> bool:
     return rng in ("uriorcurie", "iri type") or rng in model["classes"]
 
 
+ROWS_READ = 20000  # read from each sampled file, within --max-mb
+ROWS_CHECKED = 300  # of those, spread evenly
+MAX_RESOLVE_SAMPLE = 200  # ids per column sent to NodeNorm
+
+
 def progress(msg: str) -> None:
     print(f"[check] {msg}", file=sys.stderr, flush=True)
 
@@ -617,6 +622,12 @@ def _list_items(cell: str, list_format: str) -> list[str]:
     except (ValueError, SyntaxError):
         return [cell]  # not a list after all: checked as one value, so a misfit shows
     return [str(i) for i in items] if isinstance(items, (list, tuple)) else [str(items)]
+
+
+def spread(rows: list, n: int = ROWS_CHECKED) -> list:
+    """n rows from across what was read: files are often sorted, so the first rows can hide a
+    problem that's common further down."""
+    return rows if len(rows) <= n else [rows[i * len(rows) // n] for i in range(n)]
 
 
 def _values(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
@@ -637,9 +648,13 @@ def _values(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
             parts = [p.strip() for p in parts if p.strip() and p.strip() not in skip]
             if spec.get("item_pattern"):
                 # compound items (`HP:0001250|Seizure`, `TP53|7157|SRC`): the id is the first group;
-                # an item the pattern doesn't fit is kept whole, so it shows as a misfit
+                # an item the pattern doesn't fit is kept whole, so it shows as a misfit, unless
+                # drop_unmatched says those rows are left out on purpose
                 pat = re.compile(spec["item_pattern"])
-                parts = [m.group(1) if (m := pat.match(p)) and m.group(1) else p for p in parts]
+                if spec.get("drop_unmatched"):
+                    parts = [m.group(1) for p in parts if (m := pat.fullmatch(p))]
+                else:
+                    parts = [m.group(1) if (m := pat.match(p)) and m.group(1) else p for p in parts]
             out += [(p, r) for p in parts]
     return out
 
@@ -668,6 +683,8 @@ def check_infores(plan: dict, f: "Findings", catalog: dict | None) -> None:
         f.warn("infores", f"couldn't load the infores catalog; {len(used)} infores ids unchecked")
         return
     for iid, where in used.items():
+        if plan.get("infores_proposed") and iid == plan.get("infores"):
+            continue  # the plan's own proposed id, flagged by check_source_infores
         entry = catalog.get(iid)
         if entry is None:
             f.error(
@@ -785,6 +802,8 @@ def check_edge_provenance(plan: dict, f: "Findings", catalog: dict | None) -> No
     for lay in plan.get("layouts") or []:
         if not any(ent.get("role") for ent in lay.get("entities") or []):
             continue
+        if (lay.get("row") or {}).get("no_predicate"):
+            continue  # builds no edges
         mapped, sources, per_row = set(), set(), False
         stated = {s: set() for s in EDGE_SLOTS}  # layout constants
         by_source: dict[str, dict] = {}  # infores id -> slot -> value, from per-source codes
@@ -1175,11 +1194,18 @@ def check_node_prefixes(
 
     if got[None] > 0.05 * total:
         bare = list(dict.fromkeys(v for v, p in emitted if p is None))
-        f.warn(
-            where,
-            f"{got[None]}/{total} sampled {etype} ids have no namespace (e.g. {bare[:3]}), so "
-            "NodeNorm can't resolve them and their nodes stay unresolved" + advice(bare),
-        )
+        if spec.get("codes"):
+            f.warn(
+                where,
+                f"{got[None]}/{total} sampled {etype} values aren't in codes (e.g. {bare[:3]}): "
+                "those rows drop with a diagnostic and build no edge",
+            )
+        else:
+            f.warn(
+                where,
+                f"{got[None]}/{total} sampled {etype} ids have no namespace (e.g. {bare[:3]}), so "
+                "NodeNorm can't resolve them and their nodes stay unresolved" + advice(bare),
+            )
     allowed = []
     key = _class_key(model, etype) if model else None
     if key:
@@ -1215,6 +1241,41 @@ def check_node_prefixes(
             )
 
 
+def emitted_curie(value: str, row: dict, spec: dict, prefixes: dict) -> str | None:
+    """The CURIE transformation writes for this id, or None when it has no namespace."""
+    prefix = emitted_prefix(value, row, spec, prefixes)
+    if prefix is None:
+        return None
+    value = str((spec.get("codes") or {}).get(value, value))
+    return value if value.startswith(prefix + ":") else f"{prefix}:{value}"
+
+
+def check_ids_resolve(
+    where: str, pairs: list, spec: dict, plan: dict, f: Findings, resolver=None
+) -> None:
+    """Ask NodeNorm about sampled ids: a Biolink prefix doesn't mean its ids resolve."""
+    import vocab
+
+    prefixes = plan.get("prefixes") or {}
+    curies = {emitted_curie(v, r, spec, prefixes) for v, r in pairs} - {None}
+    curies = sorted(curies)[:: max(1, len(curies) // MAX_RESOLVE_SAMPLE)][:MAX_RESOLVE_SAMPLE]
+    if not curies:
+        return
+    try:
+        known = (resolver or vocab.resolved)(curies)
+    except Exception as e:  # noqa: BLE001 - reported; the other checks still stand
+        f.note(where, f"couldn't reach NodeNorm to test sampled ids: {str(e)[:120]}")
+        return
+    if len(known) < 0.5 * len(curies):
+        missing = [c for c in curies if c not in known]
+        f.warn(
+            where,
+            f"only {len(known)} of {len(curies)} sampled ids resolve in NodeNorm (not {missing[:3]}"
+            "), so these nodes won't merge with other sources; look for a namespace that "
+            "resolves, or say in notes.md what they connect to",
+        )
+
+
 ABSENT_WORDS = {"not detected", "not expressed", "undetected", "negative", "absent"}
 
 
@@ -1223,7 +1284,9 @@ def check_absent_rows(lay: dict, rows: list[dict], specs: dict, f: Findings) -> 
     ends = {str(e.get("role") or "").removeprefix("biolink:") for e in lay.get("entities") or []}
     if not {"subject", "object"} <= ends or (lay.get("row") or {}).get("no_predicate"):
         return
-    if any(spec.get("absent_values") for spec in specs.values()):
+    if any(
+        spec.get("absent_values") or spec.get("absent_below") is not None for spec in specs.values()
+    ):
         return
     for col in rows[0]:
         if (specs.get(col) or {}).get("property") == "biolink:id":
@@ -1267,8 +1330,14 @@ def check_data(
             continue
         progress(f"data {n}/{len(layouts_)}: {lay['id']}")
         got, errs = smp.sample_rows(
-            original, by_layout.get(lay["id"], []), 300, int(max_mb * 1e6), k=3, dialect=dialect
+            original,
+            by_layout.get(lay["id"], []),
+            ROWS_READ,
+            int(max_mb * 1e6),
+            k=3,
+            dialect=dialect,
         )
+        got = [(rs, url, spread(file_rows)) for rs, url, file_rows in got]
         for e in errs[:3]:
             f.note(lay["id"], f"couldn't sample: {e[:200]}")
         if dialect:
@@ -1408,7 +1477,13 @@ def check_data(
                     "prefixes",
                 )
             if not values:
-                if spec.get("codes"):
+                if spec.get("drop_unmatched") and any(r.get(col) for r in rows):
+                    f.note(
+                        where,
+                        "no sampled value fits item_pattern, so none of these ids were checked: "
+                        "test some from further into the file with vocab.py resolve",
+                    )
+                elif spec.get("codes"):
                     f.warn(
                         where,
                         f"has a code table but is empty in all {len(rows)} sampled rows: "
@@ -1559,6 +1634,7 @@ def check_data(
                     )
             if col in node_types and spec in specs.values():
                 check_node_prefixes(where, pairs, spec, node_types[col], model, plan, f)
+                check_ids_resolve(where, pairs, spec, plan, f)
             if spec.get("id_prefix") == "infores" or (
                 form in ("curie", "mixed") and any(v.startswith("infores:") for v in values)
             ):
@@ -2643,6 +2719,12 @@ def main() -> None:
         )
     out = load_croissant(args.out)
     f = Findings(plan.get("explained"))
+    if Path(args.plan).stat().st_mtime > Path(args.out).stat().st_mtime:
+        f.error(
+            "croissant",
+            f"{args.plan} is newer than {args.out}, so these checks would judge the old "
+            "croissant: re-run apply_plan.py",
+        )
     # as apply_plan.py writes them, so the checks see what's in the croissant
     for where, msg in normalize_edge_provenance(plan):
         f.warn(where, f"{msg} (put that in the plan)")

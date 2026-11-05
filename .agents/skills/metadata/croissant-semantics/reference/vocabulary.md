@@ -112,7 +112,9 @@ the type only reaches option 3 or 4.
   when the id is in one of two columns (a UniProt accession under SwissProt for some rows and
   TrEMBL for others), make two entities with the same role, one per id column, rather than
   filing the second as an xref and leaving rows without an id. The check warns when more than
-  5% of sampled rows have no id.
+  5% of sampled rows have no id. Parallel columns work the same way (`Enhanced`, `Supported` and
+  `Approved` location lists, one entity each): the graph builder makes an edge for every entity
+  a row fills, and those edges share the row's other columns.
 - **Association classes constrain their subject and object.** `vocab.py class X` shows the
   slot usage: `PairwiseMolecularInteraction` wants molecular entities, so gene-typed
   interactors need `PairwiseGeneToGeneInteraction` (or protein-typed entities). Predicates
@@ -236,9 +238,9 @@ the type only reaches option 3 or 4.
 - **GEO accessions**: `GSM`/`GSE`/`GPL` ids use Bioregistry's `geo` prefix. Some sources strip the
   letters (ARCHS4's sample ids are the GSM number alone); then the column is `native`, and its
   description says to prepend `GSM`. Don't invent a prefix.
-- **Database-tagged ids** (KEGG's `path:map00010`, `ko:K00001`, `hsa:7157`): the tag is part of
-  the id KEGG writes. Keep the data's form: `id_form: native` with a description, or declare
-  the tag as a prefix with KEGG's entry URL when it isn't a Croissant term (`path` is one).
+- **Database-tagged ids** (KEGG's `path:map00010`, `ko:K00001`, `hsa:7157`): strip the tag with
+  `item_pattern` and give the id its Biolink prefix (`reference/plan-format.md`). Don't declare
+  the tag as a prefix.
 - **Species given as names** (`Homo sapiens` in a column): `biolink:in_taxon_label`, not
   `in_taxon`, which takes NCBITaxon ids.
 - **Gene type columns** (`protein-coding`, `ncRNA`, `pseudo`): map the values to Sequence Ontology

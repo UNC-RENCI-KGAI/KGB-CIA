@@ -690,6 +690,24 @@ def exact_match(name: str, hits: list[dict]) -> str | None:
     return None
 
 
+def resolved(curies: list[str]) -> set[str]:
+    """Which of these ids NodeNorm knows."""
+    known = set()
+    for start in range(0, len(curies), 500):
+        batch = curies[start : start + 500]
+        r = requests.post(NODENORM_URL, json={"curies": batch}, timeout=120)
+        r.raise_for_status()
+        known |= {c for c, v in r.json().items() if v}
+    return known
+
+
+def cmd_resolve(args) -> None:
+    known = resolved(args.curies)
+    print(f"{len(known)} of {len(args.curies)} resolve in NodeNorm")
+    for curie in args.curies:
+        print(f"  {'yes' if curie in known else 'no '}  {curie}")
+
+
 def cmd_names(args) -> None:
     names = list(args.names)
     if args.file:
@@ -706,13 +724,8 @@ def cmd_names(args) -> None:
         for name, hits in r.json().items():
             if curie := exact_match(name, hits):
                 found[name] = curie
-    curies = sorted(set(found.values()))
-    known = {}
-    for start in range(0, len(curies), 500):
-        r = requests.post(NODENORM_URL, json={"curies": curies[start : start + 500]}, timeout=120)
-        r.raise_for_status()
-        known.update(r.json())
-    codes = {n: c for n, c in found.items() if known.get(c)}
+    known = resolved(sorted(set(found.values())))
+    codes = {n: c for n, c in found.items() if c in known}
     result = {"codes": codes, "unmapped": [n for n in names if n not in codes]}
     if args.json:
         Path(args.json).write_text(json.dumps(result, indent=1, ensure_ascii=False) + "\n")
@@ -958,6 +971,9 @@ def main() -> None:
     p.add_argument("--prefixes", help="comma-separated, e.g. UBERON,CL")
     p.add_argument("--json", help="write {codes, unmapped} to this file")
     p.set_defaults(fn=cmd_names)
+    p = sub.add_parser("resolve", help="test whether ids resolve in NodeNorm")
+    p.add_argument("curies", nargs="+")
+    p.set_defaults(fn=cmd_resolve)
     p = sub.add_parser("infores", help="information-resource ids for a source name")
     p.add_argument("text")
     p.add_argument("--limit", type=int, default=10)

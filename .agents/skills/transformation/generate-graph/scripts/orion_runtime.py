@@ -140,7 +140,7 @@ def raw_values(field, row):
     return value if isinstance(value, list) else [value]
 
 
-def is_absent(value, absent):
+def is_absent(value, absent, below=None):
     text = "" if value is None else str(value).strip()
     if text in absent:
         return True
@@ -148,6 +148,8 @@ def is_absent(value, absent):
         number = float(text)
     except ValueError:
         return False
+    if below is not None and number < float(below):
+        return True
     for candidate in absent:
         try:
             if float(candidate) == number:
@@ -157,7 +159,9 @@ def is_absent(value, absent):
     return False
 
 
-def values(field, row, prefixes):
+def values(field, row, prefixes, skipped=None):
+    """A field's values for this row. An item of a list that can't be read goes in skipped, when
+    given, so one unknown item doesn't lose the rest of the cell."""
     output = []
     for raw in raw_values(field, row):
         if isinstance(raw, list):
@@ -184,10 +188,16 @@ def values(field, row, prefixes):
 
                 match = re.fullmatch(field["item_pattern"], str(value))
                 if not match:
+                    if skipped is not None and len(items) > 1:
+                        skipped.append("Compound item does not match item_pattern")
+                        continue
                     raise ValueError("Compound item does not match item_pattern")
                 value = match.group(1)
             if "codes" in field:
                 if str(value) not in field["codes"]:
+                    if skipped is not None and len(items) > 1:
+                        skipped.append(f"Unmapped code {value!r}")
+                        continue
                     raise ValueError(f"Unmapped code {value!r}")
                 value = field["codes"][str(value)]
             prefix = field.get("id_prefix")
@@ -382,12 +392,23 @@ class SemanticSourceLoader(SourceDataLoader):
 
     def states_absence(self, rs, row, number):
         """Whether the row reports the relationship wasn't found (the plan's absent_values)."""
+        groups = {}
         for field in rs.get("absence_fields", []):
             found = raw_values(field, row)
-            if found and all(is_absent(value, field["absent_values"]) for value in found):
+            absent = all(
+                is_absent(value, field.get("absent_values", []), field.get("absent_below"))
+                for value in found
+            )
+            if group := field.get("absent_group"):
+                groups.setdefault(group, []).append(absent)
+            elif found and absent:
                 self.diagnostic(
                     rs["id"], f"Row skipped: {field['name']} reports absence", record=number
                 )
+                return True
+        for group, absent in groups.items():
+            if all(absent):
+                self.diagnostic(rs["id"], f"Row skipped: {group} reports absence", record=number)
                 return True
         return False
 
@@ -494,11 +515,14 @@ class SemanticSourceLoader(SourceDataLoader):
     def properties(self, fields, row, number):
         props = {}
         for field in fields:
+            skipped = []
             try:
-                found = values(field, row, self.mapping["prefixes"])
+                found = values(field, row, self.mapping["prefixes"], skipped)
             except (ValueError, TypeError, SyntaxError) as error:
                 self.diagnostic(field["id"], str(error), record=number)
                 continue
+            for reason in skipped:
+                self.diagnostic(field["id"], reason, record=number)
             if not found:
                 continue
             slot = field["slot"]
@@ -701,21 +725,27 @@ class SemanticSourceLoader(SourceDataLoader):
                         objects = [
                             i for i, e in enumerate(rs["entities"]) if e["role"] == "biolink:object"
                         ]
-                        if len(subjects) == len(objects) == 1 and rs.get("predicate_mapped", True):
-                            s, o = subjects[0], objects[0]
+                        if subjects and objects and rs.get("predicate_mapped", True):
                             props = self.properties(rs["row_fields"], row, number)
-                            self.emit_edge(
-                                rs,
-                                "association",
-                                rs["entities"][s],
-                                rs["entities"][o],
-                                node_ids[s],
-                                node_ids[o],
-                                props,
-                                props.get("predicate"),
-                                key,
-                                number,
-                            )
+                            # several entities can fill a role, from alternative or parallel
+                            # columns: each one the row fills makes an edge
+                            for s in [i for i in subjects if node_ids[i]] or subjects[:1]:
+                                for o in [i for i in objects if node_ids[i]] or objects[:1]:
+                                    self.emit_edge(
+                                        rs,
+                                        "association"
+                                        if len(subjects) == len(objects) == 1
+                                        else "association "
+                                        f"{rs['entities'][s]['name']} {rs['entities'][o]['name']}",
+                                        rs["entities"][s],
+                                        rs["entities"][o],
+                                        node_ids[s],
+                                        node_ids[o],
+                                        props,
+                                        props.get("predicate"),
+                                        key,
+                                        number,
+                                    )
                         row_index = next(
                             (i for i, e in enumerate(rs["entities"]) if e["name"] == "row"), None
                         )
