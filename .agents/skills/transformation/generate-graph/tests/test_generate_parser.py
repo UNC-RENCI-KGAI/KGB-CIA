@@ -861,31 +861,64 @@ def load_merge_script():
     return module
 
 
-def write_graph(graphs, source, nodes, edges, *, status="stable"):
-    run_dir = graphs / source / source / "data" / "1"
-    normalized = run_dir / "parsed_p" / "normalized_n"
+def write_graph(graphs, source, nodes, edges, *, built=True, version="n"):
+    workspace = graphs / source
+    normalized = workspace / source / "data" / "1" / "parsed_p" / f"normalized_{version}"
     normalized.mkdir(parents=True)
-    meta = {
-        "fetch_status": "stable",
-        "parsings": {
-            "p": {
-                "parsing_status": "stable",
-                "normalizations": {"n": {"normalization_status": status}},
-            }
-        },
-    }
-    (run_dir / f"{source}.meta.json").write_text(json.dumps(meta))
     for name, rows in (("nodes", nodes), ("edges", edges)):
         text = "".join(json.dumps(row) + "\n" for row in rows)
         (normalized / f"normalized_{name}.jsonl").write_text(text)
+    if built:
+        record = {"normalized": str(normalized.relative_to(workspace))}
+        (workspace / "current_build.json").write_text(json.dumps(record))
 
 
-def test_stable_normalization_skips_unfinished_graphs(tmp_path):
+def test_current_graph_needs_a_successful_build(tmp_path):
     write_graph(tmp_path, "done", [], [])
-    write_graph(tmp_path, "failed", [], [], status="failed")
+    write_graph(tmp_path, "failed", [], [], built=False)
     merge = load_merge_script()
-    assert merge.stable_normalization(tmp_path / "done").name == "normalized_n"
-    assert merge.stable_normalization(tmp_path / "failed") is None
+    assert merge.current_graph(tmp_path / "done").name == "normalized_n"
+    assert merge.current_graph(tmp_path / "failed") is None
+
+
+def test_merge_runs_only_when_a_build_changes(tmp_path, native_orion):
+    node = {"id": "A:1", "category": ["biolink:Gene"]}
+    graphs, output = tmp_path / "graphs", tmp_path / "merged"
+    write_graph(graphs, "one", [node], [])
+    write_graph(graphs, "two", [node], [])
+    merge = load_merge_script()
+    assert merge.main([str(graphs), str(output)]) == 0
+    first = (output / "nodes.jsonl").stat().st_mtime_ns
+
+    assert merge.main([str(graphs), str(output)]) == 0
+    assert (output / "nodes.jsonl").stat().st_mtime_ns == first
+
+    write_graph(graphs, "two", [{"id": "B:1", "category": ["biolink:Gene"]}], [], version="m")
+    assert merge.main([str(graphs), str(output)]) == 0
+    assert (output / "merge-metadata.json").exists()
+    ids = [json.loads(line)["id"] for line in (output / "nodes.jsonl").read_text().splitlines()]
+    assert sorted(ids) == ["A:1", "B:1"]
+
+
+def test_an_interrupted_merge_runs_again(tmp_path, native_orion):
+    node = {"id": "A:1", "category": ["biolink:Gene"]}
+    graphs, output = tmp_path / "graphs", tmp_path / "merged"
+    write_graph(graphs, "one", [node], [])
+    merge = load_merge_script()
+    assert merge.main([str(graphs), str(output)]) == 0
+    (output / "edges.jsonl").unlink()
+    (output / "left_behind.temp").write_text("")
+    assert merge.main([str(graphs), str(output)]) == 0
+    assert (output / "edges.jsonl").exists() and not (output / "left_behind.temp").exists()
+
+
+def test_merge_leaves_out_a_workspace_not_named(tmp_path, native_orion):
+    graphs, output = tmp_path / "graphs", tmp_path / "merged"
+    write_graph(graphs, "kept", [{"id": "A:1", "category": ["biolink:Gene"]}], [])
+    write_graph(graphs, "retired", [{"id": "B:1", "category": ["biolink:Gene"]}], [])
+    assert load_merge_script().main([str(graphs), str(output), "--sources", "kept"]) == 0
+    ids = [json.loads(line)["id"] for line in (output / "nodes.jsonl").read_text().splitlines()]
+    assert ids == ["A:1"]
 
 
 def test_native_merge_follows_orion_rules(tmp_path, native_orion):
@@ -907,7 +940,7 @@ def test_native_merge_follows_orion_rules(tmp_path, native_orion):
     # "knowledge" holds "edge": ORION's own file sorting would read these nodes as edges
     write_graph(graphs, "knowledge_source", nodes, [edge("infores:a", ["one"])])
     write_graph(graphs, "other", nodes[:1], [edge("infores:a", ["two"]), edge("infores:b", ["x"])])
-    write_graph(graphs, "unfinished", [{"id": "C:1"}], [], status="failed")
+    write_graph(graphs, "unfinished", [{"id": "C:1"}], [], built=False)
     output = tmp_path / "merged"
     assert load_merge_script().main([str(graphs), str(output)]) == 0
 
@@ -919,3 +952,36 @@ def test_native_merge_follows_orion_rules(tmp_path, native_orion):
     assert sorted(same["kgbcia_source_records"]) == ["one", "two"]
     metadata = json.loads((output / "merge-metadata.json").read_text())
     assert metadata["sources_not_merged"] == ["unfinished"] and metadata["edges_diff"] == 1
+
+
+def fetch_version(tmp_path, *, version="1", url="https://a/x.tsv", sha="abc", used=("x",)):
+    file = {"@id": "x", "contentUrl": url, "sha256": sha}
+    document = {"version": version}
+    return generator.source_version(document, {"x": file}, set(used), tmp_path)
+
+
+def test_fetch_version_follows_the_files_not_the_declared_version(tmp_path):
+    same = fetch_version(tmp_path)
+    assert fetch_version(tmp_path) == same
+    assert same.startswith("1-")
+    assert fetch_version(tmp_path, url="https://b/x.tsv") != same
+    assert fetch_version(tmp_path, sha="def") != same
+    assert fetch_version(tmp_path, used=("x", "y")) != same
+
+
+def test_fetch_version_follows_a_bound_local_file(tmp_path):
+    local = tmp_path / "local.tsv"
+    local.write_text("one")
+    (tmp_path / "source_files.json").write_text(json.dumps({"x": "local.tsv"}))
+    same = fetch_version(tmp_path)
+    assert fetch_version(tmp_path) == same
+    local.write_text("a longer file")
+    assert fetch_version(tmp_path) != same
+
+
+def test_parsing_version_ignores_where_a_bundle_sits():
+    config = {"source": "acme", "semantic_croissant": "/a/x.json", "croissant": "/a/y.json"}
+    moved = {**config, "semantic_croissant": "/b/x.json", "croissant": "/b/y.json"}
+    assert generator.parsing_version(config) == generator.parsing_version(moved)
+    changed = {**config, "source": "other"}
+    assert generator.parsing_version(config) != generator.parsing_version(changed)

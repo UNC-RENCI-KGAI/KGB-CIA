@@ -414,9 +414,7 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
         "source_id": "Kgbcia_" + source,
         "infores": infores,
         "infores_proposed": proposed,
-        "source_version": str(
-            document.get("version") or hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-        ),
+        "source_version": source_version(document, distributions, used_files, path.parent),
         "name": text(document.get("name")),
         "description": text(document.get("description")),
         "url": document.get("url"),
@@ -442,6 +440,42 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
     }
 
 
+def source_version(document, distributions, used_files, bundle: Path) -> str:
+    """ORION's fetch version: the same one means the files already downloaded are the right ones.
+
+    Follows what is fetched, not the semantic Croissant's bytes, so a new plan reparses without
+    downloading again, and a new URL, checksum or local binding downloads again even when the
+    Croissant's declared version stayed the same.
+    """
+    identity = {
+        "files": {
+            key: [item.get(field) for field in ("contentUrl", "sha256", "md5")]
+            for key, item in distributions.items()
+        },
+        "used": sorted(used_files),
+    }
+    bindings = bundle / "source_files.json"
+    if bindings.exists():
+        locations = []
+        for value in json.loads(bindings.read_text()).values():
+            locations += value if isinstance(value, list) else [value]
+        stats = [(bundle / location).stat() for location in sorted(locations)]
+        identity["bindings"] = {
+            "map": bindings.read_text(),
+            "files": [[stat.st_size, stat.st_mtime_ns] for stat in stats],
+        }
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
+    declared = document.get("version")
+    return f"{declared}-{digest}" if declared else digest
+
+
+def parsing_version(config: dict) -> str:
+    """ORION's parsing version. Where a bundle sits on disk doesn't change what it parses to."""
+    moved = {"semantic_croissant", "croissant"}
+    content = {key: value for key, value in config.items() if key not in moved}
+    return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def generate(path: Path, output: Path, *, infores=None) -> dict:
     config = compile_bundle(path, infores=infores)
     root = output.resolve()
@@ -460,7 +494,7 @@ def generate(path: Path, output: Path, *, infores=None) -> dict:
     shutil.copyfile(REPO_ROOT / "shared/schema.py", support / "schema.py")
     shutil.copyfile(SCRIPT_DIR / "run_orion.py", root / "run_orion.py")
     dump(target / "semantic_mapping.json", config)
-    version = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()[:16]
+    version = parsing_version(config)
     source = f'''# /// script
 # requires-python = ">=3.12"
 # dependencies = ["robokop-orion=={ORION_VERSION}"]

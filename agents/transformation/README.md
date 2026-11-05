@@ -63,5 +63,9 @@ names its identity. Sources citing proposed ids are run, and named at the end of
 partial and disclosed in generation reports. Metadata defects are handed over without changing
 the supplied semantics. Unresolved NodeNorm identifiers do not by themselves indicate parser
 failure.
-Re-running with changed local file bindings or a corrected `--infores` needs a fresh
-`--output` directory until ORION's stage cache fingerprints those inputs.
+
+Rerun with the same `--output` to reuse work. ORION skips stages whose versions are unchanged, and
+the merge is skipped when every source's build is the same. The merged graph holds only this
+run's sources, so a source removed from `--input` drops out. See the
+[workflow reference](../../.agents/skills/transformation/generate-graph/reference/orion_workflow.md)
+for what the versions cover.

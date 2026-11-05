@@ -99,9 +99,12 @@ responsible teams. Validate graph structure, provenance, and lineage independent
 fraction of identifiers that resolve.
 
 ORION reuses completed stages by version. A failed or interrupted download is retried on the
-next run in the same `STORAGE`; ORION itself would not retry it. The current runner does not fingerprint local file
-contents, file bindings, or infores overrides. Use a fresh `STORAGE` directory when changing
-these runtime inputs to avoid reusing an earlier graph.
+next run in the same `STORAGE`; ORION itself would not retry it. The fetch version follows each
+file's URL and checksum, and the size and modified time of files bound in the bundle's
+`source_files.json`. The parsing version follows the compiled mapping, runtime and schema, not the
+bundle's location. A new NodeNorm or Babel version normalizes again. Versions don't cover a
+`--source-files` file outside the bundle or an `--infores` override, so use a fresh `STORAGE`
+directory for those. A file that changes at the same URL with no checksum isn't detected.
 
 To contribute a generated loader to an ORION checkout, register its module and class in
 `SOURCE_DATA_LOADER_CLASS_IMPORTS` and keep the source JSON beside it. The local adapter avoids
