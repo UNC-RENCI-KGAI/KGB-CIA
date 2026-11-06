@@ -1,4 +1,5 @@
-"""Step 4: each statement as an English sentence, for step 5 to label abstracts against.
+"""Statements and claims as English sentences, for the review and repair messages and the label
+sample.
 
 The sentence follows Biolink's reading order for qualifier-based statements
 (https://biolink.github.io/biolink-model/reading-a-qualifier-based-statement/): the subject
@@ -12,20 +13,25 @@ with `qualified_predicate: causes`, `object_aspect_qualifier: expression` and
 Predicate phrases are written by hand, since Biolink's slot names don't always read well
 (`treats_or_applied_or_studied_to_treat`); any other predicate falls back to its Biolink name.
 Qualifier values are either enum values, read with underscores as spaces, or CURIEs (contexts),
-kept as they are: step 5 also gets the structured statement, so the LLM can resolve them.
+kept as they are: the messages also give the claim as structured data, so the LLM can resolve
+them.
+
+`sentence` reads both a work file's statement (`records.Statement`, `qualified_predicate` among
+its qualifiers) and the shared schema's (`shared.schema.Statement`, with `qualified_predicate`
+and `negated` fields). A negated statement negates the whole reading, as Biolink's `negated`
+does: "imatinib does not cause decreased activity of ABL1". `claim_sentence` reads a claim as
+the label step stores it, a negative claim as its statement negated.
 """
 
 from __future__ import annotations
 
-import argparse
 import re
-import sys
-from pathlib import Path
 from typing import Any
 
 from pubmed_evidence import biolink, records
+from shared import schema
 
-# One phrase per in-scope predicate (step 2's table) and the descendants the transform may
+# One phrase per in-scope predicate (step 1's table) and the descendants the transform may
 # pick, plus the predicates a `qualified_predicate` usually names. The subject comes before
 # the phrase and the object after it.
 PREDICATE_PHRASES: dict[str, str] = {
@@ -131,6 +137,23 @@ def predicate_phrase(predicate: str) -> str:
     return name or curie.removeprefix("biolink:").replace("_", " ")
 
 
+def negative_phrase(phrase: str) -> str | None:
+    """A predicate phrase negated: 'treats' -> 'does not treat', 'is used to treat' -> 'is not
+    used to treat', 'has the phenotype' -> 'does not have the phenotype'. None if it has no
+    verb to negate."""
+    words = phrase.split()
+    if words[:2] == ["has", "been"] or words[:1] == ["is"]:
+        return " ".join([words[0], "not", *words[1:]])
+    if words[:1] == ["has"]:
+        return " ".join(["does not have", *words[1:]])
+    # The first word in -s is the verb: adverbs come before it ("directly physically interacts
+    # with").
+    for i, word in enumerate(words):
+        if word.endswith("s") and not word.endswith("ss"):
+            return " ".join(["does not", *words[:i], word[:-1], *words[i + 1 :]])
+    return None
+
+
 def _article(noun: str) -> str:
     return "an" if noun[:1].lower() in "aeiou" else "a"
 
@@ -169,60 +192,39 @@ def _compose(name: str, qualifiers: dict[str, Any], side: str, used: set[str]) -
     return text
 
 
-def sentence(statement: records.Statement, names: dict[str, str]) -> str:
-    """The statement in English, e.g. 'imatinib causes decreased activity of ABL1'.
+def sentence(statement: records.Statement | schema.Statement, names: dict[str, str]) -> str:
+    """The statement in English, e.g. 'imatinib causes decreased activity of ABL1', or for a
+    negated one 'imatinib does not cause decreased activity of ABL1'.
 
     `names` maps node ids to names; a node without one is called by its id. No final period,
     so the sentence can be quoted or embedded as it is.
     """
     qualifiers = {k: v for k, v in statement.qualifiers.items() if _present(v)}
+    qualified = getattr(statement, "qualified_predicate", None)
+    qualified = qualified or qualifiers.get("qualified_predicate")
     used = {"qualified_predicate"}
     subject = _compose(
         names.get(statement.subject) or statement.subject, qualifiers, "subject", used
     )
-    predicate = predicate_phrase(qualifiers.get("qualified_predicate") or statement.predicate)
+    predicate = predicate_phrase(qualified or statement.predicate)
+    negated = bool(getattr(statement, "negated", False))
+    negative = negative_phrase(predicate) if negated else None
     object_ = _compose(names.get(statement.object) or statement.object, qualifiers, "object", used)
-    words = [subject, predicate, object_]
+    words = [subject, negative or predicate, object_]
     for slot, template in CONTEXT_PHRASES.items():
         if slot in qualifiers:
             used.add(slot)
             words.append(template.format(qualifier_value(qualifiers[slot])))
     for slot in sorted(set(qualifiers) - used):
         words.append(f"({slot.replace('_', ' ')}: {qualifier_value(qualifiers[slot])})")
-    return " ".join(words)
+    text = " ".join(words)
+    return f"it is not the case that {text}" if negated and negative is None else text
 
 
-def write_sentences(work: Path) -> int:
-    """Write `sentences.jsonl` from `statements.jsonl` and `entities.jsonl`, by statement id.
-    Returns the number of sentences."""
-    statements: dict[str, records.Statement] = {}
-    for statement in records.read_records(work / records.STATEMENTS, records.Statement):
-        statements.setdefault(statement.statement_id, statement)
-    names = {
-        entity.id: entity.name
-        for entity in records.read_records(work / records.ENTITIES, records.Entity)
-        if entity.name
-    }
-    rows = (
-        records.SentenceRecord(statement_id=sid, sentence=sentence(statements[sid], names))
-        for sid in sorted(statements)
-    )
-    return records.write_records(work / records.SENTENCES, rows)
-
-
-def add_arguments(parser: argparse.ArgumentParser) -> None:
-    """Step 4 has no options of its own."""
-
-
-def run(args: argparse.Namespace) -> int:
-    work = Path(args.work)
-    for name in (records.STATEMENTS, records.ENTITIES):
-        if not (work / name).exists():
-            print(
-                f"sentences: {work / name} not found; run `kgb-augment select` first",
-                file=sys.stderr,
-            )
-            return 1
-    n = write_sentences(work)
-    print(f"sentences: wrote {n} sentences to {work / records.SENTENCES}")
-    return 0
+def claim_sentence(claim: dict[str, Any], names: dict[str, str]) -> str:
+    """A claim as `abstract_claims` stores it, in English: its statement, negated for a negative
+    claim ('imatinib does not treat CML')."""
+    statement = schema.Statement.model_validate(claim["statement"])
+    if claim.get("polarity") == "negative":
+        statement = statement.model_copy(update={"negated": True})
+    return sentence(statement, names)

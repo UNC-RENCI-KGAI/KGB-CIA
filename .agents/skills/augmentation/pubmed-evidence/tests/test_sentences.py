@@ -1,13 +1,12 @@
-"""Step 4: statements as English sentences, in Biolink's reading order."""
+"""Statements and claims as English sentences, in Biolink's reading order."""
 
 from __future__ import annotations
-
-import argparse
-from pathlib import Path
 
 import pytest
 from pubmed_evidence import biolink, graphio, records, sentences
 from toy import ABL1, CML, IMATINIB, LIVER, TP53
+
+from shared import schema
 
 NAMES = {IMATINIB: "imatinib", ABL1: "ABL1", CML: "chronic myeloid leukemia"}
 
@@ -155,45 +154,72 @@ def test_names_fall_back_to_ids():
     assert sentences.sentence(s, {}) == "NCBIGene:7157 has the phenotype HP:0001250"
 
 
-def test_write_sentences(tmp_path: Path, capsys):
-    work = tmp_path / "work"
-    treats = statement(IMATINIB, "biolink:treats", CML)
-    affects = statement(
-        IMATINIB,
-        "biolink:affects",
-        ABL1,
+def test_shared_schema_statements_read_their_qualified_predicate():
+    s = schema.Statement(
+        subject=IMATINIB,
+        predicate="biolink:affects",
+        object=ABL1,
         qualified_predicate="biolink:causes",
-        object_aspect_qualifier="activity",
-        object_direction_qualifier="decreased",
+        qualifiers={
+            "object_aspect_qualifier": "activity",
+            "object_direction_qualifier": "decreased",
+        },
     )
-    records.write_records(work / records.STATEMENTS, [treats, affects, treats])
-    records.write_records(
-        work / records.ENTITIES,
-        [
-            records.Entity(id=IMATINIB, name="imatinib"),
-            records.Entity(id=ABL1, name="ABL1"),
-            records.Entity(id=CML),
-        ],
+    assert sentences.sentence(s, NAMES) == "imatinib causes decreased activity of ABL1"
+    assert sentences.sentence(s.model_copy(update={"negated": True}), NAMES) == (
+        "imatinib does not cause decreased activity of ABL1"
     )
-    args = argparse.Namespace(work=work)
-    assert sentences.run(args) == 0
-    assert "sentences: wrote 2 sentences" in capsys.readouterr().out
-    rows = list(records.read_records(work / records.SENTENCES, records.SentenceRecord))
-    assert rows == sorted(rows, key=lambda r: r.statement_id)
-    assert {r.statement_id: r.sentence for r in rows} == {
-        treats.statement_id: f"imatinib treats {CML}",
-        affects.statement_id: "imatinib causes decreased activity of ABL1",
+
+
+@pytest.mark.parametrize(
+    "predicate, expected",
+    [
+        ("biolink:treats", "imatinib does not treat chronic myeloid leukemia"),
+        (
+            "biolink:treats_or_applied_or_studied_to_treat",
+            "imatinib is not used or studied to treat chronic myeloid leukemia",
+        ),
+        (
+            "biolink:in_clinical_trials_for",
+            "imatinib has not been tested in clinical trials for chronic myeloid leukemia",
+        ),
+        (
+            "biolink:directly_physically_interacts_with",
+            "imatinib does not directly physically interact with chronic myeloid leukemia",
+        ),
+        ("biolink:has_phenotype", "imatinib does not have the phenotype chronic myeloid leukemia"),
+        (
+            "biolink:predisposes_to_condition",
+            "imatinib does not predispose to chronic myeloid leukemia",
+        ),
+    ],
+)
+def test_negated_statements(predicate, expected):
+    s = schema.Statement(subject=IMATINIB, predicate=predicate, object=CML, negated=True)
+    assert sentences.sentence(s, NAMES) == expected
+
+
+def test_a_negated_phrase_without_a_verb_negates_the_whole_reading(monkeypatch):
+    monkeypatch.setattr(biolink, "element_name", lambda curie: "gene associated with condition")
+    s = schema.Statement(subject=ABL1, predicate="biolink:made_up", object=CML, negated=True)
+    assert sentences.sentence(s, NAMES) == (
+        "it is not the case that ABL1 gene associated with condition chronic myeloid leukemia"
+    )
+
+
+def test_claim_sentence_negates_a_negative_claim():
+    claim = {
+        "polarity": "negative",
+        "statement": {
+            "subject": IMATINIB,
+            "predicate": "biolink:treats",
+            "object": CML,
+            "qualified_predicate": None,
+            "qualifiers": {},
+        },
     }
-    first = (work / records.SENTENCES).read_bytes()
-    assert sentences.write_sentences(work) == 2
-    assert (work / records.SENTENCES).read_bytes() == first
-
-
-@pytest.mark.parametrize("missing", [records.STATEMENTS, records.ENTITIES])
-def test_run_fails_without_select_output(tmp_path: Path, capsys, missing):
-    work = tmp_path / "work"
-    for name in (records.STATEMENTS, records.ENTITIES):
-        if name != missing:
-            records.write_records(work / name, [])
-    assert sentences.run(argparse.Namespace(work=work)) == 1
-    assert missing in capsys.readouterr().err
+    assert sentences.claim_sentence(claim, NAMES) == (
+        "imatinib does not treat chronic myeloid leukemia"
+    )
+    claim["polarity"] = "positive"
+    assert sentences.claim_sentence(claim, NAMES) == "imatinib treats chronic myeloid leukemia"

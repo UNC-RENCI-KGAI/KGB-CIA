@@ -1,10 +1,9 @@
 """Checking that an LLM's quote really is in the abstract.
 
-Every `confirmed` or `contradicted` label, and every proposed qualifier, comes with a verbatim
-quote. Code checks the quote against that PMID's title and abstract, which catches made-up
-evidence cheaply. The comparison ignores case, whitespace, Unicode compatibility forms (curly
-quotes, ligatures, non-breaking spaces) and dash variants, which models often change when
-copying, but not wording.
+Every claim comes with a verbatim evidence sentence, a quote, as does every repair of one. Code
+checks the quote against that PMID's title and abstract, which catches made-up evidence cheaply.
+The comparison ignores case, whitespace, Unicode compatibility forms (curly quotes, ligatures,
+non-breaking spaces) and dash variants, which models often change when copying, but not wording.
 """
 
 from __future__ import annotations

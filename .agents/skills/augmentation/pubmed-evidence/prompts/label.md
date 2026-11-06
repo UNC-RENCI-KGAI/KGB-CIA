@@ -1,221 +1,125 @@
-# Labeling literature evidence for knowledge-graph statements
+# Extracting claims from abstracts
 
-You check statements from a biomedical knowledge graph against PubMed abstracts. Each request
-is about one pair of entities. It lists the two entities (identifiers, Biolink category,
-synonyms, MeSH headings); the statements `S1`, `S2`, ... the graph makes about them, each as a
-sentence and in structured Biolink form, with the qualifier set (`Q1`, ...) you may propose for
-it or `none`; each set's slots and allowed values (long value lists are named, `one of
-DirectionQualifierEnum`, and given under "Qualifier values"); and the abstracts, each starting
-with `## PMID:<number>`.
+You read PubMed abstracts about one pair of entities from a biomedical knowledge graph, X and Y,
+and write down what each abstract claims about how they are related. Code compares your claims
+with the graph's edges between X and Y: it adds the PMIDs of the claims that support an edge to
+that edge, and proposes the more specific statements those claims make as new edges. So be
+strict and literal: write down only what the abstract itself states about these two entities, at
+the level it states it. When unsure, leave a claim out, or make it weaker (a more general
+predicate, `hedged`, `background`) rather than stronger.
 
-You **label** every statement against every abstract, and **propose qualifiers** where an
-abstract says more about a statement than the statement does. Code turns your answer into
-edges of the graph, so be strict and literal: label only what the abstract itself says about
-these two entities. When unsure between two labels, choose the weaker one (`ambiguous` over
-`confirmed` or `contradicted`, `no_evidence` over `ambiguous`).
+## The request
 
-## Labels
+- The entities X and Y: name, identifier, Biolink category, synonyms and MeSH headings.
+- The predicates a claim may use, by their Biolink names.
+- The qualifiers each predicate takes, by which entity is the subject (`Q1`, ...), with their
+  allowed values; long value lists are named (`one of DirectionQualifierEnum`) and given under
+  "Qualifier values". A predicate or subject not listed takes no qualifiers.
+- The abstracts `A1`, `A2`, ..., each starting with `## A1 (PMID:<number>, <year>)`, then
+  PubMed's publication types when it has them, the title and the text.
 
-- **`confirmed`**: the abstract states that the statement holds for these two entities, as the
-  study's result or conclusion ("our results show that A inhibits B", "these data suggest that
-  A inhibits B") or as established knowledge the authors assert ("A, an inhibitor of B, ...").
-  Every part of the statement must hold, including its qualifiers.
-- **`contradicted`**: the authors looked for this relationship between these two entities and
-  report it absent: "A did not inhibit B", "no association was found between A and B", "A was
-  no better than placebo in patients with B". The negative finding must cover the relationship
-  as the statement states it: one limited to a narrower setting (one variant or polymorphism,
-  one population or subgroup, a mutant form, another species, one dose, a combination, one cell
-  line) is `ambiguous`, and so is one about a single aspect of a statement without qualifiers
-  ("A did not change B expression" against "A affects B"). Silence, lack of data, or a negative
-  finding about another entity is never `contradicted`.
-- **`ambiguous`**: the abstract addresses this relationship but does not settle it: it is only
-  proposed or hypothesized ("A may be a target for B"), the results are mixed, the evidence is
-  weaker than the predicate needs (below), a negative finding is limited (above), or the
-  abstract reports a different direction or aspect than the statement's qualifiers.
-- **`no_evidence`**: the abstract mentions only one of the entities, mentions both without
-  relating them this way, or describes a different relationship between them (an adverse
-  effect of a drug in patients with a disease, against "A treats B"; B acting on A, against "A
-  affects B").
+## The five rules
 
-## What each predicate needs
+1. **Negative claims need explicit language** ("did not", "no significant", "failed to", "was
+   no better than placebo"). Never infer a negative from what an abstract leaves out.
+2. **Claim at the level the abstract states, no higher and no lower.** Use the most specific
+   predicate and qualifiers the abstract supports, and nothing it doesn't say: no direction,
+   aspect or mechanism it doesn't give, no `treats` for a result in mice.
+3. **Split mixed results.** A finding that differs by subgroup, tissue or species becomes
+   several claims, each with its own context: "increased in the liver but decreased in the
+   kidney" is two claims.
+4. **Ground the entities.** Every claim is about X and Y themselves ("Which entities count",
+   below). A drug's metabolite is the drug with a derivative qualifier, where the predicate
+   takes one; a finding about another entity is no claim about this pair.
+5. **Quote verbatim.** Every claim's `evidence_sentence` is copied from its abstract
+   ("Quotes", below). Code checks it, and a claim whose sentence isn't found counts for
+   nothing.
 
-- **`treats`**: A is an established or effective treatment for B in people: an approved or
-  standard therapy, the authors presenting it as a treatment for B ("imatinib therapy for
-  CML"), or efficacy in patients with B. Efficacy only in animal models or cells, or a trial
-  with no reported outcome, is `ambiguous`. `contradicted` needs a trial or review concluding
-  that A does not work for B; A being no better than, or non-inferior to, another active drug
-  is never `contradicted`.
-- **`treats_or_applied_or_studied_to_treat`**, **`studied_to_treat`**: A is used or studied as
-  a treatment for B, in patients, animals or cells, whatever the result: a negative trial
-  confirms it. **`in_clinical_trials_for`**: the same, but only a clinical trial in patients
-  counts. **`beneficial_in_models_for`**: efficacy in an animal or cell model of B.
-- **`contraindicated_in`**: A should be avoided in patients with B, or harms them or worsens B.
-  `contradicted` needs the authors to conclude that A is safe in B or that the contraindication
-  is unwarranted; a benefit alone, or no harm in a small series, is `ambiguous`.
-- **Chemical and gene (`affects`, `directly_physically_interacts_with`, `binds`, ...)**: the
-  chemical binds, inhibits, activates or otherwise changes the gene's product (its activity,
-  expression, abundance, ...), as the statement's qualifiers say. For
-  `directly_physically_interacts_with` and `binds`, the abstract must show direct binding or
-  direct action on the protein: a binding or enzyme assay, a Kd, Ki or IC50 against the protein
-  (not a cell-growth IC50), a crystal structure, "an inhibitor of B", "binds to B". A change in
-  B's expression or in downstream signaling alone is `ambiguous` for them.
-- **`gene_associated_with_condition`**, **`associated_with`**: the gene (its variants,
-  mutations, expression, protein levels or activity) is associated with the disease, causally
-  or not.
-- **`associated_with_increased_likelihood_of`**: the gene's variants or alterations raise the
-  risk of the disease; evidence that they cause or predispose to it confirms it too.
-  **`associated_with_decreased_likelihood_of`**: they lower it (protective). `contradicted`
-  needs an explicit finding that the gene's variants don't change the risk.
-- **`correlated_with`**, **`positively_correlated_with`**, **`negatively_correlated_with`**: a
-  measured correlation between the gene (its expression, levels or variants) and the disease,
-  in the stated direction if there is one. **`biomarker_for`**: the gene or its product is used
-  or validated as a marker of the disease (diagnosis, prognosis, response); one only proposed as
-  a marker is `ambiguous`.
-- **`genetically_associated_with`**, **`genetic_association`**: genetic evidence (variants,
-  mutations, polymorphisms, GWAS, linkage). Expression or protein-level findings alone are
-  `ambiguous`.
-- **`causes`**: alterations of the gene (mutations, deletion, loss, overexpression) cause the
-  disease. **`contributes_to`**: the authors state that the gene or its alteration contributes
-  to, drives, promotes, predisposes to or confers risk of the disease. A finding reported only
-  as an association or correlation is `ambiguous` for both, and so is a model organism that
-  fails to reproduce the disease.
-- **Gene and gene: `physically_interacts_with`**: the proteins bind, form a complex,
-  co-immunoprecipitate, or one directly modifies the other (phosphorylates, ubiquitinates,
-  cleaves). **`interacts_with`**: any physical or functional interaction, including one
-  regulating the other. Co-expression, correlation or a shared pathway is `no_evidence`.
-- **`has_phenotype`**: mutation, deletion, knockout, or loss or gain of function of the gene, in
-  patients or animal models, produces the phenotype.
-- **Any other predicate**: read its sentence literally and apply the same principles.
+## A claim
 
-## Which entities count
+Each claim is one finding about X and Y:
 
-- A listed synonym, abbreviation, code name, brand name or MeSH heading is that entity when the
-  abstract uses it in that sense (gene aliases are often ambiguous). So are a drug's salts,
-  esters and formulations (imatinib mesylate), a gene's products (protein, transcripts,
-  isoforms) and variant or mutant forms, the same gene in another species (mouse Abl1 for
-  ABL1), a subtype of the disease (chronic-phase CML for CML), and a fusion protein when the
-  finding concerns the gene's part (imatinib inhibiting the ABL1 kinase of BCR-ABL1).
-- Not the entity: another drug, even of the same class, or a class named without the drug
-  ("tyrosine kinase inhibitors"); a metabolite of the drug (propose
-  `subject_derivative_qualifier: metabolite` instead, if allowed); another gene of the family
-  or a paralog (ABL2 is not ABL1); a broader disease class (leukemia for CML); a related but
-  different disease.
-- Patients, animal models, cells and biochemical assays count alike, except where a predicate
-  above says otherwise.
+- **`polarity`**: `positive` if the abstract states that the relationship holds, `negative` if
+  it states that it doesn't (rule 1). A negative claim denies its `statement`, which is written
+  as the positive statement: "A did not improve B" is `negative` with the statement "A treats
+  B".
+- **`statement`**, in Biolink terms:
+  - `subject`: `X` or `Y`, the entity that acts or has the property; the other is the object.
+  - `predicate`: one of the request's predicates, the most specific the abstract supports.
+  - `qualified_predicate`: `causes` or `null` (below).
+  - `qualifiers`: the slots of the predicate's qualifier set that the abstract states, from
+    their allowed values; every other slot `none`.
+- **`also_supports`**: further positive statements the same finding shows that the claim's own
+  statement doesn't already imply. A trial is the usual case: a null phase 3 trial of A in
+  patients with B is a negative `treats` claim, and it also supports `in_clinical_trials_for`.
+  Don't list a statement more general than a positive claim's own (it follows from it), or one
+  a negative claim denies. Most claims have none.
+- **`claim_role`**: what the quoted sentence states:
+  - `primary_finding`: the authors' own result or conclusion, including a systematic review's
+    or meta-analysis's pooled finding and a case report's own case;
+  - `background`: established knowledge the authors assert, in the introduction or in a
+    narrative review ("A, an inhibitor of B", "A is approved for B"), or another study's result
+    they point to;
+  - `hypothesis`: proposed, suspected or asked, not shown ("A may be a target for B").
+- **`hedged`**: `true` when the sentence words the finding as a possibility ("may", "might",
+  "could", "suggests", "appears to", "potential") or the effect is marginal.
+- **`negative_finding_type`**, for negative claims only (`null` on positive ones):
+  `demonstrated_absence` when the study was built to show the effect and didn't find it (a
+  placebo-controlled trial, an adequately powered study, an equivalence finding) or the authors
+  state as established that it doesn't hold; `failed_to_detect` when it saw nothing but
+  couldn't rule the effect out (a small or underpowered study, a non-significant trend). When
+  unsure, `failed_to_detect`.
+- **`context`**, where the claim holds, as far as the abstract says:
+  - `species`: the organism studied: `human` for patients, volunteers or people; `other` for an
+    organism not in the list, named in `notes`; `null` when the abstract doesn't say.
+  - `anatomy`: the organ, tissue or body part the finding is limited to, as the abstract names
+    it ("liver", "prefrontal cortex"); `null` if none. A cell type or cell line goes in
+    `notes`.
+  - `notes`: what else limits the claim and has no slot ("Narrowings with no slot", below), in
+    a few words; `null` if nothing.
+- **`evidence_sentence`**: the quote that states the finding ("Quotes", below).
 
-## Roles, direction and qualifiers
+## Each abstract
 
-- The subject acts on the object: evidence that the object acts on the subject is
-  `no_evidence`. `interacts_with`, `physically_interacts_with`,
-  `directly_physically_interacts_with` and `binds` are symmetric: for them the order doesn't
-  matter to the label.
-- A statement's qualifiers are part of what you check: "A causes decreased activity of B" is
-  confirmed only by evidence that A decreases B's activity. A statement with
-  `qualified_predicate: biolink:causes` needs causal evidence; a correlation is `ambiguous`.
-- If an abstract reports the opposite direction ("A increased the activity of B", against "A
-  causes decreased activity of B") or a different aspect (expression instead of activity),
-  label that statement `ambiguous`, not `contradicted`, and propose the qualifiers the abstract
-  does support.
-- A statement without qualifiers ("A affects B") is confirmed by evidence of any direction or
-  aspect, and you can also propose the more specific qualifiers.
+Give each abstract of the request one entry, `A1`, `A2`, ... in order, even one with no claim:
 
-## Claim
-
-Every `confirmed` and `contradicted` label and every proposal has a `claim`: **`causal`** when
-one entity acts on, changes, produces or prevents the other (binds, inhibits, activates,
-induces, treats; mutation or knockout causes it), shown by an experiment or intervention or
-concluded by the authors; **`associative`** for only a correlation or co-occurrence (associated
-with, correlated with, higher or lower levels in patients, a risk variant). For `contradicted`,
-give the kind of claim refuted ("A had no effect on B" is causal, "no association" associative).
+- **`study_design`**, of the study the abstract reports: `meta_analysis`, `systematic_review`,
+  `rct` (randomized controlled trial), `cohort` (a group followed over time, or a
+  non-randomized trial), `case_control`, `cross_sectional` (a survey or a one-time measurement
+  in a population), `animal` (experiments in animals), `in_vitro` (cells, tissues, enzymes,
+  binding assays), `case_report` (one patient, a family or a small case series),
+  `narrative_review` (a review that isn't systematic, an editorial, a comment or a letter) or
+  `computational` (docking, prediction, database mining). For a study with several, give the
+  design closest to people (patients before animals before cells). Code uses PubMed's
+  publication types where they name a design, so give your own reading anyway.
+- **`claims`**: the abstract's claims about X and Y; `[]` when it states nothing about how they
+  are related. That is a normal answer, and the commonest.
 
 ## Quotes
 
-- Every `confirmed` and `contradicted` label, and every evidence entry of a proposal, needs a
-  `quote` from that PMID's title or text, copied character for character: the same words,
-  spelling, abbreviations, numbers and punctuation. Don't paraphrase, shorten, expand
-  abbreviations, fix typos or translate. Code checks it and discards anything whose quote isn't
-  found.
+- Copy the `evidence_sentence` from that abstract's title or text, character for character:
+  the same words, spelling, abbreviations, numbers and punctuation. Don't paraphrase, shorten,
+  expand abbreviations, fix typos or translate.
 - Quote at least a full clause that shows the finding by itself, usually one sentence and at
   most two. If the finding is split, join two spans of the same abstract, in order, with `...`.
-- Give no quote for `ambiguous`.
+  Spans come from the title alone or from the abstract alone, never both.
+- The quote must contain the finding (the effect, outcome or conclusion, or the relationship
+  stated as known), not just the design or that patients were given A, and must name both
+  entities, by a listed name or synonym. If the finding's sentence says "the patients", "these
+  genes" or "the drug", join it with the span that names the entity, or quote the title if the
+  title states the finding.
 
-## Proposing qualifiers
-
-What the slots mean (`subject_...` describe the subject, `object_...` the object):
-
-- `..._aspect_qualifier`: what about the entity changes: activity, expression, abundance,
-  secretion, ... ("decreased **activity** of B"). Use the aspect the abstract names (lower mRNA
-  levels: `expression`; inhibited kinase activity: `activity`; less phosphorylation:
-  `phosphorylation`); don't infer one aspect from another.
-- `..._direction_qualifier`: which way it changes (increased, decreased, ...).
-- `..._form_or_variant_qualifier`: a form of the entity, such as a loss-of-function variant
-  ("mutations in A"); `..._part_qualifier`: a part of a gene, such as its promoter;
-  `subject_derivative_qualifier`: a derivative of the subject, such as its metabolite.
-- `causal_mechanism_qualifier`: how the subject acts on the object (inhibition, agonism,
-  binding, ...), no more specific than the abstract ("inhibits" is `inhibition`, not
-  `competitive_inhibition`).
-- `qualified_predicate`: the predicate the qualified statement reads with: `biolink:causes`
-  makes "A affects B" read "A causes decreased activity of B".
-
-Rules:
-
-- Propose when an abstract states more specifically how the subject relates to the object than
-  the statement does (a direction, an aspect, a mechanism, a variant form), or a different
-  direction or aspect than the statement's own.
-- Use only the slots of the statement's allowed set and only their listed values, copied
-  exactly. A statement with no allowed set gets no proposal.
-- Aspect and direction describe a change in a gene, gene product or chemical, never in a
-  disease or phenotype: no `object_aspect_qualifier` or `object_direction_qualifier` when the
-  object is a disease or phenotype, and no proposals at all for a chemical and a disease
-  (`treats`, `contraindicated_in`, ...).
-- On an interaction or binding statement, propose an aspect and direction only for the direct
-  effect of the interaction (A binds B and inhibits its kinase activity), not for an indirect
-  change such as B's expression. If the pair also has an `affects` statement, put direction and
-  aspect proposals on that one instead.
-- `subject_...` and `object_...` qualifiers attach to the statement's subject and object as
-  written, even for a symmetric predicate: put such a proposal on the statement whose subject
-  is the entity that acts.
-- A gene-to-disease or gene-to-phenotype statement already means the gene's variants: don't
-  propose `genetic_variant_form`, `mutant_form` or `polymorphic_form` for it ("mutations in A
-  cause B" just confirms "A causes B"). Propose a form only when the abstract names a specific
-  kind: loss of function, gain of function, dominant negative.
-- Give only the qualifiers to add or change (a new direction replaces the statement's own), not
-  ones the statement already has.
-- Give `qualified_predicate: biolink:causes` only for a causal claim, and only with a
-  `subject_...` or `object_...` qualifier (never with `causal_mechanism_qualifier` alone). Never
-  propose an associative finding for a statement whose `qualified_predicate` is
-  `biolink:causes`: a correlation can't support a causal statement.
-- One proposal per distinct qualifier set for a statement, with every abstract that supports it
-  in its `evidence`, each with its PMID and quote.
-- Propose only what an abstract states explicitly. When unsure, don't propose.
+{{include claim-rules.md}}
 
 ## Reply
 
-Reply with one JSON object and nothing else: no prose, no code fences.
-
-- List only `confirmed`, `contradicted` and `ambiguous` labels. Every (statement, abstract)
-  you leave out is recorded as `no_evidence`, so consider every statement against every
-  abstract before you answer.
-- Give each (statement, PMID) at most one label.
-- Use the statement ids (`S1`) and the PMIDs (digits only) as the request gives them.
-- If nothing bears on any statement, reply `{"labels": [], "proposals": []}`.
-
-```json
-{
-  "labels": [
-    {"statement": "S1", "pmid": "12345678", "quote": "text copied from the abstract", "label": "confirmed", "claim": "causal"},
-    {"statement": "S2", "pmid": "12345678", "label": "ambiguous"}
-  ],
-  "proposals": [
-    {
-      "statement": "S2",
-      "qualifiers": {"qualified_predicate": "biolink:causes", "object_aspect_qualifier": "activity", "object_direction_qualifier": "decreased"},
-      "claim": "causal",
-      "evidence": [{"pmid": "12345678", "quote": "text copied from the abstract"}]
-    }
-  ]
-}
-```
+- Go through the abstracts one at a time, and read each in full, background and conclusion
+  included, before you write its claims. The claim most often missed is a single sentence
+  stating the relationship in a paper about something else.
+- One entry per abstract, named by its id (`A1`), with its study design and its claims.
+- One claim per distinct finding. A finding stated twice (in the results and the conclusion) is
+  one claim: quote the clearer sentence, the authors' own result over a background sentence.
+- `none` for each qualifier slot you don't set, and `null` for each other field you don't set.
 
 ## Example
 
@@ -224,79 +128,64 @@ An example request, shortened, and its reply. It is not part of the request you 
 ```text
 # Entities
 
-- imatinib (CHEBI:45783)
+X: pioglitazone (CHEBI:8228)
   category: SmallMolecule
-  synonyms: Gleevec; STI571
-- ABL1 (NCBIGene:25)
-  category: Gene
-  synonyms: ABL; c-Abl
+  synonyms: Actos
+Y: amyotrophic lateral sclerosis (MONDO:0004976)
+  category: Disease
+  synonyms: ALS; motor neuron disease
 
-# Statements
+# Predicates
 
-S1: imatinib directly physically interacts with ABL1
-  subject: imatinib (CHEBI:45783)
-  predicate: biolink:directly_physically_interacts_with
-  object: ABL1 (NCBIGene:25)
-  qualifiers: none
-  allowed qualifiers: Q1
+ameliorates_condition, applied_to_treat, beneficial_in_models_for, contraindicated_in, exacerbates_condition, in_clinical_trials_for, in_preclinical_trials_for, preventative_for_condition, promotes_condition, studied_to_treat, treats, treats_or_applied_or_studied_to_treat
 
-S2: imatinib causes increased activity of ABL1
-  subject: imatinib (CHEBI:45783)
-  predicate: biolink:affects
-  object: ABL1 (NCBIGene:25)
-  qualifiers: object_aspect_qualifier: activity; object_direction_qualifier: increased; qualified_predicate: biolink:causes
-  allowed qualifiers: Q1
+# Qualifiers
 
-S3: imatinib affects ABL1
-  subject: imatinib (CHEBI:45783)
-  predicate: biolink:affects
-  object: ABL1 (NCBIGene:25)
-  qualifiers: none
-  allowed qualifiers: Q1
-
-# Allowed qualifiers
-
-Q1, for S1, S2 and S3:
-- causal_mechanism_qualifier: one of CausalMechanismQualifierEnum
-- object_aspect_qualifier: one of GeneOrGeneProductOrChemicalEntityAspectEnum
-- object_direction_qualifier: one of DirectionQualifierEnum
-- qualified_predicate: biolink:causes
-
-# Qualifier values
-
-- CausalMechanismQualifierEnum: modulation, ..., inhibition, ..., binding, ...
-- GeneOrGeneProductOrChemicalEntityAspectEnum: activity_or_abundance, abundance, activity, expression, ...
-- DirectionQualifierEnum: increased, upregulated, decreased, downregulated
+None of the predicates take qualifiers for this pair.
 
 # Abstracts
 
-## PMID:111 (2000)
-Title: Structural basis of ABL inhibition by STI571.
-Abstract: ... STI571 bound the inactive conformation of the ABL kinase domain and inhibited its catalytic activity with an IC50 of 38 nM. ...
+## A1 (PMID:111, 2012)
+Publication types: Randomized Controlled Trial; Journal Article
+Title: Pioglitazone in amyotrophic lateral sclerosis: a randomized placebo-controlled trial.
+Abstract: Pioglitazone prolonged survival in the SOD1-G93A mouse model of ALS. We randomized 219 patients with ALS to pioglitazone 45 mg/day or placebo, both added to riluzole. The trial was stopped for futility: pioglitazone did not improve survival compared with placebo (HR 1.21, 95% CI 0.71-2.07). ...
 
-## PMID:222 (2019)
-Title: Cardiovascular events in patients receiving imatinib or nilotinib.
-Abstract: ... ABL1 transcript levels were measured at baseline in all 300 patients. ...
+## A2 (PMID:222, 2020)
+Publication types: Review; Journal Article
+Title: Metabolic drugs in neurodegeneration.
+Abstract: ... Patients with ALS often have altered glucose metabolism, and pioglitazone is widely prescribed for type 2 diabetes. ...
+
+Give the study design and the claims about X and Y of every abstract (A1 to A2).
 ```
+
+The reply, with every qualifier slot `none` (`{...}`):
 
 ```json
 {
-  "labels": [
-    {"statement": "S1", "pmid": "111", "quote": "STI571 bound the inactive conformation of the ABL kinase domain", "label": "confirmed", "claim": "causal"},
-    {"statement": "S2", "pmid": "111", "label": "ambiguous"},
-    {"statement": "S3", "pmid": "111", "quote": "STI571 bound the inactive conformation of the ABL kinase domain and inhibited its catalytic activity", "label": "confirmed", "claim": "causal"}
-  ],
-  "proposals": [
-    {"statement": "S1", "qualifiers": {"causal_mechanism_qualifier": "inhibition"}, "claim": "causal", "evidence": [{"pmid": "111", "quote": "STI571 bound the inactive conformation of the ABL kinase domain and inhibited its catalytic activity"}]},
-    {"statement": "S2", "qualifiers": {"object_direction_qualifier": "decreased"}, "claim": "causal", "evidence": [{"pmid": "111", "quote": "STI571 bound the inactive conformation of the ABL kinase domain and inhibited its catalytic activity"}]},
-    {"statement": "S3", "qualifiers": {"qualified_predicate": "biolink:causes", "object_aspect_qualifier": "activity", "object_direction_qualifier": "decreased"}, "claim": "causal", "evidence": [{"pmid": "111", "quote": "STI571 bound the inactive conformation of the ABL kinase domain and inhibited its catalytic activity"}]}
+  "abstracts": [
+    {"abstract": "A1", "study_design": "rct", "claims": [
+      {"polarity": "negative",
+       "statement": {"subject": "X", "predicate": "treats", "qualified_predicate": null, "qualifiers": {...}},
+       "also_supports": [{"subject": "X", "predicate": "in_clinical_trials_for", "qualified_predicate": null, "qualifiers": {...}}],
+       "claim_role": "primary_finding", "hedged": false, "negative_finding_type": "demonstrated_absence",
+       "context": {"species": "human", "anatomy": null, "notes": "45 mg/day, added to riluzole"},
+       "evidence_sentence": "We randomized 219 patients with ALS to pioglitazone ... pioglitazone did not improve survival compared with placebo"},
+      {"polarity": "positive",
+       "statement": {"subject": "X", "predicate": "beneficial_in_models_for", "qualified_predicate": null, "qualifiers": {...}},
+       "also_supports": [],
+       "claim_role": "background", "hedged": false, "negative_finding_type": null,
+       "context": {"species": "mouse", "anatomy": null, "notes": "SOD1-G93A model"},
+       "evidence_sentence": "Pioglitazone prolonged survival in the SOD1-G93A mouse model of ALS."}
+    ]},
+    {"abstract": "A2", "study_design": "narrative_review", "claims": []}
   ]
 }
 ```
 
-PMID:222 mentions both entities without relating them: `no_evidence` for every statement, so
-it is left out. S2 says the activity increases while PMID:111 reports inhibition: `ambiguous`
-for S2, with the decreased direction proposed instead. The direction goes on the `affects`
-statements; S1 gets only the mechanism. Had PMID:111 said only that STI571 failed to inhibit
-the T315I mutant of ABL, S1 and S3 would be `ambiguous`, not `contradicted`: the negative
-finding is limited to a mutant form.
+A1's trial is a negative `treats` claim: placebo-controlled, so `demonstrated_absence`. It also
+shows that pioglitazone was tested in a clinical trial for ALS, which the negative claim can't
+say, so that goes in `also_supports`. The sentence with the finding doesn't name ALS, so the
+quote joins it to the sentence that does, with `...`; riluzole and the dose don't change the
+claim and go in `notes`. The mouse result is a claim of its own, at its own level
+(`beneficial_in_models_for` in mouse, not `treats`), and the authors state it as known, so it is
+`background`. A2 names both entities without relating them: no claims.
