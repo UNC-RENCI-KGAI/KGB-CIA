@@ -1,16 +1,19 @@
-"""Step 3: search PubMed for each pair and fetch the abstracts.
+"""Step 2: search PubMed for each pair and fetch the abstracts.
 
 One ESearch per pair finds the abstracts that name both nodes, by their names and synonyms in
 title or abstract (`[tiab]`) or by MeSH heading (`[mh]`), most relevant first; EFetch then
 fetches the abstracts of those PMIDs and of the PMIDs the pair's edges already cite, which are
 labeled even when the search misses them. NodeNorm supplies the synonyms and MeSH headings the
-graph's nodes lack, since a node usually carries one name and step 5's recall depends on the
+graph's nodes lack, since a node usually carries one name and step 3's recall depends on the
 query's.
 
 Everything fetched (searches by query string, abstracts by PMID, NodeNorm entries by CURIE) goes
 in the PubMed cache, so a rerun makes no requests and `pubmed.jsonl` is cheap to rewrite in full.
 NCBI allows 3 requests a second without an API key and 10 with one, and asks that large jobs
 run off-peak; requests here are sequential and spaced to stay under the limit.
+
+What a paper's publication types make it is here too: its article type, whether it's retracted,
+and the study design they name (`article_type`, `study_design`).
 """
 
 from __future__ import annotations
@@ -23,16 +26,17 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
 from pubmed_evidence import config
 from pubmed_evidence.cache import Abstract, PubMedCache, Search, today
+from pubmed_evidence.graphio import chunks, write_jsonl
 from pubmed_evidence.records import (
     ENTITIES,
     PAIRS,
@@ -42,9 +46,9 @@ from pubmed_evidence.records import (
     Pair,
     PubmedRecord,
     read_records,
-    write_records,
 )
 from shared import nodenorm as nodenorm_api
+from shared.schema import ArticleType, StudyDesign
 
 ESEARCH_MAX = 10_000  # ESearch returns at most this many ids per query
 EFETCH_BATCH = 200
@@ -250,10 +254,16 @@ def _abstract_text(abstract: ET.Element | None) -> str:
     return "\n".join(paragraphs)
 
 
+def _types(elements: list[ET.Element]) -> list[str]:
+    """PubMed's publication types, in its order, without repeats."""
+    return list(dict.fromkeys(t for t in map(_text, elements) if t))
+
+
 def parse_efetch(xml_text: str) -> list[Abstract]:
-    """Abstracts in an EFetch `PubmedArticleSet` (journal and book articles). An article without
-    abstract text comes back with `abstract=''`. Raises ET.ParseError on malformed XML and
-    ValueError on any other document, such as NCBI's `<eFetchResult><ERROR>`."""
+    """Abstracts in an EFetch `PubmedArticleSet` (journal and book articles), with their
+    publication types. An article without abstract text comes back with `abstract=''`. Raises
+    ET.ParseError on malformed XML and ValueError on any other document, such as NCBI's
+    `<eFetchResult><ERROR>`."""
     root = ET.fromstring(xml_text)
     if root.tag != "PubmedArticleSet":
         raise ValueError(f"unexpected EFetch response <{root.tag}>: {_text(root)[:200]}")
@@ -265,21 +275,20 @@ def parse_efetch(xml_text: str) -> list[Abstract]:
             continue
         art = citation.find("Article")
         if art is None:
-            out.append(Abstract(pmid, ""))
+            out.append(Abstract(pmid, "", publication_types=[]))
             continue
         year = _year(art.find("Journal/JournalIssue/PubDate")) or _year(art.find("ArticleDate"))
-        out.append(
-            Abstract(
-                pmid, _text(art.find("ArticleTitle")), _abstract_text(art.find("Abstract")), year
-            )
-        )
+        title = _text(art.find("ArticleTitle"))
+        types = _types(art.findall("PublicationTypeList/PublicationType"))
+        out.append(Abstract(pmid, title, _abstract_text(art.find("Abstract")), year, "", types))
     for book in root.findall("PubmedBookArticle/BookDocument"):
         pmid = (book.findtext("PMID") or "").strip()
         if not pmid:
             continue
         title = _text(book.find("ArticleTitle")) or _text(book.find("Book/BookTitle"))
         year = _year(book.find("Book/PubDate"))
-        out.append(Abstract(pmid, title, _abstract_text(book.find("Abstract")), year))
+        types = _types(book.findall("PublicationType"))
+        out.append(Abstract(pmid, title, _abstract_text(book.find("Abstract")), year, "", types))
     return out
 
 
@@ -404,21 +413,71 @@ class EUtils:
         return self._post("esearch.fcgi", params, lambda r: parse_esearch(_json(r)))
 
     def efetch(self, pmids: Iterable[str]) -> list[Abstract]:
-        """An `Abstract` for every PMID, EFETCH_BATCH per request. A PMID PubMed doesn't return
-        comes back with an empty title and abstract, so the cache stops asking for it."""
+        """An `Abstract` for every PMID, in one request: callers send at most EFETCH_BATCH. A
+        PMID PubMed doesn't return comes back with an empty title and abstract and no
+        publication types, so the cache stops asking for it."""
         wanted = list(dict.fromkeys(pmids))
-        out: list[Abstract] = []
-        for i in range(0, len(wanted), EFETCH_BATCH):
-            batch = wanted[i : i + EFETCH_BATCH]
-            params = {
-                "db": "pubmed",
-                "id": ",".join(batch),
-                "rettype": "abstract",
-                "retmode": "xml",
-            }
-            got = {a.pmid: a for a in self._post("efetch.fcgi", params, _efetch_abstracts)}
-            out.extend(got.get(p) or Abstract(p, "") for p in batch)
-        return out
+        if not wanted:
+            return []
+        if len(wanted) > EFETCH_BATCH:
+            raise ValueError(f"{len(wanted)} PMIDs in one EFetch request; at most {EFETCH_BATCH}")
+        params = {"db": "pubmed", "id": ",".join(wanted), "rettype": "abstract", "retmode": "xml"}
+        got = {a.pmid: a for a in self._post("efetch.fcgi", params, _efetch_abstracts)}
+        return [got.get(p) or Abstract(p, "", publication_types=[]) for p in wanted]
+
+
+# --- Publication types ------------------------------------------------------------------------
+
+# PubMed's publication types for each article type, most specific first: an article with
+# several types takes the first class any of them is in, and `other` if none is.
+ARTICLE_TYPES: dict[str, frozenset[str]] = {
+    "opinion": frozenset({"Editorial", "Comment", "Letter", "News"}),
+    "review": frozenset({"Review", "Systematic Review", "Meta-Analysis", "Scoping Review"}),
+    "guideline": frozenset({"Practice Guideline", "Guideline", "Consensus Development Conference"}),
+    "case_report": frozenset({"Case Reports"}),
+    "research": frozenset(
+        {
+            "Journal Article",
+            "Clinical Trial",
+            "Clinical Trial, Phase I",
+            "Clinical Trial, Phase II",
+            "Clinical Trial, Phase III",
+            "Clinical Trial, Phase IV",
+            "Randomized Controlled Trial",
+            "Observational Study",
+            "Comparative Study",
+            "Evaluation Study",
+            "Validation Study",
+            "Multicenter Study",
+        }
+    ),
+}
+RETRACTED = "Retracted Publication"
+STUDY_DESIGNS: tuple[str, ...] = get_args(StudyDesign)
+
+
+def article_type(publication_types: Iterable[str]) -> tuple[ArticleType, bool]:
+    """(article type, retracted) of an article with these PubMed publication types."""
+    types = set(publication_types)
+    kind = next((k for k, names in ARTICLE_TYPES.items() if types & names), "other")
+    return kind, RETRACTED in types
+
+
+def study_design(publication_types: Iterable[str]) -> StudyDesign | None:
+    """The study design an article's PubMed publication types name (config.PUBMED_DESIGNS), or
+    None if they name none. Where they name several, the one StudyDesign lists first wins: a
+    meta-analysis over an RCT, a cohort over a case report."""
+    named = {config.PUBMED_DESIGNS[t] for t in publication_types if t in config.PUBMED_DESIGNS}
+    return min(named, key=STUDY_DESIGNS.index, default=None)
+
+
+def design_of(
+    publication_types: Iterable[str], extractor: StudyDesign
+) -> tuple[StudyDesign, Literal["pubmed", "extractor"]]:
+    """The design an abstract's evidence records (`PublicationEvidence.study_design`), and what
+    set it: PubMed's publication types where they name one, else the extractor's answer."""
+    named = study_design(publication_types)
+    return (named, "pubmed") if named is not None else (extractor, "extractor")
 
 
 # --- The step ---------------------------------------------------------------------------------
@@ -447,20 +506,20 @@ def load_nodenorm(
     nodenorm = nodenorm or nodenorm_api.normalize
     entries = cache.get_nodenorm(curies)
     missing = [c for c in dict.fromkeys(curies) if c not in entries]
-    batch = batch or NODENORM_BATCH
-    for i in range(0, len(missing), batch):
-        chunk = missing[i : i + batch]
+    left = len(missing)
+    for chunk in chunks(missing, batch or NODENORM_BATCH):
         try:
-            response = nodenorm(chunk)
+            response = nodenorm(list(chunk))
         except (httpx.HTTPError, ValueError, OSError) as e:
             _warn(
-                f"NodeNorm failed ({type(e).__name__}: {e}); searching {len(missing) - i} "
-                "nodes by their own names only"
+                f"NodeNorm failed ({type(e).__name__}: {e}); searching {left} nodes by their "
+                "own names only"
             )
             break
         got = {c: response.get(c) or None for c in chunk}
         cache.put_nodenorm(got)
         entries.update(got)
+        left -= len(chunk)
     return entries
 
 
@@ -592,11 +651,10 @@ def search_pairs(
                     f"{uncached} uncached searches: NCBI asks that large jobs run on weekends "
                     "or 9pm-5am ET on weekdays"
                 )
-            for start in range(0, len(plans), CHUNK):
-                _run_chunk(
-                    plans[start : start + CHUNK], cache, client, max_abstracts, refresh, tally, out
-                )
-                done = min(start + CHUNK, len(plans))
+            done = 0
+            for chunk in chunks(plans, CHUNK):
+                _run_chunk(chunk, cache, client, max_abstracts, refresh, tally, out)
+                done += len(chunk)
                 if len(plans) > CHUNK:
                     _warn(
                         f"{done}/{len(plans)} pairs ({tally.searched} searched, "
@@ -606,7 +664,7 @@ def search_pairs(
     finally:
         if eutils is None:
             client.close()
-    write_records(work / PUBMED, out)
+    write_jsonl(work / PUBMED, out)
     with_text = {f.pmid for r in out for f in r.pmids}
     without = {p for r in out for p in r.no_abstract}
     return {
@@ -626,8 +684,20 @@ def search_pairs(
     }
 
 
+def _keep_cached(fetched: list[Abstract], cached: dict[str, Abstract]) -> list[Abstract]:
+    """The fetched abstracts, except that a PMID PubMed now returns nothing for keeps what the
+    cache had, marked as fetched: fetching it again for its publication types mustn't lose its
+    text."""
+    return [
+        replace(cached[a.pmid], publication_types=[])
+        if not a.title and not a.has_text and a.pmid in cached
+        else a
+        for a in fetched
+    ]
+
+
 def _run_chunk(
-    plans: list[_Plan],
+    plans: Sequence[_Plan],
     cache: PubMedCache,
     client: EUtils,
     max_abstracts: int,
@@ -637,7 +707,7 @@ def _run_chunk(
 ) -> None:
     """Search the chunk's pairs, fetch the abstracts none of them has cached, then build their
     records. Fetching per chunk rather than per pair fills EFetch batches and fetches an
-    abstract shared by several pairs once."""
+    abstract shared by several pairs once; a batch that fails fails only its own pairs."""
     searches: dict[str, Search | None] = {}
     for plan in plans:
         pid = plan.pair.pair_id
@@ -669,14 +739,13 @@ def _run_chunk(
             search = searches[plan.pair.pair_id]
             wanted += search.pmids[:max_abstracts] if search else []
             wanted += _source_pmids(plan.pair)
-    missing = cache.missing_abstracts(wanted)
-    for i in range(0, len(missing), EFETCH_BATCH):
-        batch = missing[i : i + EFETCH_BATCH]
+    for batch in chunks(cache.missing_abstracts(wanted), EFETCH_BATCH):
         try:
-            cache.put_abstracts(client.efetch(batch))
+            fetched = client.efetch(batch)
         except EUtilsError as e:
             _warn(f"EFetch of {len(batch)} PMIDs failed: {e}")
             continue
+        cache.put_abstracts(_keep_cached(fetched, cache.get_abstracts(batch)))
         tally.fetched += len(batch)
 
     for plan in plans:
@@ -750,6 +819,6 @@ def run(args: argparse.Namespace) -> int:
             "cached results are kept",
             file=sys.stderr,
         )
-    # As in step 5: a few transient failures leave those pairs unlabeled until a rerun, but
+    # As in step 3: a few transient failures leave those pairs unlabeled until a rerun, but
     # many mean NCBI is unreachable, and later steps shouldn't run on that.
     return 1 if s["failed"] > MAX_FAILED_SHARE * max(s["pairs"], 1) else 0

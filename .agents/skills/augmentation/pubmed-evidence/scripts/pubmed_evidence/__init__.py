@@ -1,9 +1,9 @@
 """The pubmed-evidence skill's library: one module per step of the augmentation agent.
 
-The scripts next to this package run one step each (`select_edges.py`, `search_pubmed.py`,
-...), and `agents/augmentation/cli.py` runs them for `kgb-augment` and the pipeline. Every
-step reads and writes the repository's KGX records (`shared/schema.py`), so the repository
-root goes on the import path when it isn't there already (a script run with `uv run --script`).
+`augment.py` next to this package runs the steps, and `agents/augmentation/cli.py` runs them
+for `kgb-augment` and the pipeline. Every step reads and writes the repository's KGX records
+(`shared/schema.py`), so the repository root goes on the import path when it isn't there
+already (a script run with `uv run --script`).
 """
 
 from __future__ import annotations

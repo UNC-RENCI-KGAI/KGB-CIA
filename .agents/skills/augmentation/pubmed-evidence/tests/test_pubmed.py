@@ -1,11 +1,13 @@
-"""Step 3 (pubmed) without the network: E-utilities through `httpx.MockTransport`, NodeNorm as a
-fake function, and the work files written in code."""
+"""Step 2 (pubmed) without the network: E-utilities through `httpx.MockTransport`, NodeNorm as a
+fake function, and the work files written in code. Also what publication types make a paper:
+its article type, retraction and study design."""
 
 from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import get_args
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -13,7 +15,7 @@ import httpx
 import pytest
 from pubmed_evidence import config, pubmed
 from pubmed_evidence.cache import PubMedCache
-from pubmed_evidence.graphio import pair_id
+from pubmed_evidence.graphio import pair_id, write_jsonl
 from pubmed_evidence.records import (
     ENTITIES,
     PAIRS,
@@ -22,9 +24,10 @@ from pubmed_evidence.records import (
     Pair,
     PubmedRecord,
     read_records,
-    write_records,
 )
 from toy import ABL1, CML, IMATINIB
+
+from shared.schema import StudyDesign
 
 # --- Fakes ------------------------------------------------------------------------------------
 
@@ -49,6 +52,10 @@ STRUCTURED = """
           hematologic responses in 53 of 54 patients.</AbstractText>
         <CopyrightInformation>Copyright 2001 Massachusetts Medical Society.</CopyrightInformation>
       </Abstract>
+      <PublicationTypeList>
+        <PublicationType UI="D017426">Clinical Trial, Phase I</PublicationType>
+        <PublicationType UI="D016428">Journal Article</PublicationType>
+      </PublicationTypeList>
     </Article>
   </MedlineCitation>
 </PubmedArticle>
@@ -86,6 +93,7 @@ BOOK = """
     <PMID Version="1">20301295</PMID>
     <Book><BookTitle>GeneReviews</BookTitle><PubDate><Year>1993</Year></PubDate></Book>
     <ArticleTitle>ABL1-related disorder</ArticleTitle>
+    <PublicationType UI="D016454">Review</PublicationType>
     <Abstract><AbstractText>ABL1 variants cause a congenital disorder.</AbstractText></Abstract>
   </BookDocument>
 </PubmedBookArticle>
@@ -246,8 +254,8 @@ def write_work(work: Path, pairs: list[Pair] | None = None, entities=None) -> Pa
                 rules=["chemical-gene"],
             ),
         ]
-    write_records(work / PAIRS, pairs)
-    write_records(work / ENTITIES, ENTITY_RECORDS if entities is None else entities)
+    write_jsonl(work / PAIRS, pairs)
+    write_jsonl(work / ENTITIES, ENTITY_RECORDS if entities is None else entities)
     return work
 
 
@@ -349,11 +357,14 @@ def test_parse_efetch():
         "patients."
     )
     assert first.year == 2001
+    assert first.publication_types == ["Clinical Trial, Phase I", "Journal Article"]
     assert got["111"].year == 1998
     assert got["333"].abstract == "" and not got["333"].has_text
     assert got["333"].title == "Letter: imatinib and CML."
+    assert got["333"].publication_types == []  # fetched, and PubMed gave none
     assert got["20301295"].title == "ABL1-related disorder"
     assert got["20301295"].year == 1993 and got["20301295"].has_text
+    assert got["20301295"].publication_types == ["Review"]
     with pytest.raises(ValueError):
         pubmed.parse_efetch("<eFetchResult><ERROR>Empty id list</ERROR></eFetchResult>")
 
@@ -412,17 +423,30 @@ def test_client_error_is_not_retried():
     assert client.requests == 1
 
 
-def test_efetch_batches_of_200_and_marks_absent_pmids():
+def test_efetch_marks_absent_pmids():
+    fake = FakeNCBI(absent={"7"})
+    got = eutils(fake).efetch(["5", "7", "5", "9"])
+    [form] = fake.endpoint_calls("efetch.fcgi")
+    assert form["id"] == "5,7,9"
+    assert form["rettype"] == "abstract" and form["retmode"] == "xml"
+    assert [a.pmid for a in got] == ["5", "7", "9"]
+    assert {a.pmid for a in got if not a.has_text} == {"7"}
+    assert got[1].publication_types == []  # absent: not asked for again
+    assert eutils(fake).efetch([]) == [] and len(fake.calls) == 1
+    with pytest.raises(ValueError):
+        eutils(fake).efetch(str(i) for i in range(pubmed.EFETCH_BATCH + 1))
+
+
+def test_abstracts_are_fetched_in_batches_of_200(tmp_path):
     pmids = [str(i) for i in range(1, 451)]
+    pair = Pair(pair_id=DRUG_GENE, nodes=(IMATINIB, ABL1), statement_ids=["s2"], source_pmids=pmids)
+    work = write_work(tmp_path / "work", [pair])
     fake = FakeNCBI(absent={"7", "300"})
-    got = eutils(fake).efetch(pmids)
+    pubmed.search_pairs(work, tmp_path / "cache", eutils=eutils(fake), nodenorm=FakeNodeNorm())
     batches = [form["id"].split(",") for form in fake.endpoint_calls("efetch.fcgi")]
     assert [len(b) for b in batches] == [200, 200, 50]
     assert sum(batches, []) == pmids
-    form = fake.endpoint_calls("efetch.fcgi")[0]
-    assert form["rettype"] == "abstract" and form["retmode"] == "xml"
-    assert [a.pmid for a in got] == pmids
-    assert {a.pmid for a in got if not a.has_text} == {"7", "300"}
+    assert by_pair(work)[DRUG_GENE].no_abstract == ["7", "300"]
 
 
 def test_rate_limiter_spaces_calls():
@@ -531,6 +555,34 @@ def test_second_run_makes_no_requests(tmp_path):
     )
     assert len(fake.endpoint_calls("esearch.fcgi")) == 2
     assert fake.endpoint_calls("efetch.fcgi") == []
+
+
+def test_abstracts_cached_without_types_are_fetched_again(tmp_path):
+    work = write_work(tmp_path / "work")
+    cache_dir = tmp_path / "cache"
+    pubmed.search_pairs(work, cache_dir, eutils=eutils(default_ncbi()), nodenorm=FakeNodeNorm())
+    first = (work / PUBMED).read_text()
+    # As a cache from before publication types were recorded has them.
+    with PubMedCache(cache_dir / config.PUBMED_CACHE) as cache:
+        cache.db.execute(
+            "UPDATE abstracts SET publication_types = NULL WHERE pmid IN ('111', '999')"
+        )
+        cache.db.commit()
+
+    fake = default_ncbi()
+    fake.absent.add("111")  # PubMed no longer returns it: the cached text stays
+    pubmed.search_pairs(work, cache_dir, eutils=eutils(fake), nodenorm=FakeNodeNorm())
+    assert fake.endpoint_calls("esearch.fcgi") == []
+    assert [form["id"] for form in fake.endpoint_calls("efetch.fcgi")] == ["111,999"]
+    assert (work / PUBMED).read_text() == first
+    with PubMedCache(cache_dir / config.PUBMED_CACHE) as cache:
+        assert cache.missing_abstracts(["111", "999", "222"]) == []
+        kept = cache.get_abstracts(["111"])["111"]
+        assert (kept.title, kept.publication_types) == ("Imatinib in CML.", [])
+
+    fake = default_ncbi()
+    pubmed.search_pairs(work, cache_dir, eutils=eutils(fake), nodenorm=FakeNodeNorm())
+    assert fake.calls == []
 
 
 def test_more_abstracts_than_cached_reruns_the_search(tmp_path):
@@ -721,3 +773,81 @@ def test_run_tolerates_a_small_share_of_failed_pairs(tmp_path, monkeypatch, caps
 )
 def test_search_forms(term, forms):
     assert pubmed.search_forms(term) == forms
+
+
+# --- Publication types ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "types, expected",
+    [
+        (["Journal Article"], ("research", False)),
+        (["Journal Article", "Review"], ("review", False)),
+        (["Review", "Comment"], ("opinion", False)),  # opinion is the most specific
+        (["Journal Article", "Practice Guideline"], ("guideline", False)),
+        (["Case Reports", "Journal Article"], ("case_report", False)),
+        (["Clinical Trial, Phase II"], ("research", False)),
+        (["Published Erratum"], ("other", False)),
+        ([], ("other", False)),
+        (["Journal Article", "Retracted Publication"], ("research", True)),
+        (["Retracted Publication"], ("other", True)),
+    ],
+)
+def test_article_type(types, expected):
+    assert pubmed.article_type(types) == expected
+
+
+@pytest.mark.parametrize(
+    "types, expected",
+    [
+        (["Journal Article"], None),
+        ([], None),
+        (["Journal Article", "Randomized Controlled Trial"], "rct"),
+        (["Clinical Trial, Phase III", "Journal Article"], "cohort"),
+        (["Network Meta-Analysis"], "meta_analysis"),
+        (["Letter"], "narrative_review"),
+        # Of several, the one StudyDesign lists first.
+        (["Case Reports", "Review"], "case_report"),
+        (["Review", "Systematic Review"], "systematic_review"),
+        (["Systematic Review", "Meta-Analysis", "Review"], "meta_analysis"),
+        (["Randomized Controlled Trial", "Meta-Analysis"], "meta_analysis"),
+        (["Observational Study", "Randomized Controlled Trial"], "rct"),
+        (["Case Reports", "Clinical Trial"], "cohort"),
+        (["Comment", "Clinical Trial"], "cohort"),
+        # Veterinary studies and protocols name no design: the extractor's answer stands.
+        (["Randomized Controlled Trial, Veterinary"], None),
+        (["Clinical Trial Protocol"], None),
+        (["Retracted Publication", "Equivalence Trial"], "rct"),
+    ],
+)
+def test_study_design(types, expected):
+    assert pubmed.study_design(types) == expected
+
+
+def test_design_of():
+    assert pubmed.design_of(["Meta-Analysis"], "animal") == ("meta_analysis", "pubmed")
+    assert pubmed.design_of(["Journal Article"], "animal") == ("animal", "extractor")
+
+
+def test_every_publication_type_in_the_design_table_names_a_design():
+    # DESIGN.md's table (step 3, "Study design and publication data"), with "Clinical Trial and
+    # its phases" spelled out.
+    assert config.PUBMED_DESIGNS == {
+        **dict.fromkeys(["Meta-Analysis", "Network Meta-Analysis"], "meta_analysis"),
+        "Systematic Review": "systematic_review",
+        **dict.fromkeys(
+            ["Randomized Controlled Trial", "Equivalence Trial", "Pragmatic Clinical Trial"], "rct"
+        ),
+        **dict.fromkeys(
+            [
+                "Observational Study",
+                "Clinical Trial",
+                *(f"Clinical Trial, Phase {p}" for p in ("I", "II", "III", "IV")),
+                "Controlled Clinical Trial",
+            ],
+            "cohort",
+        ),
+        "Case Reports": "case_report",
+        **dict.fromkeys(["Review", "Editorial", "Comment", "Letter"], "narrative_review"),
+    }
+    assert set(config.PUBMED_DESIGNS.values()) <= set(get_args(StudyDesign))

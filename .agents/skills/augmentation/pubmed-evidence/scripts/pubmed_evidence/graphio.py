@@ -2,12 +2,12 @@
 
 A *statement* is what an edge claims, without its provenance: subject, predicate, object,
 qualifiers and `negated`. Sources often give the same statement (DisGeNET and JensenLab both
-give `gene_associated_with_condition`), so step 5 labels each statement once and step 6 applies
-the result to every edge that makes it. Steps 2, 5 and 6 all key on `statement_id`, so it must
-depend only on the statement.
+give `gene_associated_with_condition`), so select lists each statement once, and a statement
+step 6 proposes is one edge, however many originals it refines. Select, review and step 6 key
+on `statement_id`, so it must depend only on the statement.
 
-A *pair* is the unordered pair of nodes an edge joins. One PubMed search serves every edge
-between them, in both directions.
+A *pair* is the unordered pair of nodes an edge joins. One PubMed search and one label request
+serve every edge between them, in both directions.
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
-from collections.abc import Iterable, Iterator
+import re
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, TypeVar
 
 from pydantic import BaseModel
 
@@ -25,6 +26,14 @@ from shared.schema import Edge, Node
 
 NODES = "nodes.jsonl"
 EDGES = "edges.jsonl"
+# The `id` prefixes of an input edge that came without one (`edge_id`), and of an edge step 6
+# adds.
+EDGE_ID_PREFIX = "kgbcia-edge:"
+ID_PREFIX = "kgbcia-augmentation:"
+# Where step 6 lists the PMIDs it appended to an input edge's `publications`.
+ADDED_PUBLICATIONS = "lit_added_publications"
+
+T = TypeVar("T")
 
 
 def _open(path: Path, mode: str) -> IO[str]:
@@ -50,16 +59,19 @@ def read_jsonl(path: Path) -> Iterator[dict]:
                 yield json.loads(line)
 
 
-def write_jsonl(path: Path, records: Iterable[BaseModel | dict]) -> int:
-    """Write one JSON object per line; models drop None fields, as ORION's KGX does."""
+def write_jsonl(path: Path, records: Iterable[BaseModel | dict], compact: bool = False) -> int:
+    """Write one JSON object per line; models drop None fields, as ORION's KGX does. With
+    `compact`, dicts are written without spaces too, keys in their order, as pydantic and ORION
+    write them."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    separators = (",", ":") if compact else None
     n = 0
     with _open(path, "w") as f:
         for r in records:
             if isinstance(r, BaseModel):
                 f.write(r.model_dump_json(exclude_none=True))
             else:
-                f.write(json.dumps(r, ensure_ascii=False))
+                f.write(json.dumps(r, ensure_ascii=False, separators=separators))
             f.write("\n")
             n += 1
     return n
@@ -123,6 +135,36 @@ def statement_id(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def edge_id(record: dict[str, Any]) -> str:
+    """The `id` an input edge goes by: its own, or for an edge without one `kgbcia-edge:` plus
+    the first 16 hex digits of the SHA-256 of its canonical JSON (sorted keys, the record as
+    read). The hash changes if the transformation's output for the edge does."""
+    if record.get("id"):
+        return record["id"]
+    canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return EDGE_ID_PREFIX + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def as_cited(record: dict[str, Any]) -> dict[str, Any]:
+    """The edge record with its `publications` as its source cited them: the PMIDs an earlier
+    step 6 appended (its `lit_added_publications`) taken back out, keys in their order. The
+    same record if it has none."""
+    added = record.get(ADDED_PUBLICATIONS)
+    publications = record.get("publications")
+    if not isinstance(added, list) or not added or not isinstance(publications, list):
+        return record
+    appended = set(added)
+    return {**record, "publications": [p for p in publications if p not in appended]}
+
+
+def proposed_edge_id(statement_id: str) -> str:
+    """The `id` of an edge step 6 proposes: `kgbcia-augmentation:` plus the first 16 hex digits
+    of the SHA-256 of `statement_id`, the proposal's key (`refine.statement_key`, one for a
+    symmetric statement either way round). So a statement has one id whichever originals it
+    refines, in any graph."""
+    return ID_PREFIX + hashlib.sha256(statement_id.encode("utf-8")).hexdigest()[:16]
+
+
 def edge_statement_id(edge: Edge) -> str:
     return statement_id(
         edge.subject, edge.predicate, edge.object, qualifiers_of(edge), is_negated(edge)
@@ -147,5 +189,26 @@ def pmid_of(publication: str) -> str | None:
     return None
 
 
+def parse_pmid(value: Any) -> str | None:
+    """The digits of a PMID however it is written by hand ('12345', 12345, 'PMID:12345',
+    'PMID 12345'); None if there are none."""
+    if value is None or isinstance(value, bool):
+        return None
+    m = re.search(r"\d+", str(value))
+    return m.group(0) if m else None
+
+
+def pmid_key(pmid: str) -> tuple[bool, int, str]:
+    """Sort key for bare PMIDs: by number, anything that isn't digits last."""
+    return (not pmid.isdigit(), int(pmid) if pmid.isdigit() else 0, pmid)
+
+
 def publication_of(pmid: str) -> str:
     return f"PMID:{pmid}"
+
+
+def chunks(items: Sequence[T], size: int) -> Iterator[Sequence[T]]:
+    """`items` in consecutive slices of at most `size` (at least 1) each."""
+    size = max(1, size)
+    for i in range(0, len(items), size):
+        yield items[i : i + size]

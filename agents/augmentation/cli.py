@@ -12,7 +12,8 @@ import sys
 from pathlib import Path
 
 DESCRIPTION = (
-    "Enrich the baseline graph with extra datasets and PubMed evidence for or against edges."
+    "Enrich the baseline graph with extra datasets, and with PubMed evidence for its edges and "
+    "more specific edges."
 )
 
 SKILL_SCRIPTS = (
@@ -26,8 +27,8 @@ SKILL_SCRIPTS = (
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Appended, not prepended: the directory also holds the skill's step scripts, which must
-    # not shadow anything else of the same name.
+    # Appended, not prepended: the directory also holds the skill's entry script, augment.py,
+    # which must not shadow anything else of the same name.
     if str(SKILL_SCRIPTS) not in sys.path:
         sys.path.append(str(SKILL_SCRIPTS))
     from pubmed_evidence import cli

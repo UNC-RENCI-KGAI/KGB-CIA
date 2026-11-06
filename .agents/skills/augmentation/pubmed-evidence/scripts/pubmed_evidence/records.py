@@ -6,14 +6,14 @@ rebuild.
 
 | File | Written by | One line per |
 | --- | --- | --- |
-| `entities.jsonl` | select (step 2) | node in a kept pair (`Entity`) |
-| `statements.jsonl` | select (step 2) | distinct statement of a kept edge (`Statement`) |
-| `pairs.jsonl` | select (step 2) | kept node pair (`Pair`) |
-| `scope_report.json` | select (step 2) | counts per rule and per skipped edge type |
-| `pubmed.jsonl` | pubmed (step 3) | pair searched (`PubmedRecord`) |
-| `sentences.jsonl` | sentences (step 4) | statement (`SentenceRecord`) |
-| `label_run.json` | label (step 5), review | the run step 6 applies (`LabelRun`) |
-| `apply_report.json` | apply (step 6) | counts of what step 6 added and skipped |
+| `entities.jsonl` | select (step 1) | node in a kept pair (`Entity`) |
+| `statements.jsonl` | select (step 1) | distinct statement of a kept edge (`Statement`) |
+| `pairs.jsonl` | select (step 1) | kept node pair (`Pair`) |
+| `scope_report.json` | select (step 1) | counts per rule and per skipped edge type |
+| `pubmed.jsonl` | pubmed (step 2) | pair searched (`PubmedRecord`) |
+| `label_run.json` | label (step 3), ground, review | the run step 6 applies (`LabelRun`) |
+| `refinements.jsonl` | apply (step 6) | refined pair: its edges' support, its proposals and links |
+| `apply_report.json` | apply (step 6) | counts of what step 6 checked, added and held, and why |
 
 PMIDs are bare digits ('12345') everywhere in the work files and caches, and 'PMID:12345' in
 the graph's `publications`.
@@ -28,20 +28,20 @@ from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
-from pubmed_evidence.graphio import read_jsonl, write_jsonl
+from pubmed_evidence.graphio import read_jsonl
 
 ENTITIES = "entities.jsonl"
 STATEMENTS = "statements.jsonl"
 PAIRS = "pairs.jsonl"
 SCOPE_REPORT = "scope_report.json"
 PUBMED = "pubmed.jsonl"
-SENTENCES = "sentences.jsonl"
 LABEL_RUN = "label_run.json"
+REFINEMENTS = "refinements.jsonl"
 APPLY_REPORT = "apply_report.json"
 
 
 class Entity(BaseModel):
-    """A node in a kept pair, with what step 3 needs to search for it and step 4 to name it."""
+    """A node in a kept pair, with what step 2 needs to search for it and step 3 to name it."""
 
     id: str
     name: str | None = None
@@ -49,13 +49,14 @@ class Entity(BaseModel):
     equivalent_identifiers: list[str] = Field(default_factory=list)
     synonyms: list[str] = Field(
         default_factory=list,
-        description="From the node's own `symbol`, `synonym` and `full_name` slots. Step 3 adds "
+        description="From the node's own `symbol`, `synonym` and `full_name` slots. Step 2 adds "
         "NodeNorm's labels and records the final list in PubmedRecord.synonyms",
     )
 
 
 class Statement(BaseModel):
-    """One distinct statement (subject, predicate, object, qualifiers) among the kept edges."""
+    """One distinct statement (subject, predicate, object, qualifiers, `negated`) among the kept
+    edges."""
 
     statement_id: str = Field(description="graphio.statement_id of the statement")
     pair_id: str = Field(description="graphio.pair_id of subject and object")
@@ -63,6 +64,9 @@ class Statement(BaseModel):
     predicate: str
     object: str
     qualifiers: dict[str, Any] = Field(default_factory=dict)
+    negated: bool = Field(
+        default=False, description="The edges deny it: a negated source edge, judged as one"
+    )
     rule: str = Field(
         description="Id of the scope rule that kept it, e.g. 'chemical-treats-disease'"
     )
@@ -95,7 +99,7 @@ class FetchedPmid(BaseModel):
 
 
 class PubmedRecord(BaseModel):
-    """What step 3 found for one pair. Titles and abstracts are in the PubMed cache."""
+    """What step 2 found for one pair. Titles and abstracts are in the PubMed cache."""
 
     pair_id: str
     query: str
@@ -115,20 +119,35 @@ class PubmedRecord(BaseModel):
     )
 
 
-class SentenceRecord(BaseModel):
-    statement_id: str
-    sentence: str
-
-
 class LabelRun(BaseModel):
-    """Which labels step 6 applies: the model and prompt of the last label run, and of the
-    review that followed it, if any."""
+    """Which claims step 6 applies: the model, prompt and effort of the last label run, the
+    model and prompt of the quote repairs that count (its repair pass's), the model, prompt and
+    effort of the review that followed it, if any; and the UBERON release the ground step
+    pinned."""
 
     model: str
     prompt_version: str
     prompt: str | None = Field(default=None, description="Path of the prompt file used")
+    reasoning_effort: str | None = Field(
+        default=None,
+        description="Effort the run sent ('none' for none); the full run continues with it. "
+        "None in a file written before it was recorded",
+    )
     reviewer: str | None = None
     review_prompt_version: str | None = None
+    review_reasoning_effort: str | None = Field(
+        default=None,
+        description="Effort the review sent ('none' for none); the full run continues with it "
+        "while its reviewer reviews",
+    )
+    repairer: str | None = None
+    repair_prompt_version: str | None = None
+    uberon_version: str | None = Field(
+        default=None,
+        description="data-version of the uberon-basic.obo in the cache directory, whose "
+        "is_a/part_of closure decides which anatomy is at or below which; the ground step "
+        "records it",
+    )
 
 
 M = TypeVar("M", bound=BaseModel)
@@ -137,10 +156,6 @@ M = TypeVar("M", bound=BaseModel)
 def read_records(path: Path, model: type[M]) -> Iterator[M]:
     for d in read_jsonl(path):
         yield model.model_validate(d)
-
-
-def write_records(path: Path, records) -> int:
-    return write_jsonl(path, records)
 
 
 def read_label_run(work: Path) -> LabelRun | None:
