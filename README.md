@@ -82,7 +82,7 @@ make test         # lint + unit tests
 make demo         # dry run of every stage on the toy data in tests/fixtures
 ```
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). `make setup` falls back to `pip` if
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). `make setup` falls back to `pip` if
 uv is not installed.
 
 ## Working on the repo
