@@ -103,9 +103,8 @@ tests/test_mcp_interface.py   # repo tests live in the root tests/ dir
   `[tool.uv.sources] kgbcia-mcp = { workspace = true }`, and exclude
   `agents/mcp_interface/src` and `agents/mcp_interface/pyproject.toml` from the root wheel
   (`[tool.hatch.build.targets.wheel] exclude`). The root wheel packages all of `agents/`, so
-  without the exclusion it would also carry a stray copy of the server. The root project's
-  `requires-python` and ruff `target-version` still say 3.11 on `main`; PR #43 changes them, so
-  match the member package to 3.12 once it merges.
+  without the exclusion it would also carry a stray copy of the server. Match the member
+  package's `requires-python` (≥ 3.12) to the root project's.
 
 **Side artifacts** are one tarball, published next to the dump (the same file server or bucket):
 the `TransformReport` JSONs, ORION's graph metadata (graph ID, build and release version), and
