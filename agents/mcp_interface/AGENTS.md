@@ -81,12 +81,13 @@ agents/mcp_interface/
 │   ├── Dockerfile            # the kgbcia-mcp image (for the optional HTTP deployment)
 │   ├── extra_indexes.cypher  # our indexes, baked into the kgb dump
 │   ├── prepare_dump.sh       # ORION dump -> kgb dump + artifacts tarball (see below)
+│   ├── make_dev_artifacts.py # synthetic reports + source records for the dev sample
 │   ├── helm/kgb-mcp/         # the chart: Neo4j (+ optional kgbcia-mcp over HTTP)
 │   ├── aws/                  # notes and scripts for the single-EC2 + k3s deployment
 │   ├── RUNBOOK.md            # dump -> publish -> helm install / upgrade, for both environments
 │   └── .env.example
-└── README.md                 # keep "Run it alone", "Input / output" and "Status" current;
-                              # also the package README shown on PyPI (or link one)
+└── README.md                 # keep "Run it alone", "Input / output", "Neo4j notes" and
+                              # "Status" current; the PyPI page gets its own short README
 tests/test_mcp_interface.py   # repo tests live in the root tests/ dir
 ```
 
@@ -118,6 +119,21 @@ within days. The tarball holds no secrets, so making it public is fine.
 **Fixtures:** `.gitignore` blocks `*.jsonl` everywhere, so don't commit jsonl fixtures. Build a
 toy graph (~10 nodes, ~15 edges, plus one `TransformReport`) in a pytest fixture from
 `shared.schema` models, in the style of `tests/test_smoke.py::_edge`, and write it to `tmp_path`.
+
+**Development sample (local only, never committed):** the maintainer provides a small, complete
+ORION-built graph at `data/mcp_interface/sample/`: LitCoin's graph from 200 PubMed abstracts,
+with `nodes.jsonl`, `edges.jsonl` and ORION's Neo4j dump. Use it whole. Run
+`prepare_dump.sh` on it too, because ORION's dump lacks our extra indexes and hub list. It has no
+`TransformReport`s and no `kgbcia_source_records`, so write `deploy/make_dev_artifacts.py` to:
+- synthesize one `TransformReport` per `primary_knowledge_source` found in the sample, with one
+  `Mapping` per `(predicate, subject category, object category)` combination;
+- write a copy of the edges that adds `kgbcia_source_records` pointing at those mappings
+  (including some edges with several entries), and an `id` wherever one is missing.
+
+Mark everything it produces as synthetic (`source_version: "synthetic"`), and keep it out of the
+real pipeline's output directories. Use the sample for `check`, `prepare_dump.sh`, the chart and
+the integration tests. Unit tests in CI still use the in-code toy fixture, because CI has no
+data.
 
 ## CLI and the pipeline contract
 
@@ -160,8 +176,8 @@ transformation (later: cleaning) -> nodes.jsonl + edges.jsonl + transform_report
 
 **The chart** (`deploy/helm/kgb-mcp/`) is small and specific to this project, not a generic Neo4j
 chart:
-- **Neo4j StatefulSet** (official `neo4j:5.25.x-community` image, the same version as ORION's
-  image) with a persistent volume, plus two init containers:
+- **Neo4j StatefulSet** (official `neo4j:5.26.<patch>-community` image: Neo4j 5's LTS release,
+  pinned to an exact patch in values; see "Preparing the dump" for why it's 5.26) with a persistent volume, plus two init containers:
   1. **Download** `neo4j.dumpUrl` and verify `neo4j.dumpSha256`.
   2. **Load** it with `neo4j-admin database load --overwrite-destination`.
 
@@ -209,7 +225,8 @@ or ARNs. `.env` is gitignored; ship an `.env.example`.
 ## Preparing the dump (ORION, outside this package)
 
 `orion-neo4j-dump` needs a local Neo4j installation, so run it from **ORION's Docker image**,
-which includes Neo4j 5.25.1, even though the repo now uses Python 3.12 like ORION. The server
+which includes Neo4j 5.25.1 (check the pinned image), even though the repo now uses Python 3.12
+like ORION. The server
 package never imports ORION. Pin the image or the commit, and record which one in the runbook.
 
 The deployed database is read-only from its first start, so our extra indexes are **baked into
@@ -217,7 +234,11 @@ the dump** rather than created after loading. `deploy/prepare_dump.sh` runs once
 release, on a workstation with Docker:
 
 1. Run `orion-neo4j-dump nodes.jsonl edges.jsonl <out>` in ORION's image.
-2. Load the ORION dump into a temporary, writable `neo4j:5.25.x-community` container.
+2. Load the ORION dump into a temporary, writable `neo4j` container of **the same pinned 5.26
+   version as the chart**. A dump loads into the same or a newer Neo4j, never an older one.
+   5.26 is the newest 5.x (the LTS release), so it accepts dumps from ORION's 5.25.1 image and
+   the LitCoin sample (built with 5.20, already shown to load into 5.26). If ORION's image ever
+   moves past the chart's version, bump the chart.
 3. Run `extra_indexes.cypher` (below), then `CALL db.awaitIndexes()`.
 4. Run `kgbcia-mcp hubs` against the container, writing the hub list into the artifacts
    directory.
@@ -233,7 +254,7 @@ ORION's dump already contains a range index on `biolink:NamedThing.name`, and a 
 constraint on `id` for every node label. `extra_indexes.cypher` adds what the server needs:
 
 - **A full-text node index** for `search_nodes`, over `name`, `synonym` and
-  `equivalent_identifiers` on ``:`biolink:NamedThing` ``. Confirm that Neo4j 5.25 full-text
+  `equivalent_identifiers` on ``:`biolink:NamedThing` ``. Confirm that Neo4j 5.26 full-text
   indexes accept list properties. If they don't, index `name` and `synonym` only, and resolve
   equivalent IDs with `ANY(x IN n.equivalent_identifiers WHERE x = $id)`, restricted to a
   label.
@@ -391,8 +412,8 @@ The real graph depends on earlier stages, so build against the toy fixture first
    Make sure `uv build` in `agents/mcp_interface/` produces a wheel that installs and starts in
    a clean virtual environment.
 3. **Dump and chart.** Write `extra_indexes.cypher`, `prepare_dump.sh`, the Dockerfile, the Helm
-   chart and `RUNBOOK.md`. Make a kgb dump (from a real ORION dump, or one built from the toy
-   fixture), settle the "confirm" items, and `helm install` on the local k8s cluster. Run the
+   chart and `RUNBOOK.md`. Make a kgb dump from the development sample (after
+   `make_dev_artifacts.py`), settle the "confirm" items, and `helm install` on the local k8s cluster. Run the
    integration tests, then hand it to the team: `uvx --from <wheel or path> kgbcia-mcp serve`
    against the k8s Neo4j.
 4. **Publish and AWS.** Only after the team signs off: the maintainer publishes to PyPI, then
