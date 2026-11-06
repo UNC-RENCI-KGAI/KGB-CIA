@@ -97,12 +97,23 @@ tests/test_mcp_interface.py   # repo tests live in the root tests/ dir
   test compares its fields with `shared/schema.py`, so the two can't drift silently.
 - Keep the `kgb-mcp` console script in the root project for the pipeline. `kgbcia-mcp` is the
   published entry point.
+- Wiring in the root `pyproject.toml`: add `[tool.uv.workspace] members =
+  ["agents/mcp_interface"]`, add `kgbcia-mcp` to the root dependencies with
+  `[tool.uv.sources] kgbcia-mcp = { workspace = true }`, and exclude
+  `agents/mcp_interface/src` and `agents/mcp_interface/pyproject.toml` from the root wheel
+  (`[tool.hatch.build.targets.wheel] exclude`). The root wheel packages all of `agents/`, so
+  without the exclusion it would also carry a stray copy of the server. The root project's
+  `requires-python` and ruff `target-version` still say 3.11 on `main`; PR #43 changes them, so
+  match the member package to 3.12 once it merges.
 
 **Side artifacts** are one tarball, published next to the dump (the same file server or bucket):
 the `TransformReport` JSONs, ORION's graph metadata (graph ID, build and release version), and
 the hub list for path search. `KGB_MCP_ARTIFACTS` is a local directory or an `http(s)` URL to the
 tarball; URLs are downloaded with the standard library, cached per checksum, and loaded once at
-startup.
+startup. The URL must be **public and long-lived**, because every user's server fetches it with
+no credentials. Use a GitHub Release asset on this repo (free, no AWS setup), or an S3 object
+the AWS admin makes publicly readable. A presigned S3 URL is **not** suitable: it expires
+within days. The tarball holds no secrets, so making it public is fine.
 
 **Fixtures:** `.gitignore` blocks `*.jsonl` everywhere, so don't commit jsonl fixtures. Build a
 toy graph (~10 nodes, ~15 edges, plus one `TransformReport`) in a pytest fixture from
@@ -154,9 +165,12 @@ chart:
   1. **Download** `neo4j.dumpUrl` and verify `neo4j.dumpSha256`.
   2. **Load** it with `neo4j-admin database load --overwrite-destination`.
 
-  Both are **idempotent**: skip them when a marker file on the volume records the same URL and
-  checksum, so a pod restart doesn't re-download or reload. Changing the URL in values
-  triggers a fresh load.
+  Both are **idempotent**: skip them when a marker file on the volume records the same
+  **checksum**, so a pod restart doesn't re-download or reload. Key the marker on the checksum,
+  never the URL, because on AWS the URL is a presigned S3 link that differs on every
+  `helm upgrade` but points to the same file. A new checksum in values triggers a fresh load.
+  The dump stays private: for AWS, the runbook generates a short-lived presigned URL for it at
+  install time, which is enough because it's only fetched once.
 - **Neo4j settings** come from values as `NEO4J_*` environment variables: heap, page cache,
   `server.databases.default_to_read_only=true`, `db.transaction.timeout`,
   `db.memory.transaction.total.max`, and bolt thread limits. The admin password comes from a
