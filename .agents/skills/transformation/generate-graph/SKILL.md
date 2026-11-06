@@ -98,8 +98,11 @@ Successful partial output with documented skips is valid. Include metadata failu
 in the handover report; reporting does not authorize sending messages to another team.
 Missing files, checksum mismatches, parser crashes, and failed ORION stages are structural
 failures. Artifacts left by a failed ORION stage do not establish successful graph construction.
-ORION reuses completed stages by version. Until runtime input fingerprinting is implemented,
-use a fresh storage directory when local source files, bindings, or infores overrides change.
+ORION reuses completed stages by version: reuse the same storage directory and only what changed
+runs again. A new URL, checksum or bundle `source_files.json` binding downloads again, and new
+semantics reparse without downloading. Use a fresh storage directory for a `--source-files` file
+outside the bundle or an `--infores` override, which versions don't cover. A file whose content
+changes at the same URL with no checksum isn't detected.
 
 Use synthetic tests and mock network interactions. Native compatibility tests must exercise
 the real pinned ORION loader and writer. User selection, affinity cutoffs, augmentation,

@@ -28,6 +28,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     root = args.package.resolve()
     args.workspace.mkdir(parents=True, exist_ok=True)
+    # A failed run leaves none, so the merge can't pick up an earlier build of this source.
+    current_build = args.workspace / "current_build.json"
+    current_build.unlink(missing_ok=True)
     sys.path.insert(0, str(root))
     if args.source_files:
         os.environ["KGB_CIA_SOURCE_FILES"] = str(args.source_files.resolve())
@@ -74,15 +77,13 @@ def main(argv=None):
     # source version, so a fixed URL or a killed run would otherwise need a fresh workspace.
     if status.get_fetch_status() in {status.FAILED, status.IN_PROGRESS}:
         status.set_fetch_status(status.NOT_STARTED)
+    scheme = NormalizationScheme(
+        strict=args.strict,
+        conflation=args.conflation,
+        edge_normalization_version=biolink_version,
+    )
     with module.merging_node_writers():
-        result = pipeline.run_pipeline(
-            args.source,
-            normalization_scheme=NormalizationScheme(
-                strict=args.strict,
-                conflation=args.conflation,
-                edge_normalization_version=biolink_version,
-            ),
-        )
+        result = pipeline.run_pipeline(args.source, normalization_scheme=scheme)
     if not result:
         # ORION logs why to its own log and the workspace's .meta.json, not stderr; say it here
         # so the caller's report carries the reason.
@@ -92,6 +93,14 @@ def main(argv=None):
             reasons = f"no stage recorded an error; see {status.metadata_file_path}"
         print(f"ORION run failed: {reasons}", file=sys.stderr)
         return 1
+    normalized = pipeline.get_versioned_normalization_directory(
+        args.source,
+        pipeline.get_latest_source_version(args.source),
+        pipeline.get_latest_parsing_version(args.source),
+        scheme.get_composite_normalization_version(),
+    )
+    build = {"normalized": str(Path(normalized).relative_to(args.workspace.resolve()))}
+    current_build.write_text(json.dumps(build) + "\n")
     return 0
 
 

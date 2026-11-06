@@ -196,6 +196,7 @@ def test_run_merges_built_sources_and_reports_a_failed_merge(tmp_path, monkeypat
     monkeypatch.setattr(transform.subprocess, "run", fake_run)
     assert transform.run(input_dir, output_dir) == 1
     assert calls[-1][3].endswith("merge_graphs.py")
+    assert calls[-1][-2:] == ["--sources", "Kgbcia_acme"]
     handoff = json.loads((output_dir / "transformation_report.json").read_text())
     assert handoff["merge"]["error"] == "no space left"
 
