@@ -16,6 +16,8 @@ whose prefix is in `@context`; validators check structure, not meaning.
 | `prefix_column` | An `annotation` `sh:prefix` whose value is read per row from the other column (its `source`) |
 | `true_values`, `null_values` | `annotation`s `rcv:trueValue` / `rcv:nullValue`, one per value |
 | `absent_values` | `annotation`s `rcv:absentValue`, one per value, as text |
+| `absent_below` | `annotation` `rcv:absentBelow`, as text |
+| `absent_group` | `annotation` `rcv:absentGroup` |
 | `atomic` | Replaces the field's atomic `dataType` |
 | `id_form` `url`, `mixed` or `native` | An `annotation`: `equivalentProperty rcv:idForm`, `value` the form |
 | `codes` | A record set `codes_<hash>` typed `sc:Enumeration` with inline `data` (`name` → `url`), shared by every column (in any layout) with the same mapping, and `references` from the column to its `name` field |

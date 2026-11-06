@@ -7,6 +7,7 @@
 inventory.py CROISSANT                 # all layouts, largest first
 inventory.py CROISSANT --layout L1a2b  # one layout: columns, descriptions, files
 inventory.py CROISSANT --json out.json # machine-readable summary
+inventory.py CROISSANT --siblings DIR  # files other knowledge bases under DIR also read
 """
 
 import argparse
@@ -54,6 +55,77 @@ def summarize(croissant: dict) -> list[dict]:
             }
         )
     return out
+
+
+def file_key(dists: dict, file_id: str) -> str | None:
+    """What identifies a file across croissants: its URL, or for a member of an archive, whose
+    contentUrl is only a name like README.txt, the archive's URL as well."""
+    dist = dists.get(file_id) or {}
+    url = dist.get("contentUrl")
+    parents = [file_key(dists, p.get("@id")) for p in as_list(dist.get("containedIn"))]
+    return f"{parents[0]}#{url}" if url and parents and parents[0] else url
+
+
+def files_read(croissant: dict) -> set[str]:
+    """Keys of the files the croissant's record sets read."""
+    dists = distribution_index(croissant)
+    keys = {
+        file_key(dists, i) for rs in croissant.get("recordSet") or [] for i in record_set_files(rs)
+    }
+    return keys - {None}
+
+
+def rank(name: str, croissant: dict) -> tuple:
+    """Which knowledge base keeps a shared file: most files read, then most record sets, then
+    name, so that agents working on different knowledge bases all reach the same answer."""
+    return (-len(files_read(croissant)), -len(croissant.get("recordSet") or []), name)
+
+
+def shared_files(path: str, directory: str) -> dict:
+    """What this croissant shares with the others under DIR/<name>/croissant.json[.gz]: each
+    shared file is planned once, by the highest-ranked knowledge base that reads it."""
+    own_path = Path(path).resolve()
+    croissant = load_croissant(path)
+    reads = files_read(croissant)
+    own_rank = rank(own_path.parent.name, croissant)
+    others, ceded = {}, set()
+    for other in sorted(Path(directory).glob("*/croissant.json*")):
+        if other.resolve() == own_path or other.suffix not in (".json", ".gz"):
+            continue
+        sibling = load_croissant(other)
+        common = reads & files_read(sibling)
+        if common:
+            others[other.parent.name] = len(common)
+            if rank(other.parent.name, sibling) < own_rank:
+                ceded |= common
+    dists = distribution_index(croissant)
+    keep, leave = [], []
+    for rs in croissant.get("recordSet") or []:
+        urls = {file_key(dists, i) for i in record_set_files(rs)} - {None}
+        (leave if urls and urls <= ceded else keep).append(text(rs.get("name")) or rs.get("@id"))
+    return {
+        "files_read": len(reads),
+        "shared_with": others,
+        "ceded": len(ceded),
+        "record_sets_to_plan": keep,
+        "record_sets_to_leave_out": leave,
+    }
+
+
+def print_shared(found: dict) -> None:
+    print(f"Reads {found['files_read']} files.")
+    if not found["shared_with"]:
+        print("No other knowledge base reads them.")
+        return
+    for name, n in sorted(found["shared_with"].items(), key=lambda x: -x[1]):
+        print(f"  {n:6} shared with {name}")
+    keep, leave = found["record_sets_to_plan"], found["record_sets_to_leave_out"]
+    print(f"{found['ceded']} files belong to a higher-ranked knowledge base.")
+    print(f"{len(keep)} record sets to plan, {len(leave)} to leave out:")
+    for name in leave[:40]:
+        print(f"  leave out: {name}")
+    if not keep and leave:
+        print("Nothing left to plan: write notes.md only, naming who reads these files.")
 
 
 ALL = False
@@ -120,6 +192,12 @@ def main() -> None:
     )
     ap.add_argument("--top", type=int, default=60, help="layouts to print (default 60)")
     ap.add_argument(
+        "--siblings",
+        metavar="DIR",
+        help="directory of knowledge bases (DIR/<name>/croissant.json): which files they also "
+        "read, and which record sets this one leaves out so each file is planned once",
+    )
+    ap.add_argument(
         "--common-columns",
         action="store_true",
         help="list column names by how many record sets have them (for knowledge bases with many "
@@ -128,6 +206,9 @@ def main() -> None:
     args = ap.parse_args()
     global ALL
     ALL = args.all
+    if args.siblings:
+        print_shared(shared_files(args.croissant, args.siblings))
+        return
     croissant = load_croissant(args.croissant)
     if args.layout:
         if args.json:

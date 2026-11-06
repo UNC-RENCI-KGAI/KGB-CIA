@@ -177,6 +177,9 @@ KNOWN = {
         "null_values",
         "true_values",
         "absent_values",
+        "absent_below",
+        "absent_group",
+        "drop_unmatched",
         "atomic",
         "pattern_note",
         "description",
@@ -315,8 +318,14 @@ def apply_column(
         notes.append(annotation(fid, f"true_value_{i}", "rcv:trueValue", val))
     for i, val in enumerate(as_list(spec.get("absent_values"))):
         notes.append(annotation(fid, f"absent_value_{i}", "rcv:absentValue", str(val)))
+    if spec.get("absent_below") is not None:
+        notes.append(annotation(fid, "absent_below", "rcv:absentBelow", str(spec["absent_below"])))
+    if spec.get("absent_group"):
+        notes.append(annotation(fid, "absent_group", "rcv:absentGroup", spec["absent_group"]))
     if spec.get("list_separator"):
         notes.append(annotation(fid, "list_separator", "rcv:listSeparator", spec["list_separator"]))
+    if spec.get("drop_unmatched") and not spec.get("item_pattern"):
+        raise PlanError("drop_unmatched says why rows are dropped by item_pattern: it needs one")
     if spec.get("item_pattern"):
         try:
             if re.compile(spec["item_pattern"]).groups < 1:
