@@ -18,9 +18,10 @@ Replace the stub body freely, but keep both names and that signature. Put the re
 other modules in the package and keep `cli.py` thin. Adding or renaming a stage means updating
 `STAGES` in `shared/pipeline.py` and `[project.scripts]` in `pyproject.toml` together.
 
-Read and write the records in `shared/schema.py`. Every `Edge` names its Biolink
-knowledge sources, knowledge level and agent type; augmentation adds to `publications` rather
-than replacing them. The transformation agent also writes a `TransformReport` per source: which
+Read and write the records in `shared/schema.py`. Every `Edge` names its Biolink knowledge
+sources, knowledge level and agent type; augmentation appends the PMIDs that support an edge to
+its `publications`, lists them in `lit_added_publications`, and puts its literature evidence on
+an `AugmentedEdge`. The transformation agent also writes a `TransformReport` per source: which
 Croissant files and columns it used to make which nodes and edges.
 
 Extra keys on a `Node` or `Edge` are Biolink slots, with one exception: every `Edge` the
@@ -47,8 +48,8 @@ From `docs/agent_plan.md`, which has the reasoning:
 - **filter**: the only stage that talks to the user, and every question has a default
   (affinity cutoffs, binding-strength bins, edge types to keep). Merges triples into one
   connected baseline graph. Keep that baseline distinguishable from anything added later.
-- **augmentation**: extra datasets (possibly sent back through metadata → filter) and PubMed
-  evidence for or against edges.
+- **augmentation**: extra datasets (possibly sent back through metadata → filter), and PubMed
+  evidence for the baseline's edges and more specific edges.
 - **cleaning**: resolves conflicts between sources and prunes to the final graph. No design yet;
   check the team's tracking issue before building.
 - **mcp_interface**: an MCP server modeled on the OKN MCP that lets any local agent query the
