@@ -45,7 +45,7 @@ the rule, decline.
 
 ## Code
 
-- Python 3.11+, managed with `uv`. Add dependencies with `uv add <pkg>` so `pyproject.toml` and
+- Python 3.12+, managed with `uv`. Add dependencies with `uv add <pkg>` so `pyproject.toml` and
   `uv.lock` stay in sync.
 - Each agent directory is a package with a `cli.py` exposing `main()` and a `README.md` saying
   how to run it alone. Inputs and outputs between agents use the record types in `shared/schema.py`.

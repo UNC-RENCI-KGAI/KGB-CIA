@@ -31,7 +31,7 @@ uv run python -m shared.pipeline --dry-run --only filter       # describe one st
 uv run kgb-filter --input <in> --output <out>                  # run one stage alone
 ```
 
-CI (`.github/workflows/ci.yml`) runs exactly `make test` plus `make demo` on Python 3.11. Ruff
+CI (`.github/workflows/ci.yml`) runs exactly `make test` plus `make demo` on Python 3.12. Ruff
 line length is 100; rules `E F I W UP B`. Add dependencies with `uv add <pkg>` so `uv.lock`
 stays in sync.
 

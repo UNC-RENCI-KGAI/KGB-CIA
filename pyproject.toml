@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Knowledge Graph Based Creation of Informed Agents: agentic Biolink KG construction from Pharos/TCRD"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0",
     "httpx>=0.27",
@@ -34,7 +34,7 @@ packages = ["agents", "shared", "evaluation"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 extend-exclude = ["data"]
 
 [tool.ruff.lint]
