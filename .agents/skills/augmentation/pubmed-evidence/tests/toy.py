@@ -1,9 +1,9 @@
 """A toy filtered graph for the skill's tests, built in code (`*.jsonl` is gitignored).
 
-It has one edge or more in each tier of the step 2 scope table: query (drug treats disease,
+It has one edge or more in each tier of the step 1 scope table: query (drug treats disease,
 chemical-gene, gene-disease), capped (gene-gene, gene-phenotype), skipped (participates_in,
 expressed_in, orthologous_to); a statement two sources both make; a qualified edge; and a
-negated edge.
+negated edge. And a toy UBERON release, as the ground step fetches it.
 """
 
 from __future__ import annotations
@@ -107,6 +107,70 @@ EDGES = [
     _edge(TP53, "biolink:participates_in", APOPTOSIS, "infores:reactome"),
     _edge(TP53, "biolink:expressed_in", LIVER, "infores:gtex"),
     _edge(TP53, "biolink:orthologous_to", MOUSE_TP53, "infores:hgnc"),
-    # A negated source edge: passes through untouched, never queried.
+    # A negated source edge: checked like any other, and never supported.
     _edge(ASPIRIN, "biolink:treats", CML, "infores:drugcentral", negated=True),
 ]
+
+# A few terms of uberon-basic.obo, with its header, qualifiers, comments, a relation that isn't
+# is_a or part_of (develops_from), an obsolete term and a relation's own stanza. Liver parenchyma
+# is part of the liver, an organ in the digestive system; the kidney is an organ in the renal
+# system. Neither of liver and kidney is below the other.
+UBERON_VERSION = "uberon/releases/2026-11-05/uberon-basic.owl"
+UBERON_OBO = f"""format-version: 1.2
+data-version: {UBERON_VERSION}
+subsetdef: organ_slim "organs, excluding individual muscles and skeletal elements"
+ontology: uberon
+
+[Term]
+id: UBERON:0000467
+name: anatomical system
+
+[Term]
+id: UBERON:0000062
+name: organ
+
+[Term]
+id: UBERON:0001007
+name: digestive system
+is_a: UBERON:0000467 {{source="FMA"}} ! anatomical system
+
+[Term]
+id: UBERON:0001008
+name: renal system
+is_a: UBERON:0000467 ! anatomical system
+
+[Term]
+id: UBERON:0002107
+name: liver
+synonym: "hepar" RELATED []
+is_a: UBERON:0000062 {{source="cjm"}} ! organ
+relationship: part_of UBERON:0001007 {{source="FMA", source="MA"}} ! digestive system
+relationship: develops_from UBERON:0003894 ! liver primordium
+
+[Term]
+id: UBERON:0001280
+name: liver parenchyma
+relationship: part_of UBERON:0002107 ! liver
+
+[Term]
+id: UBERON:0003894
+name: liver primordium
+
+[Term]
+id: UBERON:0002113
+name: kidney
+is_a: UBERON:0000062 ! organ
+relationship: part_of UBERON:0001008 ! renal system
+
+[Term]
+id: UBERON:0009999
+name: obsolete hepatic lobe
+is_obsolete: true
+replaced_by: UBERON:0002107
+
+[Typedef]
+id: part_of
+name: part of
+is_a: overlaps
+is_transitive: true
+"""
