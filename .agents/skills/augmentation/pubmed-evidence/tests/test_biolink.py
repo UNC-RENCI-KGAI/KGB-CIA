@@ -63,6 +63,94 @@ def test_is_symmetric():
     assert not biolink.is_symmetric("biolink:gene_associated_with_condition")
 
 
+def test_inverse_either_side_and_symmetric():
+    assert biolink.inverse("biolink:treats") == "biolink:treated_by"
+    assert biolink.inverse("biolink:treated_by") == "biolink:treats"
+    assert biolink.inverse("biolink:binds") == "biolink:binds"  # symmetric: itself
+    assert biolink.inverse("biolink:interacts_with") == "biolink:interacts_with"
+    assert biolink.inverse("biolink:not_in_biolink") is None
+    assert biolink.is_canonical("biolink:gene_associated_with_condition")
+    assert not biolink.is_canonical("biolink:condition_associated_with_gene")
+
+
+def test_opposite_predicates_come_from_biolink_both_ways():
+    opposites = biolink.opposites()
+    in_scope = [
+        ("contraindicated_in", "treats"),
+        ("ameliorates_condition", "exacerbates_condition"),
+        ("preventative_for_condition", "promotes_condition"),
+        ("positively_correlated_with", "negatively_correlated_with"),
+        ("has_increased_amount", "has_decreased_amount"),
+        ("increases_sensitivity_to", "decreases_sensitivity_to"),
+        ("disrupts", "enables"),
+    ]
+    for a, b in in_scope:
+        assert (f"biolink:{a}", f"biolink:{b}") in opposites
+        assert (f"biolink:{b}", f"biolink:{a}") in opposites
+    assert all((b, a) in opposites for a, b in opposites)
+    # Only predicates: interbase coordinates and `prevented by` are slots, not predicates.
+    assert not any("interbase" in a or "prevented_by" in a for pair in opposites for a in pair)
+
+
+def test_fits_by_domain_and_range_with_mixins():
+    # treats' domain is the mixin `chemical or drug or treatment`, which a small molecule has.
+    assert biolink.fits(CHEMICAL, "biolink:treats", DISEASE)
+    assert not biolink.fits(DISEASE, "biolink:treats", CHEMICAL)
+    # A broad mixin fits a narrower class it overlaps: a rule's GeneOrGeneProduct, gene's domain.
+    rule_gene = ["biolink:GeneOrGeneProduct"]
+    assert biolink.fits(rule_gene, "biolink:gene_associated_with_condition", DISEASE)
+    assert not biolink.fits(rule_gene, "biolink:has_adverse_event", DISEASE)
+    assert not biolink.fits(CHEMICAL, "biolink:has_adverse_event", rule_gene)
+    # An ancestor in a node's category list doesn't make it fit (named thing would fit all).
+    assert not biolink.fits(["biolink:NamedThing", *DISEASE], "biolink:biomarker_for", GENE)
+    assert biolink.most_specific(["biolink:NamedThing", *PHENOTYPE]) == (
+        "biolink:PhenotypicFeature",
+    )
+    # No domain or range, or no known categories, constrains nothing.
+    assert biolink.fits(DISEASE, "biolink:affects", GENE)
+    assert biolink.fits([], "biolink:treats", ["biolink:NotInBiolink"])
+
+
+@pytest.mark.parametrize(
+    "subject, predicate, object, expected",
+    [
+        (CHEMICAL, "treats", DISEASE, ("treats", False)),
+        # Defined the other way round: its inverse, the same way round.
+        (
+            GENE,
+            "condition_associated_with_gene",
+            DISEASE,
+            ("gene_associated_with_condition", False),
+        ),
+        (GENE, "has_biomarker", DISEASE, ("biomarker_for", False)),
+        # From the other node: turned round to the canonical predicate.
+        (DISEASE, "gene_associated_with_condition", GENE, ("gene_associated_with_condition", True)),
+        (DISEASE, "condition_associated_with_gene", GENE, ("gene_associated_with_condition", True)),
+        (DISEASE, "treats", CHEMICAL, ("treats", True)),
+        (PHENOTYPE, "has_phenotype", GENE, ("has_phenotype", True)),
+        # No domain or range either way: the canonical one of the pair.
+        (
+            GENE,
+            "increased_likelihood_associated_with",
+            DISEASE,
+            ("associated_with_increased_likelihood_of", True),
+        ),
+        (GENE, "affects", CHEMICAL, ("affects", False)),
+        # Neither way.
+        (CHEMICAL, "has_adverse_event", GENE, None),
+        (CHEMICAL, "enables", GENE, None),
+        # Symmetric: its own inverse, either way round as written, or neither way.
+        (GENE, "binds", CHEMICAL, ("binds", False)),
+        (CHEMICAL, "binds", GENE, ("binds", False)),
+        (GENE, "genetically_interacts_with", GENE, ("genetically_interacts_with", False)),
+        (CHEMICAL, "genetically_interacts_with", GENE, None),
+    ],
+)
+def test_oriented(subject, predicate, object, expected):
+    read = biolink.oriented(subject, f"biolink:{predicate}", object)
+    assert read == (None if expected is None else (f"biolink:{expected[0]}", expected[1]))
+
+
 def test_element_name():
     name = biolink.element_name("biolink:treats_or_applied_or_studied_to_treat")
     assert name == "treats or applied or studied to treat"
@@ -70,7 +158,7 @@ def test_element_name():
     assert biolink.element_name("biolink:not_in_biolink") == "not in biolink"
 
 
-# Every in-scope triple of the README's step 2 table, with the classes that fit it.
+# Every in-scope triple of DESIGN.md's step 1 table, with the classes that fit it.
 CHEM_TO_DISEASE = "biolink:ChemicalOrDrugOrTreatmentToDiseaseOrPhenotypicFeatureAssociation"
 CHEM_AFFECTS = [
     "biolink:ChemicalAffectsGeneAssociation",
@@ -239,3 +327,21 @@ def test_every_listed_enum_value_validates():
                 continue
             for value in spec.values:
                 assert biolink.validate_qualifiers({slot: value}, subject, predicate, object) == []
+
+
+def test_enum_parent():
+    assert biolink.enum_parent("DirectionQualifierEnum", "upregulated") == "increased"
+    assert biolink.enum_parent("DirectionQualifierEnum", "increased") is None
+    assert biolink.enum_parent("DirectionQualifierEnum", "sideways") is None
+    assert biolink.enum_parent("NotAnEnum", "increased") is None
+    aspects = "GeneOrGeneProductOrChemicalEntityAspectEnum"
+    assert biolink.enum_parent(aspects, "expression") == "abundance"
+
+
+def test_qualifier_enums():
+    enums = biolink.qualifier_enums()
+    assert enums["object_direction_qualifier"] == "DirectionQualifierEnum"
+    assert enums["subject_form_or_variant_qualifier"] == (
+        "ChemicalOrGeneOrGeneProductFormOrVariantEnum"
+    )
+    assert "qualified_predicate" not in enums and "species_context_qualifier" not in enums
