@@ -10,6 +10,7 @@ the plan itself is kept next to the result as the record of what was asserted an
 ```json
 {
   "kb": "ctd",
+  "infores": "infores:ctd",
   "croissant": "kbs/ctd/croissant.json",
   "biolink_version": "v4.4.6",
   "prefixes": { "NCBIGene": "http://identifiers.org/ncbigene/", "MESH": "http://id.nlm.nih.gov/mesh/" },
@@ -23,6 +24,17 @@ the plan itself is kept next to the result as the record of what was asserted an
 }
 ```
 
+- `infores`: the knowledge base's own information-resource id, from `vocab.py infores NAME`,
+  which searches the infores catalog at the release pinned in `vocab.py` (`INFORES_VERSION`).
+  Required: `apply_plan.py` writes it on the dataset as `rcv:infores`, and graph builders cite
+  it as the source of every record they read from these files. It's the knowledge base's
+  identity, not a statement about its rows: when rows come from other sources (an aggregator
+  such as DrugCentral), map those per layout with `biolink:primary_knowledge_source` as below.
+- `infores_proposed`: `true` when the catalog has no entry for the knowledge base, so `infores`
+  is an id proposed in the catalog's style (`infores:bioplex`). `apply_plan.py` marks it
+  `rcv:inforesProposed` on the dataset; `check.py` warns until it's registered. Its catalog
+  entry (`vocab.py infores-entry`) goes in `notes.md` for the user to submit; once it's merged,
+  raise `INFORES_VERSION` in `vocab.py` and drop this key.
 - `prefixes`: every CURIE prefix used anywhere in the plan (types, properties, id prefixes,
   code mappings, constant values) **and** every prefix that appears in the data's CURIE values.
   `biolink`, `skos`, `sh`, `qudt`, `unit`, `rcv`, `infores`, `csvw`, `rdfs`, `sc`, `cr` are built in.
@@ -108,7 +120,9 @@ the plan itself is kept next to the result as the record of what was asserted an
   - **Rows are relationships** (gene–disease pairs): `type` is an association class, entities
     have roles such as `biolink:subject` and `biolink:object`. `predicate` is only for a
     predicate that is the same for every row; when it varies, map the column that holds it
-    (see `codes`).
+    (see `codes`). A layout needs one or the other: with a subject and an object but no
+    predicate it builds no edges, and `check.py` reports an error. When edges would overstate
+    the rows (unfiltered candidate pairs), set `no_predicate` to the reason instead.
   - **Rows are things** (a variant table, a gene list): `type` is the thing's class
     (`biolink:SequenceVariant`). Map the thing's own columns in `columns` with its properties
     (`biolink:id`, `biolink:name`, ...), and group the *other* things a row mentions into
@@ -189,7 +203,7 @@ Used both in `columns` and in an entity's `columns`.
 | `id_prefix` | The CURIE prefix of the identifiers in the column. |
 | `id_form` | `bare` (values like `4524`, prefix must be added), `curie` (values like `MESH:D003920`), `obo` (OBO short forms like `MONDO_0004989`: prefix, underscore, local id; every prefix must be in `prefixes`), `mixed` (some of each), `url` (full IRIs, possibly from many namespaces), or `native` (the source's own tagged strings that look like CURIEs but aren't: MITAB `entrez gene/locuslink:613`, `psi-mi:"MI:0018"(two hybrid)`, HGVS `NC_000017.11:g.43044295del`). Default `bare` when `id_prefix` is set. `url`, `mixed`, `native` and `obo` are recorded in an annotation; `native` columns aren't checked for undeclared prefixes, and their tags shouldn't be declared as prefixes. |
 | `list_separator` | The text joining several values in one cell (`"\|"`, `";"`, `", "`: several characters are fine; items are trimmed). |
-| `item_pattern` | A regular expression for compound list items (`HP:0001250\|Seizure`, `TP53\|7157\|SRC`) whose first group is the id: the checks check that group (prefixes, patterns, codes). Use with `list_separator` or `list_format`; an item the pattern doesn't fit is checked whole, so it shows as a misfit. |
+| `item_pattern` | A regular expression whose first group is the id: for compound list items (`HP:0001250\|Seizure`, `TP53\|7157\|SRC`, with `list_separator` or `list_format`), or to strip the source's own tag from a single id (`ko:(.+)` with `id_prefix: KEGG.ORTHOLOGY` turns `ko:K00001` into `KEGG.ORTHOLOGY:K00001`). The checks check that group (prefixes, patterns, codes); a value the pattern doesn't fit is checked whole, so it shows as a misfit. |
 | `list_format` | `json` or `python` for cells written as list literals (`["a", "b"]`, Monarch's `['PMID:1', 'PMID:2']`); the checks parse each cell and check its items. Use instead of `list_separator`. |
 | `unit` | Unit of measure for the whole column: a QUDT unit CURIE (`unit:NanoMOL-PER-L`), (`unit:BasePair` for genomic distances), or a UO term where QUDT has none. Find QUDT units with `vocab.py unit "nanomolar"`. The check confirms it exists. When the unit differs by row (a column of unit labels or UCUM codes), map that column with `codes` to `unit:` CURIEs instead; those are checked too. |
 | `codes` | `{ "value in the data": "CURIE or URL" }` for columns that hold a small set of codes. With `list_separator`, the codes apply to each item of the list. An empty cell can't be mapped: it means no value. |
@@ -197,9 +211,13 @@ Used both in `columns` and in an entity's `columns`.
 | `prefix_column` | The column that holds each row's id prefix (GAF's `DB` column for `DB Object ID`). Use with `id_form: bare` or `mixed`; the check validates each id against its own row's prefix. Every prefix that column holds must be in `prefixes`. |
 | `prefix_codes` | With `prefix_column`, when that column holds namespace keys rather than prefixes (GlyGen's `protein_xref_omim`, UniProt idmapping's `ID_type` value `MIM`): `{ "key": "PREFIX" }`. Each prefix must be in `prefixes`. The croissant gets a code table mapping each key to the prefix's namespace, and the check validates each id against its own row's prefix. Keys missing from the map are reported; map a key to `null` when its values aren't ids in any namespace (Ensembl's `EntrezGene_trans_name`), and they're skipped. |
 | `pattern_note` | Why values may legitimately not fit the registry's id pattern (e.g. "CGD ids have 10 digits; Bioregistry's pattern expects 7"). Turns pattern mismatches into warnings. Only after checking the data and the source. |
+| `drop_unmatched` | With `item_pattern`: the reason values that don't fit it are left out on purpose (rows of other species, the mirror spelling of the same facts). Those rows drop with a diagnostic at transformation, and the check doesn't report them. Use this rather than `pattern_note`, which is for id patterns the registry has wrong. |
 | `true_values` | For yes/no columns: values that mean true (`["NOT"]` in a negation column, `["Y"]`). Empty or other values mean false. Use with a boolean property such as `biolink:negated`. |
 | `optional` | The column may be missing from some matched record sets; skip it there instead of failing. Also allowed on an entity (skipped when none of its columns are present). |
 | `null_values` | Values that mean "no value" (`["N/A", "-"]`). Recorded in the croissant and ignored by the checks. Set these instead of dropping an `id_prefix` because of placeholders. |
+| `absent_values` | Values saying the row reports that the relationship was *not* found (`[0, "", "Not detected"]`), for example a gene with no expression in a tissue. Transformation skips those rows and counts them in its diagnostics, so they don't become edges. Numbers match numerically: `0` also matches `0.0`. Works on any column, typed or not. This differs from `null_values`, which blanks one field and keeps the row. |
+| `absent_below` | A number: values under it report that the relationship was not found (`1` for HPA's `nTPM >= 1` detection cutoff). Works alone or with `absent_values`; add `""` there if empty cells also mean not found. |
+| `absent_group` | A name shared by several columns that have `absent_values` or `absent_below`: the row is skipped only when all of them report absence, not when any one does (four prognostic columns, each empty unless it holds the finding). |
 | `derived` | Extra fields read from this same column, each with its own `name` (new, unique), `property` and the usual keys (`codes`, `true_values`, `null_values`, ...). For a column that says two things, like a predicate column whose `is_not_implicated_in` also means the statement is negated. A derived field inherits the column's `list_separator`, `list_format` and `null_values` unless it sets its own. |
 | `description` | A note on the column (how a list is joined, what a placeholder means); added to the field's description. |
 | `basis`, `source`, `confidence` | Why, from where, how sure (required on every top-level column spec; on entity members they're optional, the entity's apply). |
@@ -209,9 +227,13 @@ column whose role in the row you can't establish, a list column) is fine, and st
 one with only `codes` (a gene-type column mapped to Sequence Ontology classes, when Biolink has no
 slot for it).
 
-An id column that mixes namespaces with no column saying which (a registered prefix and the
-source's own keys, `IMPC-CURATE-…`; KEGG's `path:map00010`) is `id_form: native` with no
-`id_prefix`, and `description` says what the values are. `mixed` is for a single prefix whose
+Node ids must end up as CURIEs with a Biolink prefix, or NodeNorm can't resolve them and their
+nodes stay unresolved in the graph; the check warns about any that won't. When the source writes
+its own tag in front of a registered id (KEGG's `ko:K00001`, `path:map00010`), don't declare the
+tag as a prefix: set `id_prefix` to the Biolink prefix (`KEGG.ORTHOLOGY`, `KEGG.PATHWAY`) and strip
+the tag with `item_pattern` (`ko:(.+)`). An id column that mixes namespaces with no column saying
+which (a registered prefix and the source's own keys, `IMPC-CURATE-…`) is `id_form: native` with
+no `id_prefix`, and `description` says what the values are; explain the check's warning. `mixed` is for a single prefix whose
 values are written sometimes as CURIEs and sometimes bare.
 
 **Lists within lists.** When a cell holds groups joined by one separator and items within a
@@ -237,9 +259,27 @@ Many knowledge bases have a column naming where each row came from (`ChEMBL`, `P
 (or `biolink:aggregator_knowledge_source` when the knowledge base gathered rather than curated
 it). Look up each source with `vocab.py infores NAME` (it searches names, synonyms and URLs;
 try the full name too: CSAR is `infores:community-sar`). The check rejects ids that aren't in
-the catalog. For a source with no infores id, leave it unmapped. The check warns about it, and `notes.md` lists it as a question for the maintainers
+the catalog. For a source with no infores id, leave it unmapped: rows whose mapped source comes out empty drop with a diagnostic and build no edge, so say in `notes.md` how many rows that costs. The check warns about it, and `notes.md` lists it as a question for the maintainers
 (a new infores entry is the fix). Don't invent infores ids, and don't make local terms for
 sources unless the knowledge base documents them as its own.
+
+How each source made its statements goes on the same column, as `derived` fields coded per
+source, starting from the catalog's values for each (`vocab.py infores NAME` shows them). Values
+you set stand; `check.py` flags those that differ from the catalog's. A `knowledge_level` or
+`agent_type` value that isn't a Biolink one (`curated`, the catalog's `mixed` or `other`) is
+written as the closest Biolink value (`knowledge_assertion`, `not_provided`), with a warning:
+
+```json
+"source": {
+  "property": "biolink:primary_knowledge_source",
+  "codes": { "ChEMBL": "infores:chembl", "DrugMatrix": "infores:drugmatrix" },
+  "derived": [ { "name": "knowledge_level", "property": "biolink:knowledge_level",
+                 "codes": { "ChEMBL": "biolink:knowledge_assertion",
+                            "DrugMatrix": "biolink:knowledge_assertion" },
+                 "basis": "infores catalog values for each source", "source": "documentation",
+                 "confidence": "medium" } ]
+}
+```
 
 ### Repeated groups of columns
 

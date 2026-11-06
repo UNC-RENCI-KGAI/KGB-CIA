@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -150,10 +150,7 @@ class LabelRun(BaseModel):
     )
 
 
-M = TypeVar("M", bound=BaseModel)
-
-
-def read_records(path: Path, model: type[M]) -> Iterator[M]:
+def read_records[M: BaseModel](path: Path, model: type[M]) -> Iterator[M]:
     for d in read_jsonl(path):
         yield model.model_validate(d)
 

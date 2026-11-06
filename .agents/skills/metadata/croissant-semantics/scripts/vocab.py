@@ -14,7 +14,11 @@
     vocab.py identify FBgn0031086 12345 # which registered prefixes a bare id could belong to
     vocab.py associations --subject ChemicalEntity --object Disease  # association classes that fit
     vocab.py term ECO:0000315           # an ontology term by CURIE (exact)
+    vocab.py names "Adrenal Gland" --type AnatomicalEntity --type Cell --prefixes UBERON,CL
+                                        # map names to ids NodeNorm resolves (NameRes, exact
+                                        # label or synonym only); --file F takes one per line
     vocab.py infores ChEMBL             # infores ids for a source name (knowledge_source)
+    vocab.py infores-entry CROISSANT    # a catalog entry proposing an id the catalog lacks
     vocab.py unit "per molar second"    # QUDT units by label, UCUM code or symbol
     vocab.py ols "evidence used in automatic assertion" [--ontology eco]
                                         # free-text search of OBO ontologies (EBI OLS);
@@ -55,22 +59,32 @@ def biolink() -> dict:
     return yaml.safe_load(_cached("biolink-model.yaml", f"{BIOLINK_RAW}/biolink-model.yaml"))
 
 
-INFORES_URL = "https://raw.githubusercontent.com/biolink/information-resource-registry/main/infores_catalog.yaml"
-INFORES_MAX_AGE_DAYS = 30
+# The infores catalog is released separately from Biolink. Pinned like Biolink, so a plan's
+# source identity and every infores id it uses are checked against the same entries on every
+# run. A source whose entry is newer than the pin needs the pin raised.
+INFORES_VERSION = "v1.1.14"
+INFORES_URL = (
+    "https://raw.githubusercontent.com/biolink/information-resource-registry/"
+    f"{INFORES_VERSION}/infores_catalog.yaml"
+)
+INFORES_REGISTRY = "https://github.com/biolink/information-resource-registry"
+MAX_AGE_DAYS = 30  # for unversioned files (_refreshed)
 
 
 def infores() -> dict[str, dict]:
-    """The infores catalog: id -> entry. Not versioned with Biolink; refreshed when the cached copy
-    is 30 days old."""
-    import time
+    """The infores catalog at INFORES_VERSION: id -> entry."""
+    text = _cached(f"infores_catalog-{INFORES_VERSION}.yaml", INFORES_URL)
+    return {e["id"]: e for e in yaml.safe_load(text)["information_resources"]}
 
-    path = CACHE.parent / "infores_catalog.yaml"
-    if not path.exists() or time.time() - path.stat().st_mtime > INFORES_MAX_AGE_DAYS * 86400:
-        r = requests.get(INFORES_URL, timeout=60)
-        r.raise_for_status()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(r.text)
-    return {e["id"]: e for e in yaml.safe_load(path.read_text())["information_resources"]}
+
+def proposed_infores(name: str) -> str:
+    """An id in the catalog's style for a source it lacks: lowercase words joined by dashes
+    (BioPlex -> infores:bioplex, Expression Atlas -> infores:expression-atlas)."""
+    return "infores:" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def is_infores_style(iid: str) -> bool:
+    return re.fullmatch(r"infores:[a-z0-9]+(-[a-z0-9]+)*", iid) is not None
 
 
 def biolink_prefixes() -> dict:
@@ -311,7 +325,7 @@ def _refreshed(name: str, url: str, headers: dict | None = None) -> str:
     import time
 
     path = CACHE.parent / name
-    if not path.exists() or time.time() - path.stat().st_mtime > INFORES_MAX_AGE_DAYS * 86400:
+    if not path.exists() or time.time() - path.stat().st_mtime > MAX_AGE_DAYS * 86400:
         r = requests.get(url, timeout=120, headers=headers or {})
         r.raise_for_status()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -568,17 +582,12 @@ def cmd_identify(args) -> None:
     _identify(args.values, args.limit)
 
 
-def _identify(values: list[str], limit: int) -> None:
+def identify(values: list[str]) -> list[tuple]:
+    """Registered prefixes whose id pattern fits every value, most specific first, as
+    (not_in_biolink, pattern_length, prefix, biolink_spelling_or_None, name, pattern)."""
     import bioregistry
 
     bl = {k.lower(): k for k in biolink_prefixes()}
-    if all(v.isdigit() for v in values):
-        print(
-            "All values are plain integers. Many registries use numeric ids, so the prefix must "
-            "come from "
-            "the column name or the knowledge base's documentation, not the values."
-        )
-        return
     hits = []
     for prefix, resource in bioregistry.read_registry().items():
         pattern = resource.get_pattern()
@@ -610,7 +619,18 @@ def _identify(values: list[str], limit: int) -> None:
                 )
             )
     hits.sort()
-    hits = [h[1:] for h in hits]
+    return [h[1:] for h in hits]
+
+
+def _identify(values: list[str], limit: int) -> None:
+    if all(v.isdigit() for v in values):
+        print(
+            "All values are plain integers. Many registries use numeric ids, so the prefix must "
+            "come from "
+            "the column name or the knowledge base's documentation, not the values."
+        )
+        return
+    hits = identify(values)
     if not hits:
         print(
             "No registered prefix has a specific pattern that fits; the prefix must come from "
@@ -652,6 +672,68 @@ def cmd_term(args) -> None:
         print("  OBSOLETE")
 
 
+NAMERES_URL = "https://name-resolution-sri.renci.org/bulk-lookup"
+NODENORM_URL = "https://nodenormalization-sri.renci.org/get_normalized_nodes"
+
+
+def _fold(name: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", name.casefold()).split())
+
+
+def exact_match(name: str, hits: list[dict]) -> str | None:
+    """The best-ranked NameRes hit whose label or a synonym is this name, ignoring case and
+    punctuation. Closest isn't good enough: a wrong id reads as a true fact in the graph."""
+    wanted = _fold(name)
+    for hit in hits:
+        if wanted in {_fold(s) for s in [hit.get("label") or "", *(hit.get("synonyms") or [])]}:
+            return hit.get("curie")
+    return None
+
+
+def resolved(curies: list[str]) -> set[str]:
+    """Which of these ids NodeNorm knows."""
+    known = set()
+    for start in range(0, len(curies), 500):
+        batch = curies[start : start + 500]
+        r = requests.post(NODENORM_URL, json={"curies": batch}, timeout=120)
+        r.raise_for_status()
+        known |= {c for c, v in r.json().items() if v}
+    return known
+
+
+def cmd_resolve(args) -> None:
+    known = resolved(args.curies)
+    print(f"{len(known)} of {len(args.curies)} resolve in NodeNorm")
+    for curie in args.curies:
+        print(f"  {'yes' if curie in known else 'no '}  {curie}")
+
+
+def cmd_names(args) -> None:
+    names = list(args.names)
+    if args.file:
+        names += [n.strip() for n in Path(args.file).read_text().splitlines() if n.strip()]
+    names = list(dict.fromkeys(names))
+    body = {"biolink_types": args.type, "limit": 20}
+    if args.prefixes:
+        body["only_prefixes"] = args.prefixes.replace(",", "|")
+    found = {}
+    for start in range(0, len(names), 100):
+        batch = names[start : start + 100]
+        r = requests.post(NAMERES_URL, json={**body, "strings": batch}, timeout=120)
+        r.raise_for_status()
+        for name, hits in r.json().items():
+            if curie := exact_match(name, hits):
+                found[name] = curie
+    known = resolved(sorted(set(found.values())))
+    codes = {n: c for n, c in found.items() if c in known}
+    result = {"codes": codes, "unmapped": [n for n in names if n not in codes]}
+    if args.json:
+        Path(args.json).write_text(json.dumps(result, indent=1, ensure_ascii=False) + "\n")
+    print(f"{len(codes)} of {len(names)} names mapped")
+    if not args.json:
+        print(json.dumps(result, indent=1, ensure_ascii=False))
+
+
 def cmd_ols(args) -> None:
     params = {"q": args.text, "rows": args.limit}
     if args.ontology:
@@ -666,31 +748,153 @@ def cmd_ols(args) -> None:
         )
 
 
-def cmd_infores(args) -> None:
-    words = args.text.lower().split()
+def infores_matches(text: str, catalog: dict | None = None) -> list[tuple[bool, bool, str, dict]]:
+    """Catalog entries whose id, name, synonyms or urls contain every word of text, best first:
+    (not an exact match, not released, id, entry). Exact: text is the id, name or a synonym."""
+    words = text.lower().split()
     hits = []
-    for iid, e in infores().items():
+    for iid, e in (catalog if catalog is not None else infores()).items():
         hay = " ".join(
             [iid, e.get("name") or "", *(e.get("synonym") or []), *(e.get("xref") or [])]
         ).lower()
         if all(w in hay for w in words):
-            exact = args.text.lower() in (
+            exact = text.lower() in (
                 [iid.split(":")[1], (e.get("name") or "").lower()]
                 + [x.lower() for x in e.get("synonym") or []]
             )
             hits.append((not exact, e.get("status") != "released", iid, e))
-    hits.sort(key=lambda h: h[:3])
+    return sorted(hits, key=lambda h: h[:3])
+
+
+def infores_constants(plan: dict, slot: str) -> set[str]:
+    """infores ids a plan sets as a constant (not per row through codes) for a slot."""
+    found = set()
+
+    def walk(o):
+        if isinstance(o, dict):
+            value = o.get("value")
+            if o.get("property") == f"biolink:{slot}" and str(value).startswith("infores:"):
+                found.add(value)
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(plan.get("layouts"))
+    return found
+
+
+def exact_infores(name: str, catalog: dict | None = None) -> tuple[str, dict] | None:
+    """The released catalog entry whose id, name or synonym is name, written with dashes, spaces
+    or underscores (ncbi_gene, NCBI Gene and ncbi-gene all find infores:ncbi-gene)."""
+    spellings = {name, re.sub(r"[\s_]+", "-", name), re.sub(r"[-_]+", " ", name)}
+    for spelling in spellings:
+        for not_exact, not_released, iid, entry in infores_matches(spelling, catalog):
+            if not not_exact and not not_released:
+                return iid, entry
+    return None
+
+
+def suggest_infores(
+    plan: dict, names: list[str], titles: list[str] = (), catalog: dict | None = None
+) -> dict:
+    """What a plan's own evidence says the knowledge base's infores id is, apart from the plan's
+    infores itself: {"infores", "proposed", "why"}. names are its short names, most telling
+    first (kb, bundle directory); titles its full ones (the croissant's name). The first of
+    1. a single aggregator_knowledge_source or provided_by constant: the plan naming itself;
+    2. a catalog entry that is exactly a name or title (or a title before ':' or '(');
+    3. a single primary_knowledge_source constant;
+    4. a catalog entry that is exactly a leading part of a short name, for a knowledge base that's a
+       slice of a registered resource (ensembl-gene-ids -> infores:ensembl-gene);
+    5. a proposed id, from the first name, noting similar catalog entries."""
+
+    def found(iid, why):
+        return {"infores": iid, "proposed": False, "why": why}
+
+    for slot in ("aggregator_knowledge_source", "provided_by"):
+        if len(ids := infores_constants(plan, slot)) == 1:
+            return found(next(iter(ids)), f"the plan's {slot} constant")
+    names = list(dict.fromkeys(n for n in names if n))
+    titles = [t for t in titles if t]
+    every = list(dict.fromkeys(names + titles + [re.split(r":| \(", t)[0].strip() for t in titles]))
+    for n in every:
+        if hit := exact_infores(n, catalog):
+            return found(hit[0], f"the catalog's {hit[1].get('name')!r} is {n!r}")
+    if len(ids := infores_constants(plan, "primary_knowledge_source")) == 1:
+        return found(next(iter(ids)), "the plan's primary_knowledge_source constant")
+    for n in names:
+        parts = re.split(r"[-_\s]+", n)
+        for k in range(len(parts) - 1, 0, -1):
+            if hit := exact_infores("-".join(parts[:k]), catalog):
+                return found(hit[0], f"{n!r} is part of the catalog's {hit[1].get('name')!r}")
+    similar = []
+    for n in every:
+        similar += [iid for *_, iid, _ in infores_matches(n, catalog)[:3] if iid not in similar]
+    why = "no catalog entry is " + " or ".join(repr(n) for n in every)
+    if similar:
+        why += f" (similar: {', '.join(similar)})"
+    return {
+        "infores": proposed_infores((names + titles + ["unnamed"])[0]),
+        "proposed": True,
+        "why": why,
+    }
+
+
+def cmd_infores(args) -> None:
+    hits = infores_matches(args.text)
     if not hits:
         sys.exit(
-            f"No infores entry matches {args.text!r}. If the source has none, leave it unmapped "
-            "and list it "
-            "in notes.md (a new infores entry is the fix)."
+            f"No entry in infores catalog {INFORES_VERSION} matches {args.text!r}. For a source "
+            "a column names, leave it unmapped and list it in notes.md. For the knowledge base "
+            f"itself, propose an id ({proposed_infores(args.text)}, from its short name) with "
+            '"infores_proposed": true in the plan, and write its registry entry with '
+            "vocab.py infores-entry CROISSANT."
         )
     for _, _, iid, e in hits[: args.limit]:
         print(
-            f"  {iid}  {e.get('name')}  [{e.get('status')}; {e.get('knowledge_level', '-')}]  "
+            f"  {iid}  {e.get('name')}  [{e.get('status')}; {e.get('knowledge_level', '-')}; "
+            f"{e.get('agent_type', '-')}]  "
             f"{', '.join(e.get('xref') or [])[:80]}"
         )
+
+
+class _IndentedLists(yaml.SafeDumper):
+    """Indents lists under their key, as the catalog does and its yamllint config requires."""
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+
+def infores_entry(croissant: dict, iid: str, knowledge_level: str, agent_type: str) -> str:
+    """A stanza for the infores catalog, from the croissant's name, description and url, to paste
+    into infores_catalog.yaml in a pull request to the registry."""
+    from common import text
+
+    entry = {"status": "released", "name": text(croissant.get("name")), "id": iid}
+    if description := " ".join(text(croissant.get("description")).split()):
+        entry["description"] = description
+    if url := croissant.get("url"):
+        entry["xref"] = [url]
+    entry |= {"knowledge_level": knowledge_level, "agent_type": agent_type}
+    stanza = yaml.dump(
+        [entry], Dumper=_IndentedLists, sort_keys=False, width=96, allow_unicode=True
+    )
+    return "".join(f"  {line}" for line in stanza.splitlines(keepends=True))
+
+
+def cmd_infores_entry(args) -> None:
+    from common import load_croissant, text
+
+    croissant = load_croissant(args.croissant)
+    iid = args.id or proposed_infores(text(croissant.get("name")))
+    if not is_infores_style(iid):
+        sys.exit(f"{iid} doesn't follow the catalog's style: lowercase words joined by dashes")
+    if iid in infores():
+        sys.exit(f"{iid} is already in infores catalog {INFORES_VERSION}: use it, don't propose it")
+    print(f"# Add to infores_catalog.yaml in a pull request to {INFORES_REGISTRY}")
+    print("# (or open an issue there with the same details). Check every field first.")
+    print(infores_entry(croissant, iid, args.knowledge_level, args.agent_type), end="")
 
 
 def enum_values(model: dict, name: str) -> tuple[str, dict] | None:
@@ -760,10 +964,29 @@ def main() -> None:
     p = sub.add_parser("term", help="an ontology term by CURIE, e.g. ECO:0000315")
     p.add_argument("curie")
     p.set_defaults(fn=cmd_term)
+    p = sub.add_parser("names", help="map names to ids NodeNorm resolves, exact matches only")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--file", help="one name per line")
+    p.add_argument("--type", action="append", default=[], help="Biolink class, repeatable")
+    p.add_argument("--prefixes", help="comma-separated, e.g. UBERON,CL")
+    p.add_argument("--json", help="write {codes, unmapped} to this file")
+    p.set_defaults(fn=cmd_names)
+    p = sub.add_parser("resolve", help="test whether ids resolve in NodeNorm")
+    p.add_argument("curies", nargs="+")
+    p.set_defaults(fn=cmd_resolve)
     p = sub.add_parser("infores", help="information-resource ids for a source name")
     p.add_argument("text")
     p.add_argument("--limit", type=int, default=10)
     p.set_defaults(fn=cmd_infores)
+    p = sub.add_parser(
+        "infores-entry",
+        help="a catalog entry proposing an infores id for a knowledge base the catalog lacks",
+    )
+    p.add_argument("croissant")
+    p.add_argument("--id", help="the proposed id (default: from the croissant's name)")
+    p.add_argument("--knowledge-level", default="not_provided")
+    p.add_argument("--agent-type", default="not_provided")
+    p.set_defaults(fn=cmd_infores_entry)
     p = sub.add_parser(
         "unit", help="QUDT units by label, UCUM code or symbol (for a column's unit)"
     )

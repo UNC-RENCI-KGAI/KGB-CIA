@@ -18,7 +18,7 @@ import json
 import re
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import IO, Any, TypeVar
+from typing import IO, Any
 
 from pydantic import BaseModel
 
@@ -32,8 +32,6 @@ EDGE_ID_PREFIX = "kgbcia-edge:"
 ID_PREFIX = "kgbcia-augmentation:"
 # Where step 6 lists the PMIDs it appended to an input edge's `publications`.
 ADDED_PUBLICATIONS = "lit_added_publications"
-
-T = TypeVar("T")
 
 
 def _open(path: Path, mode: str) -> IO[str]:
@@ -207,7 +205,7 @@ def publication_of(pmid: str) -> str:
     return f"PMID:{pmid}"
 
 
-def chunks(items: Sequence[T], size: int) -> Iterator[Sequence[T]]:
+def chunks[T](items: Sequence[T], size: int) -> Iterator[Sequence[T]]:
     """`items` in consecutive slices of at most `size` (at least 1) each."""
     size = max(1, size)
     for i in range(0, len(items), size):

@@ -161,6 +161,8 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
                     spec.setdefault("null_values", []).append(annotation["value"])
                 elif name.startswith("true_value_"):
                     spec.setdefault("true_values", []).append(annotation["value"])
+                elif name.startswith("absent_value_"):
+                    spec.setdefault("absent_values", []).append(annotation["value"])
                 else:
                     spec[name] = annotation["value"]
             elif name == "id_prefix":
@@ -295,7 +297,27 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
                 rs_name,
                 "No complete subject/object association; emit supported entities only",
             )
-        all_columns = row_fields + [c for e in entities for c in e["fields"]]
+        roles = [e["role"] for e in entities]
+        predicate_mapped = any(c["slot"] == "predicate" for c in row_fields)
+        if roles.count("biolink:subject") == roles.count("biolink:object") == 1 and not (
+            predicate_mapped
+        ):
+            skip(
+                rs_id,
+                rs_name,
+                "Subject/object association has no predicate field; its nodes are emitted, "
+                "its edges are not",
+            )
+        # may be columns with no Biolink property, which aren't otherwise read
+        absence_fields = []
+        for f in raw_fields:
+            notes = [a.get("name", "") for a in f.get("annotation", [])]
+            if any(n.startswith("absent_value_") or n == "absent_below" for n in notes):
+                try:
+                    absence_fields.append(column(f))
+                except ValueError as error:
+                    skip(f["@id"], f.get("name"), str(error))
+        all_columns = row_fields + [c for e in entities for c in e["fields"]] + absence_fields
         paths = [c["tokens"] for c in all_columns if "tokens" in c]
         common = list(paths[0]) if paths else []
         for tokens in paths[1:]:
@@ -349,12 +371,23 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
                 "row_fields": row_fields,
                 "entities": entities,
                 "key_fields": key_fields,
+                "predicate_mapped": predicate_mapped,
+                "absence_fields": absence_fields,
                 "mapping_prefix": f"{source}.{digest}",
             }
         )
     if infores is not None and not re.fullmatch(r"infores:[^\s]+", infores):
         raise ValueError("Source identity must be a valid infores CURIE")
+    # The metadata stage names the knowledge base's own id. A proposed one isn't in the infores
+    # catalog yet; graphs can still cite it (ORION reports it as a QC warning), so it runs.
+    proposed = False
+    if infores is None and document.get("rcv:infores") is not None:
+        infores = document["rcv:infores"]
+        if not isinstance(infores, str) or not re.fullmatch(r"infores:[^\s]+", infores):
+            raise ValueError(f"rcv:infores must be an infores CURIE, not {infores!r}")
+        proposed = bool(document.get("rcv:inforesProposed"))
     if infores is None:
+        # bundles from before the metadata stage named the id: a single source constant
         for slot in ("provided_by", "aggregator_knowledge_source", "primary_knowledge_source"):
             values = {
                 c["value"]
@@ -380,6 +413,7 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
         "source": source,
         "source_id": "Kgbcia_" + source,
         "infores": infores,
+        "infores_proposed": proposed,
         "source_version": str(
             document.get("version") or hashlib.sha256(path.read_bytes()).hexdigest()[:16]
         ),
@@ -481,6 +515,7 @@ if __name__ == "__main__":
         else "ready",
         "requires_infores": config["requires_infores"],
         "infores": config["infores"],
+        "infores_proposed": config["infores_proposed"],
         "skipped": config["skipped"],
     }
     dump(target / "generation_report.json", result)

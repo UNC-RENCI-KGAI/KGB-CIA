@@ -66,10 +66,16 @@ def main(argv=None):
     ingest_pipeline.IngestPipeline.load_parser_metadata = staticmethod(
         lambda source: dict(source_metadata)
     )
+    pipeline = ingest_pipeline.IngestPipeline(storage_dir=str(args.workspace.resolve()))
+    status = pipeline.get_source_metadata(
+        args.source, pipeline.get_latest_source_version(args.source)
+    )
+    # ORION retries a failed parse but never a failed or interrupted download of the same
+    # source version, so a fixed URL or a killed run would otherwise need a fresh workspace.
+    if status.get_fetch_status() in {status.FAILED, status.IN_PROGRESS}:
+        status.set_fetch_status(status.NOT_STARTED)
     with module.merging_node_writers():
-        result = ingest_pipeline.IngestPipeline(
-            storage_dir=str(args.workspace.resolve())
-        ).run_pipeline(
+        result = pipeline.run_pipeline(
             args.source,
             normalization_scheme=NormalizationScheme(
                 strict=args.strict,
@@ -77,7 +83,27 @@ def main(argv=None):
                 edge_normalization_version=biolink_version,
             ),
         )
-    return 0 if result else 1
+    if not result:
+        # ORION logs why to its own log and the workspace's .meta.json, not stderr; say it here
+        # so the caller's report carries the reason.
+        status.load_current_metadata()
+        reasons = "; ".join(recorded_errors(status.metadata))
+        if not reasons:
+            reasons = f"no stage recorded an error; see {status.metadata_file_path}"
+        print(f"ORION run failed: {reasons}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def recorded_errors(metadata):
+    """Every `<stage>_error` ORION wrote into a source's .meta.json, outermost stage first."""
+    found = []
+    for key, value in metadata.items():
+        if key.endswith("_error") and value:
+            found.append(f"{key.removesuffix('_error')}: {value}")
+        elif isinstance(value, dict):
+            found += recorded_errors(value)
+    return found
 
 
 if __name__ == "__main__":

@@ -125,6 +125,7 @@ def native_orion(monkeypatch, tmp_path):
         pytest.fail("Native parser tests must not download data or call NodeNorm")
 
     monkeypatch.setattr("urllib.request.urlretrieve", no_network)
+    monkeypatch.setattr("urllib.request.urlopen", no_network)
     monkeypatch.setattr("requests.sessions.Session.request", no_network)
 
 
@@ -179,6 +180,26 @@ def test_missing_source_identity_is_explicit(bundle):
     )
     with pytest.raises(ValueError, match="infores"):
         generator.compile_bundle(bundle[0], infores="synthetic")
+
+
+def test_source_identity_comes_from_the_metadatas_rcv_infores(bundle, tmp_path):
+    # the metadata's own id wins over the old single-constant inference
+    bundle[1]["rcv:infores"] = "infores:metadata-named"
+    config = generator.compile_bundle(save(bundle))
+    assert config["infores"] == "infores:metadata-named" and not config["infores_proposed"]
+    # an explicit --infores still wins
+    assert generator.compile_bundle(bundle[0], infores="infores:confirmed")["infores"] == (
+        "infores:confirmed"
+    )
+    # a proposed id (not yet in the infores catalog) is used, marked, and doesn't block the run
+    bundle[1]["recordSet"][0]["field"] = bundle[1]["recordSet"][0]["field"][:-2]
+    bundle[1].update({"rcv:infores": "infores:proposed-kb", "rcv:inforesProposed": True})
+    result = generator.generate(save(bundle), tmp_path / "out")
+    assert result["infores"] == "infores:proposed-kb" and result["infores_proposed"]
+    assert result["status"] != "needs_infores"
+    bundle[1]["rcv:infores"] = "proposed-kb"
+    with pytest.raises(ValueError, match="rcv:infores"):
+        generator.compile_bundle(save(bundle))
 
 
 @pytest.mark.parametrize("reason", ["missing_extract", "unknown_reader", "join", "missing_id"])
@@ -276,6 +297,139 @@ def test_native_missing_endpoint_skips_record_and_continues(
     assert counts["diagnostic_count"] >= 1
     assert any("missing endpoint" in item.reason for item in report.skipped)
     assert len(nodes) == 3
+
+
+def test_association_without_a_predicate_is_reported_at_generation(bundle):
+    rs = bundle[1]["recordSet"][0]
+    rs["field"] = [f for f in rs["field"] if f["name"] != "predicate"]
+    config = generator.compile_bundle(save(bundle))
+    assert config["record_sets"][0]["predicate_mapped"] is False
+    assert any(s["ref"] == "rs" and "no predicate" in s["reason"] for s in config["skipped"])
+
+
+def test_native_association_without_a_predicate_emits_nodes_only(
+    bundle, tmp_path, monkeypatch, native_orion
+):
+    rs = bundle[1]["recordSet"][0]
+    rs["field"] = [f for f in rs["field"] if f["name"] != "predicate"]
+    nodes, edges, _, counts, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "gene_id\tdisease_id\tpublications\n1017\t0001\t\n1018\t0002\t\n",
+    )
+    assert len(nodes) == 4 and edges == []
+    # not one "predicate: Input should be a valid string" diagnostic per row
+    assert counts["diagnostic_count"] == 0
+
+
+def test_native_rows_reporting_absence_build_nothing(bundle, tmp_path, monkeypatch, native_orion):
+    level = field("level", "unused")
+    level["equivalentProperty"] = "rcv:synthetic/level"
+    level["annotation"] = [
+        {"name": "absent_value_0", "value": "0"},
+        {"name": "absent_value_1", "value": ""},
+        {"name": "absent_value_2", "value": "Not detected"},
+    ]
+    bundle[1]["recordSet"][0]["field"].append(level)
+    nodes, edges, report, counts, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "gene_id\tdisease_id\tpublications\tlevel\n"
+        "1017\t0001\t\t2.5\n"
+        "1018\t0002\t\t0.0\n"
+        "1019\t0003\t\tNot detected\n"
+        "1020\t0004\t\t\n",
+    )
+    assert [e["subject"] for e in edges] == ["NCBIGene:1017"]
+    assert {n["id"] for n in nodes} == {"NCBIGene:1017", "MONDO:0001"}
+    assert counts["diagnostic_count"] == 3
+    assert any("level reports absence" in s.reason for s in report.skipped)
+
+
+def test_native_absence_threshold_and_group(bundle, tmp_path, monkeypatch, native_orion):
+    level = field("level", "unused")
+    level["equivalentProperty"] = "rcv:synthetic/level"
+    level["annotation"] = [
+        {"name": "absent_value_0", "value": ""},
+        {"name": "absent_below", "value": "1"},
+    ]
+    good = field("good", "unused")
+    bad = field("bad", "unused")
+    for column in (good, bad):
+        column["equivalentProperty"] = "rcv:synthetic/" + column["name"]
+        column["annotation"] = [
+            {"name": "absent_value_0", "value": ""},
+            {"name": "absent_group", "value": "prognosis"},
+        ]
+    bundle[1]["recordSet"][0]["field"] += [level, good, bad]
+    _, edges, _, counts, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "gene_id\tdisease_id\tpublications\tlevel\tgood\tbad\n"
+        "1017\t0001\t\t2.5\tyes\t\n"  # one of the group is enough to keep it
+        "1018\t0002\t\t0.9\tyes\t\n"  # under the cutoff
+        "1019\t0003\t\t\tyes\t\n"  # empty
+        "1020\t0004\t\t3\t\t\n",  # the whole group is empty
+    )
+    assert [e["subject"] for e in edges] == ["NCBIGene:1017"]
+    assert counts["diagnostic_count"] == 3
+
+
+def test_native_each_filled_entity_makes_an_edge(bundle, tmp_path, monkeypatch, native_orion):
+    second = group(
+        "second", "biolink:object", "biolink:Disease", [field("other_id", "id", prefix="MONDO")]
+    )
+    bundle[1]["recordSet"][0]["field"].append(second)
+    _, edges, _, _, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "gene_id\tdisease_id\tother_id\tpublications\n"
+        "1017\t0001\t0002\t\n"  # both columns filled
+        "1018\t\t0003\t\n"  # the alternative only
+        "1019\t\t\t\n",  # neither
+    )
+    assert sorted((e["subject"], e["object"]) for e in edges) == [
+        ("NCBIGene:1017", "MONDO:0001"),
+        ("NCBIGene:1017", "MONDO:0002"),
+        ("NCBIGene:1018", "MONDO:0003"),
+    ]
+
+
+def test_one_unknown_list_item_keeps_the_rest_of_the_cell(native_orion):
+    spec = importlib.util.spec_from_file_location("orion_runtime", SCRIPTS / "orion_runtime.py")
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    field_ = {"slot": "id", "extract": {"column": "c"}, "list_separator": ";"}
+    field_["codes"] = {"a": "GO:1", "b": "GO:2"}
+    skipped = []
+    assert runtime.values(field_, {"c": "a;zzz;b"}, {}, skipped) == ["GO:1", "GO:2"]
+    assert skipped == ["Unmapped code 'zzz'"]
+    with pytest.raises(ValueError):  # a value on its own has nothing to keep
+        runtime.values(field_, {"c": "zzz"}, {}, [])
+
+
+def test_native_diagnostics_keep_examples_then_a_count(bundle, tmp_path, monkeypatch, native_orion):
+    rows = "".join(f"\t{n:04}\t\n" for n in range(250))
+    _, _, _, counts, workspace = run_loader(
+        bundle, tmp_path, monkeypatch, native_orion, "gene_id\tdisease_id\tpublications\n" + rows
+    )
+    assert counts["diagnostic_count"] == 500  # no gene id, so no edge, on every row
+    lines = [json.loads(line) for p in workspace.rglob("diagnostics.jsonl") for line in p.open()]
+    examples = [line for line in lines if "count" not in line]
+    totals = {line["reason"]: line["count"] for line in lines if "count" in line}
+    assert len(examples) == 200
+    assert totals == {
+        "Entity gene has no identifier": 250,
+        "Relationship has a missing endpoint": 250,
+    }
 
 
 def test_native_stale_columns_are_dropped_and_reported(bundle, tmp_path, monkeypatch, native_orion):
@@ -576,15 +730,18 @@ def test_native_archive_members_use_declared_parent(
     workspace.mkdir()
     downloads = []
 
-    def download(url, destination):
-        downloads.append(url)
-        shutil.copyfile(archive, destination)
+    def download(request):
+        # servers such as JensenLab and Reactome refuse Python's default User-Agent
+        downloads.append((request.full_url, request.get_header("User-agent")))
+        return archive.open("rb")
 
-    monkeypatch.setattr("urllib.request.urlretrieve", download)
+    monkeypatch.setattr("urllib.request.urlopen", download)
     loader = load_generated(output / result["parser"])(source_data_dir=str(workspace))
     loader.get_data()
     loader.load(str(workspace / "nodes.jsonl"), str(workspace / "edges.jsonl"))
-    assert downloads == ["https://example.test/source"]
+    assert downloads == [
+        ("https://example.test/source", "KGB-CIA/0.1 (+https://github.com/UNC-RENCI-KGAI/KGB-CIA)")
+    ]
     assert len((workspace / "edges.jsonl").read_text().splitlines()) == 1
 
 
@@ -686,6 +843,40 @@ def test_runner_rejects_missing_biolink_version(bundle, tmp_path, native_orion):
         runner.main([str(output), "Kgbcia_synthetic_source", str(tmp_path / "storage")])
 
 
+def test_runner_reports_why_a_download_failed_and_retries_it(
+    bundle, tmp_path, monkeypatch, native_orion, capsys
+):
+    import urllib.error
+
+    from orion import ingest_pipeline, normalization
+
+    monkeypatch.setattr(normalization, "get_current_node_norm_version", lambda: "test-api-version")
+    monkeypatch.setattr(normalization, "get_current_babel_version", lambda: "test-babel-version")
+    monkeypatch.setattr(ingest_pipeline.time, "sleep", lambda seconds: None)
+    output = tmp_path / "generated"
+    generator.main([str(bundle[0]), str(output)])
+    spec = importlib.util.spec_from_file_location("fetch_failure_runner", SCRIPTS / "run_orion.py")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    attempts = []
+
+    def refusing(code):
+        def refuse(url, *args, **kwargs):
+            attempts.append(code)
+            raise urllib.error.HTTPError(str(url), code, "Refused", {}, None)
+
+        return refuse
+
+    argv = [str(output), "Kgbcia_synthetic_source", str(tmp_path / "storage")]
+    for code in (403, 404):
+        for call in ("urlretrieve", "urlopen"):
+            monkeypatch.setattr(f"urllib.request.{call}", refusing(code))
+        assert runner.main(argv) == 1
+        assert f"fetch: <HTTPError {code}" in capsys.readouterr().err
+    # the second run downloaded again rather than stopping at "previously failed"
+    assert 404 in attempts
+
+
 def test_native_jsonl_skips_bad_line_and_keeps_physical_record_numbers(
     bundle,
     tmp_path,
@@ -727,3 +918,70 @@ def test_native_unmapped_primary_source_is_not_replaced_with_aggregator(
     )
     assert edges == []
     assert any("Mapped primary" in s.reason for s in report.skipped)
+
+
+def load_merge_script():
+    spec = importlib.util.spec_from_file_location("merge_graphs", SCRIPTS / "merge_graphs.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_graph(graphs, source, nodes, edges, *, status="stable"):
+    run_dir = graphs / source / source / "data" / "1"
+    normalized = run_dir / "parsed_p" / "normalized_n"
+    normalized.mkdir(parents=True)
+    meta = {
+        "fetch_status": "stable",
+        "parsings": {
+            "p": {
+                "parsing_status": "stable",
+                "normalizations": {"n": {"normalization_status": status}},
+            }
+        },
+    }
+    (run_dir / f"{source}.meta.json").write_text(json.dumps(meta))
+    for name, rows in (("nodes", nodes), ("edges", edges)):
+        text = "".join(json.dumps(row) + "\n" for row in rows)
+        (normalized / f"normalized_{name}.jsonl").write_text(text)
+
+
+def test_stable_normalization_skips_unfinished_graphs(tmp_path):
+    write_graph(tmp_path, "done", [], [])
+    write_graph(tmp_path, "failed", [], [], status="failed")
+    merge = load_merge_script()
+    assert merge.stable_normalization(tmp_path / "done").name == "normalized_n"
+    assert merge.stable_normalization(tmp_path / "failed") is None
+
+
+def test_native_merge_follows_orion_rules(tmp_path, native_orion):
+    def edge(pks, records, **extra):
+        triple = {"subject": "A:1", "predicate": "biolink:related_to", "object": "B:1"}
+        return {
+            **triple,
+            "primary_knowledge_source": pks,
+            "kgbcia_source_records": records,
+            "publications": records,
+            **extra,
+        }
+
+    nodes = [
+        {"id": "A:1", "category": ["biolink:Gene"]},
+        {"id": "B:1", "category": ["biolink:Gene"]},
+    ]
+    graphs = tmp_path / "graphs"
+    # "knowledge" holds "edge": ORION's own file sorting would read these nodes as edges
+    write_graph(graphs, "knowledge_source", nodes, [edge("infores:a", ["one"])])
+    write_graph(graphs, "other", nodes[:1], [edge("infores:a", ["two"]), edge("infores:b", ["x"])])
+    write_graph(graphs, "unfinished", [{"id": "C:1"}], [], status="failed")
+    output = tmp_path / "merged"
+    assert load_merge_script().main([str(graphs), str(output)]) == 0
+
+    merged_nodes = [json.loads(line) for line in (output / "nodes.jsonl").read_text().splitlines()]
+    edges = [json.loads(line) for line in (output / "edges.jsonl").read_text().splitlines()]
+    assert sorted(n["id"] for n in merged_nodes) == ["A:1", "B:1"]
+    assert len(edges) == 2  # a second primary source stays a separate edge
+    same = next(e for e in edges if e["primary_knowledge_source"] == "infores:a")
+    assert sorted(same["kgbcia_source_records"]) == ["one", "two"]
+    metadata = json.loads((output / "merge-metadata.json").read_text())
+    assert metadata["sources_not_merged"] == ["unfinished"] and metadata["edges_diff"] == 1

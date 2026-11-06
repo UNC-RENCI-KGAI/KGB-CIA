@@ -44,7 +44,8 @@ before using the current runner.
 
 Inspect aggregate and per-source generation reports. Counts distinguish compiled and
 unsupported record sets; `skipped` also documents field and relationship gaps. `needs_infores`
-requires a confirmed identity at runtime or regeneration. `unsupported` means no extractable
+means the metadata names no identity (no `rcv:infores` and no single source constant);
+`infores_proposed` marks a source citing an id the infores catalog doesn't have yet. `unsupported` means no extractable
 record sets. Generation exit 0 means compilation completed, not that source coverage is complete.
 
 ## Files and parsing-only tests
@@ -69,8 +70,9 @@ uv run --script OUTPUT/parsers/Kgbcia_SOURCE/src/parser.py PARSED --source-files
 
 The script dependency metadata selects Python 3.12+ and the pinned ORION package. Optional
 `--infores` supplies source identity. ORION writes `PARSED/nodes.jsonl` and `PARSED/edges.jsonl`;
-the loader writes `PARSED/transform_report.json` and `PARSED/diagnostics.jsonl`. This output is
-raw, not normalized. Exit 0 permits documented skips; structural failure returns 1 and may
+the loader writes `PARSED/transform_report.json` and `PARSED/diagnostics.jsonl`. Diagnostics keep
+the first 100 records for each field and reason, then one line with that reason's total `count`.
+This output is raw, not normalized. Exit 0 permits documented skips; structural failure returns 1 and may
 leave partial artifacts that must not be treated as a successful graph.
 
 ## Native ingestion
@@ -85,7 +87,9 @@ disabled conflation, and the semantic plan's declared Biolink version. Missing v
 before downloading source files. `--strict` excludes unresolved nodes. `--conflation` explicitly opts into
 gene/protein and other conflations. Optional `--infores` supplies missing source identity.
 ORION owns versioned storage, normalization artifacts, and stage success. Failed stages return
-nonzero. A scoped node writer uses ORION's disk merger during parsing and normalization to
+nonzero, and the runner prints the error ORION recorded in the workspace's `.meta.json` (for
+example `fetch: <HTTPError 403 ...>`) to stderr, which `kgb-transform` copies into
+`transformation_report.json`. A scoped node writer uses ORION's disk merger during parsing and normalization to
 retain properties from duplicate source IDs and canonical ID collisions. Registrations are
 restored afterward. Combined final graphs use ORION's graph workflow.
 
@@ -94,7 +98,8 @@ outcomes, but leave canonicalization quality and downstream evaluation to ORION 
 responsible teams. Validate graph structure, provenance, and lineage independently of the
 fraction of identifiers that resolve.
 
-ORION reuses completed stages by version. The current runner does not fingerprint local file
+ORION reuses completed stages by version. A failed or interrupted download is retried on the
+next run in the same `STORAGE`; ORION itself would not retry it. The current runner does not fingerprint local file
 contents, file bindings, or infores overrides. Use a fresh `STORAGE` directory when changing
 these runtime inputs to avoid reusing an earlier graph.
 
@@ -108,8 +113,8 @@ Supported constructs include declared table dialects, JSON/JSONL key/index/wildc
 code tables, prefix columns, CSVW file nulls plus field null annotations, boolean mappings,
 lists, constants, grouped associations,
 and typed entity-role relationships. Header checks omit absent columns. JSON records stay
-aligned under a shared array root in both JSON and JSONL. Unknown codes and compound IDs become diagnostics.
-Two multivalued endpoints are not cross-joined without explicit pairing semantics.
+aligned under a shared array root in both JSON and JSONL. Unknown codes and compound IDs become diagnostics. Rows whose column holds one of its `rcv:absentValue`s report that the relationship wasn't found: they're skipped, with a diagnostic, even if that column has no Biolink property. `rcv:absentBelow` does the same for values under a number, and columns sharing an `rcv:absentGroup` skip the row only when all of them report absence. An unknown item in a list drops alone.
+Two multivalued endpoints are not cross-joined without explicit pairing semantics. When several entities fill a role, each one a row fills makes an edge.
 
 XML/RDF, SQL, specialized dialects, and joins need reader adapters when explicit extraction
 instructions are available. Missing paths, undocumented namespaces, and unspecified nested
@@ -137,3 +142,22 @@ uv run --no-project --python 3.12 --with robokop-orion==2.0.13 --with pytest \
 Tests use synthetic local files and block downloads. Live acquisition and NodeNorm calls are
 not part of the suite. Regenerate packages after runtime or schema updates to invalidate old
 ORION parsing caches.
+
+## Merging sources
+
+`kgb-transform` finishes by running `merge_graphs.py`, which writes `nodes.jsonl`, `edges.jsonl`
+and `merge-metadata.json` to `merged/`. To merge by hand:
+
+```bash
+scripts/merge_graphs.py data/transformation/graphs data/transformation/merged
+```
+
+ORION merges nodes on `id`, and edges on subject, predicate, object, primary knowledge source and
+qualifiers, so the same triple from two primary sources stays two edges. Lists such as
+`publications` and `kgbcia_source_records` are combined. Scalars that conflict keep the first
+value, in sorted source order, and `merge_warnings.dropped_properties` counts those lost. Unresolved
+nodes are kept, as in lenient normalization. A source with no stable graph is left out and listed
+in `sources_not_merged`.
+
+Plan for about 500 bytes per merged edge, for the output and again for temporary files, and for
+several GB of memory: the disk merger buffers 10 million edges at a time.

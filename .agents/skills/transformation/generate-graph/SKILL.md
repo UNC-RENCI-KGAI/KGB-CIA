@@ -33,8 +33,10 @@ limitation. Do not label that limitation as a metadata failure.
 
 ## Generate and inspect the package
 
-Run `scripts/generate_parser.py INPUT OUTPUT`. Supply `--infores` for a single bundle only
-when its identity is confirmed but absent from metadata. Inspect aggregate and per-source
+Run `scripts/generate_parser.py INPUT OUTPUT`. The source's identity is the metadata's
+`rcv:infores`; a proposed one (`rcv:inforesProposed`) is used and reported for registering.
+Supply `--infores` for a single bundle only when its identity is confirmed but absent from
+metadata. Inspect aggregate and per-source
 generation reports. Successfully writing Python does not prove a source has supported mappings.
 Reports distinguish unsupported sources, missing infores identities, and partial mappings.
 
@@ -65,6 +67,13 @@ for node writes during parsing and normalization so duplicate IDs retain their p
 Mapping counts describe emitted source records; file counts describe merged nodes.
 Entry-level publications must not become relationship evidence without an explicit
 association mapping.
+
+## Merge into one graph
+
+`scripts/merge_graphs.py GRAPHS OUTPUT` merges each source's stable normalized graph with ORION's
+`KGXFileMerger` and disk merger, so ORION's merge rules decide what counts as the same node or
+edge. Don't use ORION's `merge_kgx_files` for the full graph: it holds everything in memory. See
+`reference/orion_workflow.md`.
 
 ## Run through ORION
 

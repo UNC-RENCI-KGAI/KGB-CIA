@@ -17,11 +17,13 @@ import json
 import lzma
 import math
 import os
+import re
 import shutil
 import tarfile
 import tempfile
 import urllib.request
 import zipfile
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -38,6 +40,9 @@ else:
 MANY = {"category", "equivalent_identifiers", "xref", "publications", "aggregator_knowledge_source"}
 ENUMS = {"knowledge_level", "agent_type"}
 IDENTITY = {"id", "subject", "object", "predicate", "category"}
+# Python's default "Python-urllib/3.x" User-Agent gets 403 Forbidden from JensenLab, Reactome
+# and WikiPathways; they accept a named client.
+USER_AGENT = "KGB-CIA/0.1 (+https://github.com/UNC-RENCI-KGAI/KGB-CIA)"
 
 
 class MergingNodeWriter(KGXFileWriter):
@@ -135,7 +140,28 @@ def raw_values(field, row):
     return value if isinstance(value, list) else [value]
 
 
-def values(field, row, prefixes):
+def is_absent(value, absent, below=None):
+    text = "" if value is None else str(value).strip()
+    if text in absent:
+        return True
+    try:
+        number = float(text)
+    except ValueError:
+        return False
+    if below is not None and number < float(below):
+        return True
+    for candidate in absent:
+        try:
+            if float(candidate) == number:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+def values(field, row, prefixes, skipped=None):
+    """A field's values for this row. An item of a list that can't be read goes in skipped, when
+    given, so one unknown item doesn't lose the rest of the cell."""
     output = []
     for raw in raw_values(field, row):
         if isinstance(raw, list):
@@ -162,10 +188,16 @@ def values(field, row, prefixes):
 
                 match = re.fullmatch(field["item_pattern"], str(value))
                 if not match:
+                    if skipped is not None and len(items) > 1:
+                        skipped.append("Compound item does not match item_pattern")
+                        continue
                     raise ValueError("Compound item does not match item_pattern")
                 value = match.group(1)
             if "codes" in field:
                 if str(value) not in field["codes"]:
+                    if skipped is not None and len(items) > 1:
+                        skipped.append(f"Unmapped code {value!r}")
+                        continue
                     raise ValueError(f"Unmapped code {value!r}")
                 value = field["codes"][str(value)]
             prefix = field.get("id_prefix")
@@ -228,6 +260,9 @@ def open_text(path):
 class SemanticSourceLoader(SourceDataLoader):
     mapping_file: Path
     preserve_unconnected_nodes = True
+    # diagnostics.jsonl keeps this many examples of each (field, reason) and then a count; one
+    # unmapped column otherwise writes a line per row (4.2 GB for STRING).
+    diagnostic_examples = 100
 
     def __init__(self, test_mode=False, source_data_dir=None):
         super().__init__(test_mode=test_mode, source_data_dir=source_data_dir)
@@ -249,6 +284,7 @@ class SemanticSourceLoader(SourceDataLoader):
         self._skip_keys = {(s["ref"], s["reason"]) for s in self.skips}
         self.mappings = {}
         self.diagnostic_count = 0
+        self._diagnostic_counts = Counter()
 
     def get_latest_source_version(self):
         return self.mapping["source_version"]
@@ -280,7 +316,9 @@ class SemanticSourceLoader(SourceDataLoader):
         url = str(dist.get("contentUrl") or "")
         if url.startswith(("https://", "http://", "ftp://")):
             temporary = destination.with_suffix(destination.suffix + ".part")
-            urllib.request.urlretrieve(url, temporary)
+            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(request) as response, temporary.open("wb") as target:
+                shutil.copyfileobj(response, target)
             temporary.replace(destination)
         else:
             parent = dist.get("containedIn")
@@ -342,11 +380,37 @@ class SemanticSourceLoader(SourceDataLoader):
 
     def diagnostic(self, ref, reason, *, record=None):
         self.diagnostic_count += 1
-        self._diagnostics.write(json.dumps({"ref": ref, "record": record, "reason": reason}) + "\n")
-        key = (ref, reason)
+        # validation messages quote the row's value; group them by the error, not the value
+        key = (ref, re.sub(r"input_value=.*?, input_type", "input_type", reason))
+        self._diagnostic_counts[key] += 1
+        if self._diagnostic_counts[key] <= self.diagnostic_examples:
+            line = {"ref": ref, "record": record, "reason": reason}
+            self._diagnostics.write(json.dumps(line) + "\n")
         if key not in self._skip_keys:
             self.skips.append({"ref": ref, "name": None, "reason": reason})
             self._skip_keys.add(key)
+
+    def states_absence(self, rs, row, number):
+        """Whether the row reports the relationship wasn't found (the plan's absent_values)."""
+        groups = {}
+        for field in rs.get("absence_fields", []):
+            found = raw_values(field, row)
+            absent = all(
+                is_absent(value, field.get("absent_values", []), field.get("absent_below"))
+                for value in found
+            )
+            if group := field.get("absent_group"):
+                groups.setdefault(group, []).append(absent)
+            elif found and absent:
+                self.diagnostic(
+                    rs["id"], f"Row skipped: {field['name']} reports absence", record=number
+                )
+                return True
+        for group, absent in groups.items():
+            if all(absent):
+                self.diagnostic(rs["id"], f"Row skipped: {group} reports absence", record=number)
+                return True
+        return False
 
     def rows(self, rs, path):
         if rs["reader"] in {"json", "jsonl"}:
@@ -451,11 +515,14 @@ class SemanticSourceLoader(SourceDataLoader):
     def properties(self, fields, row, number):
         props = {}
         for field in fields:
+            skipped = []
             try:
-                found = values(field, row, self.mapping["prefixes"])
+                found = values(field, row, self.mapping["prefixes"], skipped)
             except (ValueError, TypeError, SyntaxError) as error:
                 self.diagnostic(field["id"], str(error), record=number)
                 continue
+            for reason in skipped:
+                self.diagnostic(field["id"], reason, record=number)
             if not found:
                 continue
             slot = field["slot"]
@@ -636,6 +703,8 @@ class SemanticSourceLoader(SourceDataLoader):
             for rs in self.mapping["record_sets"]:
                 for path in self.paths(rs["file"]):
                     for number, row in self.rows(rs, path):
+                        if self.states_absence(rs, row, number):
+                            continue
                         node_ids = [
                             self.emit_nodes(rs, entity, row, number) for entity in rs["entities"]
                         ]
@@ -656,21 +725,27 @@ class SemanticSourceLoader(SourceDataLoader):
                         objects = [
                             i for i, e in enumerate(rs["entities"]) if e["role"] == "biolink:object"
                         ]
-                        if len(subjects) == len(objects) == 1:
-                            s, o = subjects[0], objects[0]
+                        if subjects and objects and rs.get("predicate_mapped", True):
                             props = self.properties(rs["row_fields"], row, number)
-                            self.emit_edge(
-                                rs,
-                                "association",
-                                rs["entities"][s],
-                                rs["entities"][o],
-                                node_ids[s],
-                                node_ids[o],
-                                props,
-                                props.get("predicate"),
-                                key,
-                                number,
-                            )
+                            # several entities can fill a role, from alternative or parallel
+                            # columns: each one the row fills makes an edge
+                            for s in [i for i in subjects if node_ids[i]] or subjects[:1]:
+                                for o in [i for i in objects if node_ids[i]] or objects[:1]:
+                                    self.emit_edge(
+                                        rs,
+                                        "association"
+                                        if len(subjects) == len(objects) == 1
+                                        else "association "
+                                        f"{rs['entities'][s]['name']} {rs['entities'][o]['name']}",
+                                        rs["entities"][s],
+                                        rs["entities"][o],
+                                        node_ids[s],
+                                        node_ids[o],
+                                        props,
+                                        props.get("predicate"),
+                                        key,
+                                        number,
+                                    )
                         row_index = next(
                             (i for i, e in enumerate(rs["entities"]) if e["name"] == "row"), None
                         )
@@ -711,6 +786,10 @@ class SemanticSourceLoader(SourceDataLoader):
                                     number,
                                 )
         finally:
+            for (ref, reason), count in self._diagnostic_counts.items():
+                if count > self.diagnostic_examples:
+                    line = {"ref": ref, "record": None, "reason": reason, "count": count}
+                    self._diagnostics.write(json.dumps(line) + "\n")
             self._diagnostics.close()
             report = TransformReport(
                 source=self.provenance_id,

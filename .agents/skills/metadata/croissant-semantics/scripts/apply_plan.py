@@ -68,6 +68,53 @@ ATOMIC = {
     "sc:Number",
 }
 ASSERTION_KEYS = {"basis", "source", "confidence"}
+# How each edge's statement was made: Biolink 4.4.6 KnowledgeLevelEnum and AgentTypeEnum (as in
+# shared/schema.py), with the words plans and the infores catalog use for them. A value that
+# isn't one of these is written as the closest one, with a warning.
+EDGE_PROVENANCE = {
+    "biolink:knowledge_level": {
+        "values": [
+            "knowledge_assertion",
+            "logical_entailment",
+            "prediction",
+            "statistical_association",
+            "text_co_occurrence",
+            "observation",
+            "not_provided",
+        ],
+        "synonyms": {
+            "knowledge_assertion": ["curated", "manual", "manually_curated", "assertion"],
+            "logical_entailment": ["inferred", "inference", "entailment", "entailed"],
+            "prediction": ["predicted", "computational", "computed", "in_silico", "predictions"],
+            "statistical_association": ["statistical", "association", "correlation", "gwas"],
+            "text_co_occurrence": ["text_mined", "text_mining", "co_occurrence", "cooccurrence"],
+            "observation": ["observed", "experimental", "experiment", "measured"],
+            "not_provided": ["mixed", "other", "unknown", "none", "na", "n_a"],
+        },
+    },
+    "biolink:agent_type": {
+        "values": [
+            "manual_agent",
+            "automated_agent",
+            "data_analysis_pipeline",
+            "computational_model",
+            "text_mining_agent",
+            "image_processing_agent",
+            "manual_validation_of_automated_agent",
+            "not_provided",
+        ],
+        "synonyms": {
+            "manual_agent": ["manual", "curator", "curated", "expert", "human", "manually_curated"],
+            "automated_agent": ["automated", "automatic", "software"],
+            "data_analysis_pipeline": ["pipeline", "analysis_pipeline", "data_analysis"],
+            "computational_model": ["model", "machine_learning", "ml", "algorithm", "predicted"],
+            "text_mining_agent": ["text_mining", "text_mined", "nlp", "text_miner"],
+            "image_processing_agent": ["image_processing", "image_analysis"],
+            "manual_validation_of_automated_agent": ["manually_validated", "reviewed"],
+            "not_provided": ["mixed", "other", "unknown", "none", "na", "n_a"],
+        },
+    },
+}
 
 
 class PlanError(Exception):
@@ -79,6 +126,8 @@ PLAN_PREFIXES: dict[str, str] = {}  # prefix -> expansion, for the plan being ap
 KNOWN = {
     "plan": {
         "kb",
+        "infores",
+        "infores_proposed",
         "croissant",
         "biolink_version",
         "prefixes",
@@ -127,6 +176,10 @@ KNOWN = {
         "codes",
         "null_values",
         "true_values",
+        "absent_values",
+        "absent_below",
+        "absent_group",
+        "drop_unmatched",
         "atomic",
         "pattern_note",
         "description",
@@ -263,8 +316,16 @@ def apply_column(
         notes.append(annotation(fid, f"null_value_{i}", "rcv:nullValue", null))
     for i, val in enumerate(as_list(spec.get("true_values"))):
         notes.append(annotation(fid, f"true_value_{i}", "rcv:trueValue", val))
+    for i, val in enumerate(as_list(spec.get("absent_values"))):
+        notes.append(annotation(fid, f"absent_value_{i}", "rcv:absentValue", str(val)))
+    if spec.get("absent_below") is not None:
+        notes.append(annotation(fid, "absent_below", "rcv:absentBelow", str(spec["absent_below"])))
+    if spec.get("absent_group"):
+        notes.append(annotation(fid, "absent_group", "rcv:absentGroup", spec["absent_group"]))
     if spec.get("list_separator"):
         notes.append(annotation(fid, "list_separator", "rcv:listSeparator", spec["list_separator"]))
+    if spec.get("drop_unmatched") and not spec.get("item_pattern"):
+        raise PlanError("drop_unmatched says why rows are dropped by item_pattern: it needs one")
     if spec.get("item_pattern"):
         try:
             if re.compile(spec["item_pattern"]).groups < 1:
@@ -745,6 +806,23 @@ def update_context(croissant: dict, plan: dict) -> None:
         ctx[key] = iri
 
 
+def apply_infores(croissant: dict, plan: dict) -> None:
+    """The knowledge base's own infores id, on the dataset as rcv:infores: the resource whose files
+    these are, which graph builders cite as the source of everything they read from them. An id
+    the catalog doesn't have yet is proposed (infores_proposed), and marked rcv:inforesProposed
+    so later stages can tell it apart. check.py reports a missing or proposed id."""
+    croissant.pop("rcv:infores", None)
+    croissant.pop("rcv:inforesProposed", None)
+    iid = plan.get("infores")
+    if iid is None:
+        return
+    if not isinstance(iid, str) or not re.fullmatch(r"infores:[^\s:]+", iid):
+        raise PlanError(f"infores must be an infores CURIE such as 'infores:hgnc', not {iid!r}")
+    croissant["rcv:infores"] = iid
+    if plan.get("infores_proposed"):
+        croissant["rcv:inforesProposed"] = True
+
+
 def duplicate_ids(croissant: dict) -> set[str]:
     """@ids used more than once (record sets, fields, sub-fields, annotations, distributions)."""
     seen: dict[str, int] = {}
@@ -910,6 +988,61 @@ def merge_answers(plan: dict, croissant: dict, answers: list[dict]) -> tuple[dic
 INHERITED = ("list_separator", "list_format", "null_values")  # derived fields take these
 
 
+def closest_edge_provenance(prop: str, value) -> str:
+    """The Biolink value of knowledge_level or agent_type (prop) closest to a plan's value: itself
+    when valid, else the one whose value or known word it contains (the longest, so "manually
+    validated" isn't just "manual"), else the nearest spelling, else not_provided."""
+    import difflib
+
+    spec = EDGE_PROVENANCE[prop]
+    word = re.sub(r"[^a-z0-9]+", "_", str(value).removeprefix("biolink:").lower()).strip("_")
+    if word in spec["values"]:
+        return f"biolink:{word}"
+    known = [(v, v) for v in spec["values"]]
+    known += [(w, target) for target, words in spec["synonyms"].items() for w in words]
+    for w, target in sorted(known, key=lambda k: -len(k[0])):
+        if f"_{w}_" in f"_{word}_":
+            return f"biolink:{target}"
+    near = difflib.get_close_matches(word, spec["values"], n=1, cutoff=0.75)
+    return f"biolink:{near[0] if near else 'not_provided'}"
+
+
+def normalize_edge_provenance(plan: dict) -> list[tuple[str, str]]:
+    """Write every knowledge_level and agent_type value in a resolved plan (constants, value maps,
+    codes) as a Biolink value, choosing the closest for one that isn't. Returns (where, what
+    changed)."""
+    changes = []
+
+    def fix(spec: dict, where: str) -> None:
+        prop = spec.get("property")
+        if prop not in EDGE_PROVENANCE:
+            return
+        for key in ("value_map", "codes"):
+            for k, v in (spec.get(key) or {}).items():
+                if v is not None and (best := closest_edge_provenance(prop, v)) != v:
+                    spec[key][k] = best
+                    changes.append((where, f"{v!r} isn't a Biolink {prop[8:]}; wrote {best}"))
+        if spec.get("value") is not None:
+            v = spec["value"]
+            if (best := closest_edge_provenance(prop, v)) != v:
+                spec["value"] = best
+                changes.append((where, f"{v!r} isn't a Biolink {prop[8:]}; wrote {best}"))
+
+    def columns(owner: dict, where: str) -> None:
+        for col, spec in (owner.get("columns") or {}).items():
+            fix(spec, f"{where} column {col}")
+            for d in spec.get("derived") or []:
+                fix(d, f"{where} {col} -> {d.get('name')}")
+        for const in owner.get("constants") or []:
+            fix(const, f"{where} constant {const.get('name')}")
+
+    for lay in plan.get("layouts") or []:
+        columns(lay, f"layout {lay.get('id')}")
+        for ent in lay.get("entities") or []:
+            columns(ent, f"layout {lay.get('id')} entity {ent.get('name')}")
+    return changes
+
+
 def resolve_plan(plan: dict) -> dict:
     """Expand references to the plan's column_library: a column spec {"use": NAME, ...overrides}."""
     library = plan.get("column_library") or {}
@@ -950,6 +1083,7 @@ def apply_plan(croissant: dict, plan: dict) -> tuple[dict, dict]:
     PLAN_PREFIXES.update({**VOCAB, **PREFIXES, **(plan.get("prefixes") or {})})
     check_keys(plan)
     plan = resolve_plan(plan)
+    WARNINGS.update(f"{where}: {msg}" for where, msg in normalize_edge_provenance(plan))
     out = copy.deepcopy(croissant)
     ids_added = ensure_field_ids(out)
     dups_before = duplicate_ids(out)
@@ -960,6 +1094,7 @@ def apply_plan(croissant: dict, plan: dict) -> tuple[dict, dict]:
             "and field names (a pipeline problem worth reporting)"
         )
     update_context(out, plan)
+    apply_infores(out, plan)
     assignments = match_record_sets(out, plan)
     enums: dict = {}
     counts = {
