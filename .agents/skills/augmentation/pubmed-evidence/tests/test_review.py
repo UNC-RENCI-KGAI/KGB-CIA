@@ -1,474 +1,503 @@
-"""The second pass: which items go to the reviewer, how they're grouped, and what is stored.
+"""The review step (review.py): which claims go to the reviewer, in one pass, how they're
+grouped and what is stored. Work files, caches and the input graph are built in code
+(test_bundle's `World`); refinement and the Biolink lookups are real, the model is a fake.
 
-Labels, proposals, work files and abstracts are built in code; the model is a fake client.
+The scene: imatinib `treats` CML and is `in_clinical_trials_for` it. Three placebo-controlled
+trials say it doesn't treat CML, and also show it was tested in clinical trials for it; a fourth
+abstract says only that. So all four would count for the trials edge: the negative claims
+through what they also support (rule 8), the fourth adding only its PMID. Imatinib also
+`affects` ABL1, plainly and as causing decreased activity of it; six in vitro claims in human
+say the latter, so they support both edges. A seventh's sentence wasn't found, so it counts for
+nothing and isn't sent.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import dataclasses
 import re
-import threading
 from pathlib import Path
 
 import pytest
-from pubmed_evidence import config, llm, records, review
-from pubmed_evidence.cache import Abstract, LabelCache, LabelRow, ProposalRow, PubMedCache
-from pubmed_evidence.graphio import pair_id, statement_id
-from pubmed_evidence.records import Entity, LabelRun, PubmedRecord, SentenceRecord, Statement
+from conftest import FakeClient, Sent
+from pubmed_evidence import config, llm, records, repair, review
+from pubmed_evidence.cache import ClaimRepairRow, Grounding, LabelCache, PubMedCache
+from test_bundle import (
+    GENE_PAIR,
+    INHIBITS,
+    MODEL,
+    PV,
+    TREATS,
+    TREATS_PAIR,
+    TRIALS,
+    World,
+    edge,
+    new_world,
+    statement,
+    stored,
+)
 from toy import ABL1, CML, IMATINIB
 
-MODEL = "gpt-5.6-luna"
-PV = "label@11111111"
-REVIEWER = "gpt-5.6-terra"
+REVIEWER = config.REVIEW_MODEL
+NULL = "Imatinib was no better than placebo in chronic myeloid leukemia"
+TESTED = "Imatinib was tested in a phase 2 trial in chronic myeloid leukemia"
+INHIBITED = "Imatinib inhibited ABL1 kinase activity"
+TRIALS_PMIDS = ("101", "102", "103", "104")
+GENE_PMIDS = ("201", "202", "203", "204", "205", "206")
 
-INHIBITS = {
-    "qualified_predicate": "biolink:causes",
-    "object_aspect_qualifier": "activity",
-    "object_direction_qualifier": "decreased",
-}
-EXPRESSION = {"object_aspect_qualifier": "expression"}
-CONTRIBUTES = {"qualified_predicate": "biolink:contributes_to"}
-TREATS = statement_id(IMATINIB, "biolink:treats", CML)
-AFFECTS = statement_id(IMATINIB, "biolink:affects", ABL1)
-GENE = statement_id(ABL1, "biolink:gene_associated_with_condition", CML)
-OUTSIDE = statement_id(IMATINIB, "biolink:binds", ABL1)  # labeled, but not in this work dir
-
-P_TREATS = pair_id(IMATINIB, CML)
-P_AFFECTS = pair_id(IMATINIB, ABL1)
-P_GENE = pair_id(ABL1, CML)
-
-# What should go to the reviewer: (kind, pmid).
-EXPECTED = {
-    ("contradicted", "101"),
-    ("contradicted", "201"),
-    ("qualifier", "202"),
-    ("qualifier", "302"),
-}
-
-
-def _proposal(sid, pmid, qualifiers, **kw) -> ProposalRow:
-    return ProposalRow(sid, pmid, PV, MODEL, qualifiers, quote="the quote", **kw)
-
-
-def _statement(sid, subject, predicate, object, rule) -> Statement:
-    return Statement(
-        statement_id=sid,
-        pair_id=pair_id(subject, object),
-        subject=subject,
-        predicate=predicate,
-        object=object,
-        rule=rule,
-        edge_count=1,
-    )
+TREATS_EDGE = edge(IMATINIB, "biolink:treats", CML, id="treats:1")
+TRIALS_EDGE = edge(IMATINIB, "biolink:in_clinical_trials_for", CML, id="trials:1")
+PLAIN = edge(IMATINIB, "biolink:affects", ABL1, id="gene:plain")
+QUALIFIED = edge(
+    IMATINIB,
+    "biolink:affects",
+    ABL1,
+    id="gene:qualified",
+    qualified_predicate="biolink:causes",
+    object_aspect_qualifier="activity",
+    object_direction_qualifier="decreased",
+)
 
 
 @pytest.fixture
-def setup(tmp_path: Path) -> tuple[Path, Path]:
-    work, cache_dir = tmp_path / "work", tmp_path / "cache"
-    statements = [
-        _statement(TREATS, IMATINIB, "biolink:treats", CML, "chemical-treats"),
-        _statement(AFFECTS, IMATINIB, "biolink:affects", ABL1, "chemical-gene"),
-        _statement(GENE, ABL1, "biolink:gene_associated_with_condition", CML, "gene-disease"),
-    ]
-    records.write_records(work / records.STATEMENTS, statements)
-    records.write_records(
-        work / records.SENTENCES,
-        [
-            SentenceRecord(statement_id=TREATS, sentence="imatinib treats CML"),
-            SentenceRecord(statement_id=AFFECTS, sentence="imatinib affects ABL1"),
-            SentenceRecord(statement_id=GENE, sentence="ABL1 is associated with CML"),
-        ],
-    )
-    records.write_records(
-        work / records.ENTITIES,
-        [
-            Entity(id=IMATINIB, name="imatinib", category=["biolink:SmallMolecule"]),
-            Entity(id=ABL1, name="ABL1", category=["biolink:Gene"], synonyms=["c-ABL"]),
-            Entity(id=CML, name="CML", category=["biolink:Disease"]),
-        ],
-    )
-    records.write_records(
-        work / records.PUBMED,
-        [
-            PubmedRecord(
-                pair_id=P_AFFECTS,
-                query="q",
-                retrieved="2026-11-02",
-                total=3,
-                synonyms={IMATINIB: ["imatinib", "Gleevec", "STI571"], ABL1: ["ABL1"]},
-            )
-        ],
-    )
-    records.write_label_run(work, LabelRun(model=MODEL, prompt_version=PV, prompt="label.md"))
-    with LabelCache(cache_dir / config.LABEL_CACHE) as cache:
-        cache.put_labels(
-            [
-                LabelRow(TREATS, "101", PV, MODEL, "contradicted", "did not", True),
-                LabelRow(TREATS, "102", PV, MODEL, "contradicted", "made up", False),
-                LabelRow(TREATS, "103", PV, MODEL, "confirmed", "imatinib works", True),
-                LabelRow(TREATS, "104", PV, "other-model", "contradicted", "q", True),
-                LabelRow(AFFECTS, "201", PV, MODEL, "contradicted", "no effect", True, "causal"),
-                LabelRow(GENE, "301", PV, MODEL, "ambiguous"),
-                LabelRow(OUTSIDE, "401", PV, MODEL, "contradicted", "q", True),
-            ]
+def scene(tmp_path: Path) -> World:
+    w = new_world(tmp_path)
+    w.edges(TREATS_EDGE, TRIALS_EDGE, PLAIN, QUALIFIED)
+    for pmid in TRIALS_PMIDS[:3]:
+        w.abstract(TREATS_PAIR, pmid, f"{NULL}.", types=["Randomized Controlled Trial"])
+        negative = stored(
+            TREATS, "negative", sentence=NULL, also=(TRIALS,), finding="demonstrated_absence"
         )
-        cache.put_proposals(
-            [
-                _proposal(AFFECTS, "202", INHIBITS, quote_valid=True, valid=True, claim="causal"),
-                _proposal(AFFECTS, "203", INHIBITS, quote_valid=True, valid=False),
-                _proposal(AFFECTS, "202", EXPRESSION, quote_valid=False, valid=True),
-                _proposal(GENE, "302", CONTRIBUTES, quote_valid=True, valid=True),
-            ]
+        w.answer(TREATS_PAIR, pmid, negative)
+    w.abstract(TREATS_PAIR, "104", f"{TESTED}.", types=["Clinical Trial, Phase II"])
+    w.answer(TREATS_PAIR, "104", stored(TRIALS, sentence=TESTED))
+    for pmid in (*GENE_PMIDS, "207"):
+        w.abstract(GENE_PAIR, pmid, f"{INHIBITED} in vitro.")
+    for pmid in GENE_PMIDS[:5]:
+        w.answer(GENE_PAIR, pmid, stored(INHIBITS, sentence=INHIBITED), design="in_vitro")
+    # 206's sentence was repaired; 207's wasn't found, so it counts for nothing.
+    misquoted = stored(INHIBITS, sentence="imatinib blocked ABL1")
+    [fixed] = w.answer(GENE_PAIR, "206", misquoted, design="in_vitro", sentence_valid=False)
+    w.answer(GENE_PAIR, "207", misquoted, design="in_vitro", sentence_valid=False)
+    repairer, version = repair.current()
+    with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
+        cache.put_claim_repairs(
+            [ClaimRepairRow(GENE_PAIR, "206", PV, MODEL, fixed, repairer, version, INHIBITED, True)]
         )
-    with PubMedCache(cache_dir / config.PUBMED_CACHE) as pubmed:
-        pubmed.put_abstracts(
-            Abstract(p, f"Title {p}", f"Abstract text of paper {p}.", 2020)
-            for p in ("101", "102", "103", "104", "201", "202", "203", "301", "302")
-        )
-    return work, cache_dir
+    run = records.read_label_run(w.work)
+    update = {"repairer": repairer, "repair_prompt_version": version}
+    records.write_label_run(w.work, run.model_copy(update=update))
+    return w
 
 
-ITEM = re.compile(r"^### (R\d+): (\w+), PMID (\d+)$", re.M)
+ITEM = re.compile(r"^### (R\d+): PMID:(\d+)$", re.M)
 
 
-class FakeClient:
-    """Accepts every item unless `decide(kind, pmid)` says otherwise (None leaves it out);
-    raises LLMError for a message `fail(user)` is true of."""
+def reviewer(decide=None, fail=None) -> FakeClient:
+    """A fake reviewer that upholds every claim unless `decide(pmid)` says otherwise (None
+    leaves it out of the reply), and raises LLMError for a message `fail(user)` is true of."""
+    decide = decide or (lambda pmid: "upheld")
+    fail = fail or (lambda user: False)
 
-    def __init__(self, decide=None, fail=None):
-        self.decide = decide or (lambda kind, pmid: "accept")
-        self.fail = fail or (lambda user: False)
-        self.calls: list[dict] = []
-        self.lock = threading.Lock()
-
-    def complete_json(self, system, user, *, max_output_tokens=16000, reasoning_effort=None):
-        with self.lock:
-            self.calls.append(
-                {
-                    "system": system,
-                    "user": user,
-                    "max_output_tokens": max_output_tokens,
-                    "reasoning_effort": reasoning_effort,
-                }
-            )
-        if self.fail(user):
-            raise llm.LLMError("HTTP 500 after retries")
+    def answer(sent: Sent):
+        if fail(sent.user):
+            return llm.LLMError("HTTP 500 after retries")
         reviews = []
-        for local, kind, pmid in ITEM.findall(user):
-            verdict = self.decide(kind, pmid)
+        for local, pmid in ITEM.findall(sent.user):
+            verdict = decide(pmid)
             if verdict is not None:
-                reviews.append({"item": local, "verdict": verdict, "reason": f"{kind} {pmid}"})
-        usage = llm.Usage(input_tokens=1000, output_tokens=100, cost=0.01, seconds=0.5)
-        return {"reviews": reviews}, usage
+                reviews.append({"item": local, "verdict": verdict, "reason": f"{verdict} {pmid}"})
+        return {"reviews": reviews}
 
-    def items(self) -> set[tuple[str, str]]:
-        return {(kind, pmid) for c in self.calls for _, kind, pmid in ITEM.findall(c["user"])}
+    usage = llm.Usage([llm.Attempt(REVIEWER, 800, 200, 0, 100)])
+    return FakeClient(answer, usage)
 
 
-def _call_for(client: FakeClient, pmid: str) -> str:
-    [user] = [c["user"] for c in client.calls if f", PMID {pmid}\n" in c["user"]]
+def rejecting(*pmids: str) -> FakeClient:
+    return reviewer(lambda pmid: "reject" if pmid in pmids else "upheld")
+
+
+def sent_pmids(client: FakeClient) -> list[set[str]]:
+    """The PMIDs of the claims in each call, in the order the calls were made."""
+    return [{pmid for _, pmid in ITEM.findall(s.user)} for s in client.sent]
+
+
+def run_review(w: World, client: FakeClient, **kw) -> dict:
+    return review.review_claims(w.work, w.cache_dir, w.graph, client=client, workers=1, **kw)
+
+
+def stored_reviews(w: World) -> dict[str, tuple[str, str, str]]:
+    """PMID -> (verdict, review prompt version, who answered) of the stored reviews."""
+    with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
+        rows = cache.claim_reviews(PV, MODEL, REVIEWER)
+    return {r.pmid: (r.verdict, r.review_prompt_version, r.answered_by) for r in rows}
+
+
+def counts(s: dict) -> tuple[int, ...]:
+    """(claims_to_review, already_reviewed, sent, unreviewed, calls, calls_needed)."""
+    keys = ("claims_to_review", "already_reviewed", "sent", "unreviewed", "calls", "calls_needed")
+    return tuple(s[k] for k in keys)
+
+
+def test_one_pass_sends_every_claim_that_would_count_and_has_no_verdict(scene):
+    """The negative trials through the trials edge they also support, 104 though it only adds a
+    PMID to that edge, and the six claims of the gene pair: one call per pair."""
+    client = rejecting("101")
+    s = run_review(scene, client)
+
+    assert sent_pmids(client) == [set(TRIALS_PMIDS), set(GENE_PMIDS)]
+    assert counts(s) == (10, 0, 10, 0, 2, 2)
+    assert s["verdicts"] == {"upheld": 9, "reject": 1}
+    assert (s["omitted"], s["repeated"]) == (0, 0)
+    assert (s["pairs"], s["pairs_not_fully_labeled"], s["pairs_not_looked_up"]) == (2, 0, 0)
+    assert s["ok"]
+    assert s["cost"] == pytest.approx(2 * llm.cost_of(llm.model(REVIEWER), 800, 200, 0, 100))
+
+    _, version = review.review_prompt()
+    reviews = stored_reviews(scene)
+    assert set(reviews) == {*TRIALS_PMIDS, *GENE_PMIDS}
+    assert reviews["101"] == ("reject", version, REVIEWER)
+    assert {v for p, v in reviews.items() if p != "101"} == {("upheld", version, REVIEWER)}
+    with LabelCache(scene.cache_dir / config.LABEL_CACHE) as cache:
+        [row] = [r for r in cache.claim_reviews(PV, MODEL) if r.pmid == "101"]
+        usage = cache.usage("review", REVIEWER, version)
+    assert row.reason == "reject 101" and row.pair_id == TREATS_PAIR
+    assert usage["calls"] == 2 and usage["pairs"] == 2
+
+    run = records.read_label_run(scene.work)
+    assert (run.reviewer, run.review_prompt_version) == (REVIEWER, version)
+    assert run.review_reasoning_effort == llm.model(REVIEWER).effort
+    assert (run.model, run.prompt_version, run.repairer) == (MODEL, PV, config.REPAIR_MODEL)
+
+
+def test_claims_that_would_not_count_are_not_sent(scene):
+    """Rules 6, 9 and 10: a negative claim with nothing it also supports, a hypothesis, a
+    claim from a retracted paper, a contrary of the qualified edge and the plain statement,
+    which only an edge select left out makes, support no edge in scope or don't count."""
+    scene.edges(TREATS_EDGE, TRIALS_EDGE, QUALIFIED, scope_out=(PLAIN,))
+    for pmid in ("105", "106"):
+        scene.abstract(TREATS_PAIR, pmid, f"{TESTED}.")
+    scene.abstract(TREATS_PAIR, "107", f"{TESTED}.", types=["Retracted Publication"])
+    scene.answer(TREATS_PAIR, "105", stored(TREATS, "negative", sentence=NULL))
+    scene.answer(TREATS_PAIR, "106", stored(TRIALS, sentence=TESTED, role="hypothesis"))
+    scene.answer(TREATS_PAIR, "107", stored(TRIALS, sentence=TESTED))
+    raised = statement(
+        IMATINIB,
+        "biolink:affects",
+        ABL1,
+        "biolink:causes",
+        object_aspect_qualifier="activity",
+        object_direction_qualifier="increased",
+    )
+    plain = statement(IMATINIB, "biolink:affects", ABL1)
+    for pmid, claim in (("208", raised), ("209", plain)):
+        scene.abstract(GENE_PAIR, pmid, f"{INHIBITED}.")
+        scene.answer(GENE_PAIR, pmid, stored(claim, sentence=INHIBITED))
+
+    client = reviewer()
+    s = run_review(scene, client)
+    assert sent_pmids(client) == [set(TRIALS_PMIDS), set(GENE_PMIDS)]
+    assert counts(s) == (10, 0, 10, 0, 2, 2)
+
+
+def test_identical_claims_of_an_abstract_are_sent_once(scene):
+    """They share a key, and so a verdict."""
+    scene.abstract(TREATS_PAIR, "105", f"{TESTED}.")
+    claim = stored(TRIALS, sentence=TESTED)
+    scene.answer(TREATS_PAIR, "105", claim, claim)
+    client = reviewer()
+    s = run_review(scene, client)
+    assert client.sent[0].user.count("### R") == 5
+    assert counts(s) == (11, 0, 11, 0, 2, 2)
+
+
+def test_a_rerun_sends_only_claims_with_no_verdict(scene):
+    """A rejected claim would still count if upheld, but it has its verdict: it is reviewed
+    before, not to review, and isn't sent again."""
+    run_review(scene, rejecting("101"))
+    again = reviewer()
+    s = run_review(scene, again)
+    assert again.sent == []
+    assert counts(s) == (0, 10, 0, 0, 0, 2) and s["ok"]
+    assert s["verdicts"] == {"upheld": 0, "reject": 0}
+
+
+def test_a_new_prompt_or_effort_reviews_afresh(scene, tmp_path):
+    run_review(scene, reviewer())
+    edited = tmp_path / "review.md"
+    edited.write_text(config.REVIEW_PROMPT.read_text() + "\nBe brief.\n", encoding="utf-8")
+    fresh = reviewer()
+    run_review(scene, fresh, prompt=edited)
+    assert sent_pmids(fresh) == [set(TRIALS_PMIDS), set(GENE_PMIDS)]
+
+    higher = reviewer()
+    s = run_review(scene, higher, reasoning_effort="high")
+    assert len(higher.sent) == 2 and s["reasoning_effort"] == "high"
+    assert s["review_prompt_version"] != review.review_prompt()[1]
+    run = records.read_label_run(scene.work)
+    assert (run.review_prompt_version, run.review_reasoning_effort) == (
+        s["review_prompt_version"],
+        "high",
+    )
+    with LabelCache(scene.cache_dir / config.LABEL_CACHE) as cache:
+        versions = {r.review_prompt_version for r in cache.claim_reviews(PV, MODEL)}
+    assert len(versions) == 3
+
+
+def test_after_a_failed_call_its_claims_stay_unreviewed_and_the_next_run_sends_them(scene):
+    client = reviewer(fail=lambda user: "PMID:101" in user)
+    s = run_review(scene, client)
+    assert sent_pmids(client) == [set(TRIALS_PMIDS), set(GENE_PMIDS)]
+    assert s["failed_calls"] == 1 and s["unreviewed"] == 4 and not s["ok"]
+    assert records.read_label_run(scene.work).reviewer is None  # a failed pass isn't named
+    assert set(stored_reviews(scene)) == set(GENE_PMIDS)
+
+    retry = reviewer()
+    s = run_review(scene, retry)
+    assert sent_pmids(retry) == [set(TRIALS_PMIDS)]
+    assert counts(s) == (4, 6, 4, 0, 1, 2) and s["ok"]
+    assert records.read_label_run(scene.work).reviewer == REVIEWER
+
+
+def test_failures_are_a_share_of_every_call_the_claims_that_would_count_need(scene, monkeypatch):
+    """A rerun that sends only a call that keeps failing is judged on every call the claims
+    that would count need, those reviewed before included, so a stuck call doesn't fail every
+    later run. (Here a share of 50% passes, so one failed call in two is allowed.)"""
+    monkeypatch.setattr(llm, "MAX_FAILED_SHARE", 0.5)
+    for _ in range(2):
+        s = run_review(scene, reviewer(fail=lambda user: "PMID:101" in user))
+        assert s["failed_calls"] == 1 and s["calls_needed"] == 2 and s["ok"]
+    assert s["calls"] == 1 and s["unreviewed"] == 4
+    monkeypatch.setattr(llm, "MAX_FAILED_SHARE", 0.4)
+    assert not run_review(scene, reviewer(fail=lambda user: "PMID:101" in user))["ok"]
+
+
+def test_a_verdict_outside_the_schema_fails_its_call_only(scene):
+    """A reply with a verdict REPLY_SCHEMA doesn't allow (strict mode should prevent it) is a
+    failed call, like any unreadable reply, not the end of the step."""
+    client = reviewer(lambda pmid: "accept" if pmid in TRIALS_PMIDS else "upheld")
+    s = run_review(scene, client)
+    assert s["calls"] == 2 and s["failed_calls"] == 1
+    assert s["verdicts"] == {"upheld": 6, "reject": 0}
+    assert set(stored_reviews(scene)) == set(GENE_PMIDS)
+
+
+def test_claims_left_out_of_a_reply_wait_for_the_next_run(scene):
+    client = reviewer(lambda pmid: None if pmid == "102" else "upheld")
+    s = run_review(scene, client)
+    assert s["omitted"] == 1 and s["unreviewed"] == 1 and s["ok"]
+    assert "102" not in stored_reviews(scene)
+
+    retry = reviewer()
+    s = run_review(scene, retry)
+    assert sent_pmids(retry) == [{"102"}] and s["unreviewed"] == 0
+
+
+def test_limit_reviews_the_first_pairs_by_id(scene):
+    client = reviewer()
+    s = run_review(scene, client, limit=1)
+    assert TREATS_PAIR < GENE_PAIR
+    assert sent_pmids(client) == [set(TRIALS_PMIDS)] and s["pairs"] == 1
+
+
+def test_a_pair_with_anatomy_never_looked_up_is_counted_and_not_sent(scene):
+    """Its claims can't be told apart by context yet: step 6 holds the pair, and the next
+    ground run looks the name up."""
+    scene.abstract(GENE_PAIR, "208", f"{INHIBITED} in the liver.")
+    scene.answer(GENE_PAIR, "208", stored(INHIBITS, sentence=INHIBITED, anatomy="liver"))
+    client = reviewer()
+    s = run_review(scene, client)
+    assert sent_pmids(client) == [set(TRIALS_PMIDS)]
+    assert (s["pairs"], s["pairs_not_looked_up"]) == (1, 1)
+
+    with PubMedCache(scene.cache_dir / config.PUBMED_CACHE) as cache:
+        cache.put_groundings([Grounding("liver", "anatomy", None, None, "test")])
+    again = reviewer()
+    s = run_review(scene, again)
+    assert sent_pmids(again) == [{*GENE_PMIDS, "208"}] and s["pairs_not_looked_up"] == 0
+
+
+def test_no_claim_that_would_count_no_client(scene, monkeypatch):
+    scene.abstract(TREATS_PAIR, "106", "x")  # never answered: the pair isn't fully labeled
+    built = []
+    monkeypatch.setattr(llm, "client_for", lambda *a, **kw: built.append(a))
+    s = review.review_claims(scene.work, scene.cache_dir, scene.graph, limit=1)
+    assert built == [] and s["calls"] == 0 and s["pairs"] == 0
+    assert s["pairs_not_fully_labeled"] == 1 and s["ok"]
+    assert records.read_label_run(scene.work).reviewer == REVIEWER
+
+    # Nor once every claim that would count has its verdict.
+    run_review(scene, reviewer())
+    s = review.review_claims(scene.work, scene.cache_dir, scene.graph)
+    assert built == [] and s["calls"] == 0 and s["already_reviewed"] == 6 and s["ok"]
+
+
+def _call_with(client: FakeClient, pmid: str) -> str:
+    [user] = [s.user for s in client.sent if f"### PMID:{pmid}, " in s.user]
     return user
 
 
-def _reviews(cache_dir: Path, **kw):
-    with LabelCache(cache_dir / config.LABEL_CACHE) as cache:
-        return cache.reviews(PV, MODEL, **kw)
+def test_message_shows_each_claim_in_words_and_structured_and_each_abstract_once(scene):
+    client = reviewer()
+    run_review(scene, client)
+
+    trials = _call_with(client, "101")
+    assert f"- {IMATINIB}: imatinib (SmallMolecule); other names: Gleevec; STI571" in trials
+    claim = trials.split("### R1: PMID:101\n")[1].split("\n\n")[0].splitlines()
+    cml = "chronic myelogenous leukemia, BCR-ABL1 positive"
+    assert claim[0] == f"Claim: imatinib does not treat {cml}"
+    assert claim[1] == f"Also supports: imatinib has been tested in clinical trials for {cml}"
+    assert claim[2].startswith('Structured: {"polarity": "negative", "statement": {"subject": ')
+    for part in (
+        '"claim_role": "primary_finding"',
+        '"hedged": false',
+        '"negative_finding_type": "demonstrated_absence"',
+        '"context": {"species": "human", "anatomy": null, "notes": null}',
+        '"predicate": "biolink:in_clinical_trials_for"',
+    ):
+        assert part in claim[2]
+    assert claim[3] == f'Evidence sentence: "{NULL}"'
+    assert trials.count("### PMID:101, 2020\n") == 1
+    assert "Publication types: Randomized Controlled Trial\n" in trials
+    assert f"Abstract: {NULL}." in trials
+    assert "### PMID:104, 2020\n" in trials and "PMID:201" not in trials
+
+    gene = _call_with(client, "206")
+    assert gene.count("### R") == 6 and "PMID:207" not in gene
+    assert 'Evidence sentence: "imatinib blocked ABL1"' not in gene  # the repair is shown
+    assert gene.count(f'Evidence sentence: "{INHIBITED}"') == 6
+    assert "Claim: imatinib causes decreased activity of ABL1\n" in gene
+    assert all(s.schema == review.REPLY_SCHEMA for s in client.sent)
+    assert all(s.system == review.review_prompt()[0] for s in client.sent)
 
 
-def test_sends_only_items_that_add_edges_grouped_by_pair(setup):
-    work, cache_dir = setup
-    client = FakeClient()
-    s = review.review_items(work, cache_dir, client=client, model=REVIEWER, workers=3)
-
-    assert client.items() == EXPECTED
-    assert len(client.calls) == 3  # one per pair
-    assert s["items"] == {"contradicted": 2, "qualifier": 2}
-    assert s["pending"] == 4 and s["pending_pairs"] == 3 and s["calls"] == 3
-    assert s["accepted"] == {"contradicted": 2, "qualifier": 2}
-    assert s["ok"] and s["cost"] == pytest.approx(0.03)
-
-    system, _ = llm.load_prompt(config.REVIEW_PROMPT)
-    assert all(c["system"] == system for c in client.calls)
-    assert all(c["reasoning_effort"] == "medium" for c in client.calls)
-
-    treats = _call_for(client, "101")
-    assert "### PMID 101" in treats
-    for other in ("102", "103", "104", "201"):
-        assert f"PMID {other}" not in treats  # only the abstracts the items cite
-
-    affects = _call_for(client, "201")
-    assert affects == _call_for(client, "202")  # same pair, same call
-    assert "### PMID 201" in affects and "### PMID 202" in affects
-    assert "PMID 203" not in affects
-    assert affects.count("Title 202") == 1
-    # Synonyms from step 3's query, the edge and its resulting statement.
-    assert f"- {IMATINIB}: imatinib (SmallMolecule); other names: Gleevec; STI571" in affects
-    assert "Edge: imatinib affects ABL1" in affects
-    assert "Resulting statement: imatinib causes decreased activity of ABL1" in affects
-    assert f"Proposed qualifiers: {json.dumps(INHIBITS, sort_keys=True)}" in affects
-    assert 'First-pass quote: "the quote"' in affects
-    assert "First-pass claim: causal" in affects
-
-    gene = _call_for(client, "302")
-    assert "other names: c-ABL" in gene  # no pubmed record: the entity's own synonyms
+def test_batches_split_by_abstracts_and_items(monkeypatch):
+    monkeypatch.setattr(config, "REVIEW_ITEMS_PER_CALL", 3)
+    monkeypatch.setattr(config, "ABSTRACTS_PER_CALL", 2)
+    record = None
+    items = [review.Item(("a|b", pmid, f"c{i}"), record) for i in range(4) for pmid in "12"]
+    items.append(review.Item(("a|b", "3", "c0"), record))
+    out = review.batches({"a|b": items})
+    assert [[i.pmid for _, i in batch] for _, batch in out] == [
+        ["1", "2", "1"],
+        ["2", "1", "2"],
+        ["1", "2"],
+        ["3"],
+    ]
+    assert [local for local, _ in out[1][1]] == ["R1", "R2", "R3"]
+    assert {pair for pair, _ in out} == {"a|b"}
 
 
-def test_verdicts_stored_with_first_pass_keys(setup):
-    work, cache_dir = setup
-    client = FakeClient(decide=lambda kind, pmid: "reject" if pmid == "202" else "accept")
-    s = review.review_items(work, cache_dir, client=client, model=REVIEWER, workers=1)
-    assert s["rejected"] == {"contradicted": 0, "qualifier": 1}
-
-    rows = {(r.kind, r.pmid): r for r in _reviews(cache_dir)}
-    assert set(rows) == EXPECTED
-    _, version = llm.load_prompt(config.REVIEW_PROMPT, extra=review.FORMAT_VERSION)
-    for r in rows.values():
-        assert (r.model, r.prompt_version) == (MODEL, PV)
-        assert (r.reviewer, r.review_prompt_version) == (REVIEWER, version)
-    assert rows[("contradicted", "101")].qualifiers is None
-    assert rows[("contradicted", "101")].statement_id == TREATS
-    assert rows[("qualifier", "202")].qualifiers == INHIBITS
-    assert rows[("qualifier", "202")].verdict == "reject"
-    assert rows[("qualifier", "202")].reason == "qualifier 202"
-    assert rows[("qualifier", "302")].verdict == "accept"
-
-    with LabelCache(cache_dir / config.LABEL_CACHE) as cache:
-        usage = cache.usage("review", REVIEWER, version)
-    assert usage["calls"] == 3 and usage["errors"] == 0 and usage["pairs"] == 3
-
-
-def test_rerun_skips_reviewed_items_and_new_prompt_rereviews(setup, tmp_path):
-    work, cache_dir = setup
-    review.review_items(work, cache_dir, client=FakeClient(), model=REVIEWER)
-
-    again = FakeClient()
-    s = review.review_items(work, cache_dir, client=again, model=REVIEWER)
-    assert again.calls == [] and s["already_reviewed"] == 4 and s["pending"] == 0
-
-    edited = tmp_path / "review.md"
-    edited.write_text(config.REVIEW_PROMPT.read_text() + "\nBe brief.\n", encoding="utf-8")
-    fresh = FakeClient()
-    s = review.review_items(work, cache_dir, client=fresh, model=REVIEWER, prompt=edited)
-    assert fresh.items() == EXPECTED and s["already_reviewed"] == 0
-    assert len({r.review_prompt_version for r in _reviews(cache_dir)}) == 2
-
-
-def test_items_left_out_of_the_reply_are_not_stored_and_retried(setup):
-    work, cache_dir = setup
-    client = FakeClient(decide=lambda kind, pmid: None if pmid == "201" else "accept")
-    s = review.review_items(work, cache_dir, client=client, model=REVIEWER)
-    assert s["omitted"] == 1
-    assert {(r.kind, r.pmid) for r in _reviews(cache_dir)} == EXPECTED - {("contradicted", "201")}
-
-    retry = FakeClient()
-    review.review_items(work, cache_dir, client=retry, model=REVIEWER)
-    assert retry.items() == {("contradicted", "201")}
-    assert "### PMID 202" not in retry.calls[0]["user"]
-
-
-def test_invalid_reply_entries_are_counted():
-    item = review.Item("contradicted", "s", "1")
+def test_a_claims_first_verdict_counts_and_unknown_items_fail():
+    item = review.Item(("a|b", "1", "c"), None)
     reply = {
         "reviews": [
-            {"item": "R1", "verdict": "Accept", "reason": "ok"},
-            {"item": "R1", "verdict": "reject"},
-            {"item": "R9", "verdict": "accept"},
-            {"item": "R1", "verdict": "maybe"},
-            "R1",
+            {"item": "R1", "verdict": "upheld", "reason": " ok "},
+            {"item": "R1", "verdict": "reject", "reason": "the first counts"},
         ]
     }
-    verdicts, invalid = review.parse_reply(reply, {"R1": item})
-    assert verdicts == {"R1": ("accept", "ok")} and invalid == 4
-    with pytest.raises(ValueError):
-        review.parse_reply({"verdicts": []}, {"R1": item})
+    assert review.parse_reply(reply, {"R1": item}) == ({"R1": ("upheld", "ok")}, 1)
+    reply["reviews"].append({"item": "R9", "verdict": "reject", "reason": "no such item"})
+    with pytest.raises(ValueError, match="beyond the request's 1: R9"):
+        review.parse_reply(reply, {"R1": item})
+    # A verdict the schema doesn't have, from a deployment that doesn't enforce it.
+    reply = {"reviews": [{"item": "R1", "verdict": "accept", "reason": "old vocabulary"}]}
+    with pytest.raises(ValueError, match="verdicts not upheld or reject: accept"):
+        review.parse_reply(reply, {"R1": item})
+    verdict = review.REPLY_SCHEMA.body["properties"]["reviews"]["items"]["properties"]["verdict"]
+    assert verdict["enum"] == ["upheld", "reject"]
 
 
-def test_limit_and_label_run_updated(setup):
-    work, cache_dir = setup
-    client = FakeClient()
-    s = review.review_items(work, cache_dir, client=client, model=REVIEWER, limit=1)
-    assert s["pending_pairs"] == 1 and len(client.calls) == 1
-    assert client.items() == {("contradicted", "101")}  # the first pair in sorted order
-
-    run = records.read_label_run(work)
-    _, version = llm.load_prompt(config.REVIEW_PROMPT, extra=review.FORMAT_VERSION)
-    assert (run.model, run.prompt_version, run.prompt) == (MODEL, PV, "label.md")
-    assert (run.reviewer, run.review_prompt_version) == (REVIEWER, version)
+def test_the_review_prompt_includes_the_claim_rules_and_its_version_the_effort():
+    system, version = review.review_prompt()
+    assert "{{include" not in system
+    assert (config.PROMPTS_DIR / "claim-rules.md").read_text().strip() in system
+    assert review.review_prompt(reasoning_effort="medium")[1] == version  # the model's own
+    assert review.review_prompt(reasoning_effort="high")[1] != version
+    assert review.review_prompt(reasoning_effort="none")[1] != version
+    with pytest.raises(llm.LLMError, match="not-a-model"):
+        review.review_prompt(model="not-a-model")
 
 
-def test_other_label_run_leaves_label_run_json_alone(setup):
-    work, cache_dir = setup
-    client = FakeClient()
-    s = review.review_items(
-        work, cache_dir, client=client, model=REVIEWER, label_model="other-model"
+def test_the_review_prompt_rejects_a_claim_posed_only_as_a_hypothesis():
+    """Rule 10's review half: whatever its role, a claim the abstract only poses as a hypothesis
+    or a question is rejected, while a hedged finding or asserted background is not one."""
+    system = " ".join(review.review_prompt()[0].split())
+    bullet = (
+        "- the abstract only poses it as a hypothesis or a question, whatever its `claim_role`, "
+        "`hypothesis` included (a hedged finding, or background the abstract asserts, is not a "
+        "hypothesis);"
     )
-    assert client.items() == {("contradicted", "104")}
-    assert not s["label_run_updated"] and records.read_label_run(work).reviewer is None
+    assert system.index("Reject it when:") < system.index(bullet)
 
 
-def test_statement_words():
-    assert (
-        review.statement_words("imatinib", "biolink:affects", "ABL1", INHIBITS)
-        == "imatinib causes decreased activity of ABL1"
-    )
-    assert (
-        review.statement_words(
-            "A", "biolink:affects", "B", {"species_context_qualifier": "NCBITaxon:9606"}
-        )
-        == "A affects B (species context: NCBITaxon:9606)"
-    )
+def test_the_repair_prompt_version_covers_the_repair_models_effort(monkeypatch):
+    _, version = repair.repair_prompt()
+    model = llm.model(config.REPAIR_MODEL)
+    monkeypatch.setitem(config.MODELS, model.id, dataclasses.replace(model, effort="high"))
+    assert repair.repair_prompt()[1] != version
+    assert repair.current() == (config.REPAIR_MODEL, repair.repair_prompt()[1])
 
 
-PI = "pi:gpt-6.1-sol"
+# --- The CLI --------------------------------------------------------------------------------
 
 
-def _verdict_lines(path: Path, lines: list) -> None:
-    path.write_text(
-        "\n".join(line if isinstance(line, str) else json.dumps(line) for line in lines) + "\n",
-        encoding="utf-8",
-    )
-
-
-def test_export_then_import_round_trip(setup, tmp_path):
-    work, cache_dir = setup
-    out = tmp_path / "pi" / "review_items.jsonl"
-    s = review.export_items(work, cache_dir, out, reviewer=PI)
-    assert s["exported"] == 4 and s["pairs"] == 3
-
-    lines = [json.loads(line) for line in out.read_text().splitlines()]
-    assert {(d["kind"], d["pmid"]) for d in lines} == EXPECTED
-    for d in lines:
-        qualifiers = d["qualifiers"] if d["kind"] == "qualifier" else None
-        assert d["item_id"] == review.item_id(d["kind"], d["statement_id"], d["pmid"], qualifiers)
-        assert d["title"] == f"Title {d['pmid']}" and d["abstract"]
-        assert d["review_prompt_version"] == s["review_prompt_version"]
-    by_pmid = {d["pmid"]: d for d in lines}
-    assert by_pmid["202"]["resulting_statement"] == "imatinib causes decreased activity of ABL1"
-    assert by_pmid["202"]["structured"]["predicate"] == "biolink:affects"
-    assert by_pmid["202"]["entities"][IMATINIB]["synonyms"] == ["Gleevec", "STI571"]
-    assert by_pmid["101"]["sentence"] == "imatinib treats CML"
-
-    instructions = (tmp_path / "pi" / "review_items.instructions.md").read_text()
-    assert s["instructions"].name == "review_items.instructions.md"
-    assert '"item_id"' in instructions and '{"reviews"' not in instructions
-    assert "## Contradicted items" in instructions
-    assert s["review_prompt_version"].startswith("review-pi@")
-
-    # Ids are stable: a second export gives the same ones.
-    review.export_items(work, cache_dir, out, reviewer=PI)
-    assert [json.loads(line)["item_id"] for line in out.read_text().splitlines()] == [
-        d["item_id"] for d in lines
-    ]
-
-    verdicts = tmp_path / "pi" / "verdicts.jsonl"
-    verdict = {d["item_id"]: "reject" if d["pmid"] == "101" else "accept" for d in lines}
-    _verdict_lines(
-        verdicts, [{"item_id": i, "verdict": v, "reason": "because"} for i, v in verdict.items()]
-    )
-    imported = review.import_verdicts(work, cache_dir, verdicts, reviewer=PI)
-    assert imported["imported"] == 4 and imported["unknown"] == imported["invalid"] == 0
-    assert imported["rejected"] == {"contradicted": 1, "qualifier": 0}
-
-    rows = _reviews(cache_dir, reviewer=PI)
-    assert {(r.kind, r.pmid) for r in rows} == EXPECTED
-    assert {r.review_prompt_version for r in rows} == {s["review_prompt_version"]}
-    assert next(r for r in rows if r.pmid == "202").qualifiers == INHIBITS
-    run = records.read_label_run(work)
-    assert run.reviewer == PI
-    assert run.review_prompt_version == s["review_prompt_version"]
-
-    assert review.export_items(work, cache_dir, out, reviewer=PI)["exported"] == 0  # nothing left
-
-
-def test_export_is_per_reviewer(setup, tmp_path):
-    """Items another reviewer has reviewed are still pending for this one: step 6 honours only
-    the reviewer label_run.json names, which the import switches to."""
-    work, cache_dir = setup
-    out = tmp_path / "items.jsonl"
-    review.export_items(work, cache_dir, out, reviewer=PI)
-    first = json.loads(out.read_text().splitlines()[0])
-    verdicts = tmp_path / "verdicts.jsonl"
-    _verdict_lines(verdicts, [{"item_id": first["item_id"], "verdict": "accept"}])
-    review.import_verdicts(work, cache_dir, verdicts, reviewer=PI)
-    assert review.export_items(work, cache_dir, out, reviewer=PI)["exported"] == 3
-    assert review.export_items(work, cache_dir, out, reviewer="pi:other")["exported"] == 4
-
-
-def test_import_rejects_unknown_ids_and_invalid_verdicts(setup, tmp_path):
-    work, cache_dir = setup
-    out = tmp_path / "items.jsonl"
-    review.export_items(work, cache_dir, out, reviewer="pi:x")
-    first = json.loads(out.read_text().splitlines()[0])
-    verdicts = tmp_path / "verdicts.jsonl"
-    _verdict_lines(
-        verdicts,
-        [
-            {"item_id": first["item_id"], "verdict": "accept", "reason": "ok"},
-            {"item_id": "c-000000000000", "verdict": "accept"},
-            {"item_id": first["item_id"], "verdict": "maybe"},
-            "not json",
-        ],
-    )
-    s = review.import_verdicts(
-        work, cache_dir, verdicts, reviewer="pi:x", review_prompt_version="review-pi@manual"
-    )
-    assert (s["lines"], s["imported"], s["unknown"], s["invalid"]) == (4, 1, 1, 2)
-    [row] = _reviews(cache_dir, reviewer="pi:x")
-    assert row.review_prompt_version == "review-pi@manual"
-
-
-def _args(work: Path, cache_dir: Path, *argv: str) -> argparse.Namespace:
+def _args(w: World, *argv: str) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     review.add_arguments(parser)
     args = parser.parse_args(list(argv))
-    args.work, args.cache_dir = work, cache_dir
+    args.work, args.cache_dir, args.input = w.work, w.cache_dir, w.graph
     return args
 
 
-def test_run_returns_1_when_too_many_calls_fail(setup, monkeypatch):
-    work, cache_dir = setup
-    client = FakeClient(fail=lambda user: ", PMID 101\n" in user)
-    # No key needed when the client is faked: llm.Client is what checks for it.
-    monkeypatch.delenv(config.LLM_API_KEY, raising=False)
-    monkeypatch.setattr(llm, "load_model", lambda model_id, *a: llm.ModelInfo(model_id, "url"))
-    monkeypatch.setattr(llm, "Client", lambda model, *a, **kw: client)
+def test_run_returns_1_when_too_many_calls_fail(scene, monkeypatch):
+    client = reviewer(fail=lambda user: "PMID:201" in user)
+    built: list[tuple[str, dict]] = []
 
-    assert review.run(_args(work, cache_dir, "--reasoning-effort", "none")) == 1
-    assert len(client.calls) == 3 and client.calls[0]["reasoning_effort"] is None
-    assert records.read_label_run(work).reviewer is None  # a failed pass isn't named
-    assert ("contradicted", "101") not in {(r.kind, r.pmid) for r in _reviews(cache_dir)}
-    with LabelCache(cache_dir / config.LABEL_CACHE) as cache:
+    def build(model, **kw):
+        built.append((model.id, kw))
+        return client
+
+    monkeypatch.setattr(llm, "client_for", build)
+    assert review.run(_args(scene, "--reasoning-effort", "none")) == 1
+    assert built == [(REVIEWER, {"max_output_tokens": None, "reasoning_effort": "none"})]
+    with LabelCache(scene.cache_dir / config.LABEL_CACHE) as cache:
         errors = cache.db.execute("SELECT pair_id, error FROM calls WHERE error IS NOT NULL")
-        assert [tuple(r) for r in errors] == [(P_TREATS, "HTTP 500 after retries")]
+        assert [tuple(r) for r in errors] == [(GENE_PAIR, "HTTP 500 after retries")]
 
-    # The retry only sends the failed pair, and succeeds.
-    client.fail = lambda user: False
-    assert review.run(_args(work, cache_dir)) == 0
-    assert len(client.calls) == 4 and ", PMID 101\n" in client.calls[-1]["user"]
-    assert client.calls[-1]["reasoning_effort"] == "medium"
-    assert records.read_label_run(work).reviewer == config.REVIEW_MODEL
+    client.answer = reviewer().answer
+    assert review.run(_args(scene)) == 0
+    assert built[-1] == (REVIEWER, {"max_output_tokens": None, "reasoning_effort": None})
+    assert records.read_label_run(scene.work).reviewer == REVIEWER
 
 
-def test_run_fails_cleanly_without_inputs(tmp_path, setup, monkeypatch):
-    work, cache_dir = setup
-    assert review.run(_args(tmp_path / "empty", cache_dir)) == 1  # no label_run.json
-    assert review.run(_args(work, cache_dir, "--import", str(tmp_path / "missing.jsonl"))) == 1
-    out = tmp_path / "items.jsonl"
-    assert review.run(_args(work, cache_dir, "--export", str(out))) == 1  # needs --reviewer
-    assert review.run(_args(work, cache_dir, "--export", str(out), "--reviewer", PI)) == 0
-    assert review.run(_args(work, cache_dir, "--import", str(out))) == 1  # needs --reviewer
-    monkeypatch.delenv(config.LLM_API_KEY, raising=False)
-    assert review.run(_args(work, cache_dir)) == 1  # no API key
+def test_run_fails_cleanly_without_inputs(tmp_path, scene, monkeypatch, capsys):
+    empty = World(tmp_path / "empty", scene.cache_dir, scene.graph)
+    assert review.run(_args(empty)) == 1  # no label_run.json
+    assert "kgb-augment label" in capsys.readouterr().err
+    assert review.run(_args(scene)) == 1  # no API key
+    assert config.RENCI_API_KEY in capsys.readouterr().err
+    assert review.run(_args(scene, "--model", "not-a-model")) == 1
+    assert "not-a-model is not in config.MODELS" in capsys.readouterr().err
+    (scene.cache_dir / config.UBERON_FILE).unlink()
+    assert review.run(_args(scene)) == 1
+    assert "kgb-augment ground" in capsys.readouterr().err
 
 
-def test_instructions_replace_only_the_reply_section():
-    prompt = (
-        "# Review\n\n### Input and reply format notes\n\n"
-        "## Input and reply format\n\nold\n\n## After\n\nkept\n"
-    )
-    text = review.instructions(prompt)
-    assert text.startswith("# Review\n\n### Input and reply format notes\n\n")
-    assert review.EXPORT_FORMAT in text and "old" not in text
-    assert text.endswith("exported again next time.\n\n## After\n\nkept\n")
-    assert review.instructions("# Review\n").endswith(review.EXPORT_FORMAT)
+def test_run_prints_a_summary(scene, monkeypatch, capsys):
+    monkeypatch.setattr(llm, "client_for", lambda *a, **kw: rejecting("101"))
+    assert review.run(_args(scene)) == 0
+    out = capsys.readouterr().out
+    assert "review: 2 pairs; 0 not fully labeled" in out
+    assert "0 with anatomy names never looked up (left for a ground run)" in out
+    assert "10 claims that would count to review, 0 reviewed before; 10 sent: 9 upheld" in out
+    assert "review: 2 calls, 0 failed" in out
+
+
+def test_run_warns_of_claims_left_unreviewed(scene, monkeypatch, capsys):
+    client = reviewer(fail=lambda user: "PMID:201" in user)
+    monkeypatch.setattr(llm, "client_for", lambda *a, **kw: client)
+    assert review.run(_args(scene)) == 1
+    err = capsys.readouterr().err
+    assert "6 claims that would count still have no verdict; step 6 holds their pairs" in err
+    assert "1 of the 2 calls the claims that would count need failed" in err

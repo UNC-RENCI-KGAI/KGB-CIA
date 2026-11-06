@@ -1,751 +1,470 @@
-"""Step 5b: a stronger model reviews the labels that would add edges.
+"""Step 5: a stronger model reviews the claims that would count.
 
-Step 6 adds a new edge on the strength of one abstract: a negated edge for a `contradicted`
-label, a qualified edge for a qualifier proposal. They are a small share of the labels, so a
-stronger, dearer model than the bulk one reads each of them again and accepts or rejects it.
-Confirmed labels only add a PMID to an existing edge and aren't reviewed; nor are labels whose
-quote isn't in the abstract or proposals that fail the Biolink check, which step 6 drops anyway.
+Step 6 refines each checked edge from its pair's claims (`refine.py`): an upheld claim adds its
+PMID as support to each in-scope edge whose statement it states or narrows, and one more
+specific than such an edge proposes its statement as a new edge. Each of those claims is one the
+bulk model extracted, so a stronger, dearer model (config.REVIEW_MODEL) reads it again against
+its abstract and upholds or rejects it (`upheld`, `reject`), with a reason. A rejected claim
+counts for nothing.
 
-Like step 5 it makes one call per pair, sending each cited abstract once for all of the pair's
-items, and only the abstracts the items cite. Verdicts go to the label cache under (reviewer,
-review prompt version), so a rerun reviews only what is new and a prompt edit starts afresh;
-`label_run.json` then names the review that step 6 applies.
+The claims sent are those of each bundled pair (`bundle.py`) that would count if upheld
+(`refine.would_count`): quote-checked, from a paper not retracted, not a hypothesis, and with a
+statement narrower than or equal to an in-scope edge's. A positive claim's statements are its
+own and those it also supports (`also_supports`); a negative claim's are only the latter.
+Claims that only add a PMID to an edge are among them. Each claim's effect is independent of
+the others', so one pass sends every such claim with no verdict yet. One whose call fails, or
+that a reply leaves out, stays unreviewed: step 6 holds its pair, and the next run sends it
+again.
 
-The agent can also run this pass as a Pi subagent: `--export` writes the pending items, one
-self-contained JSON line each, with the instructions next to them, and `--import` stores the
-subagent's verdict lines. Item ids hash (kind, statement, PMID, qualifiers), so an item keeps
-its id across exports and imports.
+Calls are per pair: its claims in batches split by abstract chunk (config.ABSTRACTS_PER_CALL),
+then at config.REVIEW_ITEMS_PER_CALL claims, each abstract sent once per call. Verdicts go to
+the label cache's `claim_reviews` table under (reviewer, review prompt version), so a rerun
+reviews only what is new, and a new prompt, model or effort starts afresh: the review prompt
+version hashes the prompt with the claim rules it includes, FORMAT_VERSION, the reply schema
+and the reasoning effort. `label_run.json` then names the review step 6 applies.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import re
 import sys
-import time
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple, get_args
 
-from pubmed_evidence import config, llm, records
-from pubmed_evidence.cache import (
-    Abstract,
-    CallRow,
-    LabelCache,
-    PubMedCache,
-    ReviewRow,
-    canonical,
+from pubmed_evidence import bundle, config, llm, records, refine, repair, sentences
+from pubmed_evidence.bundle import Bundles, ClaimKey
+from pubmed_evidence.cache import Abstract, ClaimReviewRow, LabelCache, PubMedCache
+from pubmed_evidence.graphio import chunks, pair_nodes
+from pubmed_evidence.records import Entity, LabelRun
+from shared.schema import ClaimContext, ClaimRecord, ReviewVerdict
+
+# Version of the code that writes the user message. It is part of the review prompt version,
+# with the reply schema and the effort, so a change to any of them starts a fresh review.
+FORMAT_VERSION = "review-message-5"
+VERDICTS: tuple[str, ...] = get_args(ReviewVerdict)
+# A species as the extractor named it, from its NCBITaxon term.
+SPECIES = {taxon: name for name, taxon in config.SPECIES_TAXA.items() if taxon}
+
+REPLY_SCHEMA = llm.Schema(
+    "review_reply",
+    llm.strict_object(
+        {
+            "reviews": {
+                "type": "array",
+                "items": llm.strict_object(
+                    {
+                        "item": llm.positions("R", config.REVIEW_ITEMS_PER_CALL),
+                        "verdict": {"type": "string", "enum": list(VERDICTS)},
+                        "reason": {"type": "string"},
+                    }
+                ),
+            }
+        }
+    ),
 )
-from pubmed_evidence.graphio import pair_nodes, write_jsonl
-from pubmed_evidence.records import Entity, LabelRun, PubmedRecord, SentenceRecord, Statement
-
-# Version of the code that writes the user message and the export lines. It is part of the
-# review prompt version, so a change to either format starts a fresh set of reviews.
-FORMAT_VERSION = "review-format-1"
-KINDS: tuple[str, ...] = ("contradicted", "qualifier")
-VERDICTS: tuple[str, ...] = ("accept", "reject")
-MAX_FAILED_SHARE = 0.05
-MAX_OUTPUT_TOKENS = 16000
-REASONING_EFFORT = "medium"
-
-# The section of the review prompt that describes the message and the reply. `--export`
-# replaces it with EXPORT_FORMAT in the instructions it writes for a Pi subagent.
-REPLY_SECTION = "## Input and reply format"
-EXPORT_FORMAT = """## Input and reply format
-
-The items are in a JSONL file, one self-contained JSON object per line:
-
-- `item_id`: the item's id. Copy it exactly into your verdict.
-- `kind`: `contradicted` or `qualifier`.
-- `pmid`, `title`, `abstract`: the abstract the item cites. Judge the item on it alone.
-- `entities`: the pair's two entities by id, each with its name, category and other names.
-- `sentence` and `structured`: the edge as a sentence and as structured Biolink JSON (subject,
-  predicate, object and any qualifiers it already has).
-- `quote` and `claim`: the first pass's quote from the abstract, and whether it read the finding
-  as `causal` or `associative` (may be null).
-- Qualifier items only: `qualifiers` (the proposed set), `resulting_qualifiers` (the edge's own
-  qualifiers with the proposed ones added or replacing them) and `resulting_statement` (the
-  same in words).
-
-Other keys are bookkeeping; ignore them.
-
-Write a verdict file with one JSON object per line, one line per item, and nothing else. The
-reason says in one or two sentences what in the abstract decided the verdict:
-
-```json
-{"item_id": "<the item's item_id>", "verdict": "accept", "reason": "<one or two sentences>"}
-```
-
-`verdict` is `accept` or `reject`. Review every item: an item without a verdict line is
-exported again next time.
-"""
 
 
 class ReviewError(RuntimeError):
     """A missing input or setting that stops the review before any call."""
 
 
-@dataclass
+def review_prompt(
+    prompt: Path = config.REVIEW_PROMPT,
+    model: str = config.REVIEW_MODEL,
+    reasoning_effort: str | None = None,
+) -> tuple[str, str]:
+    """(system prompt, review prompt version) of a review with this prompt file, model and
+    effort override: the version covers the prompt with the files it includes, FORMAT_VERSION,
+    the reply schema and the effort sent (`llm.run_effort`). Raises LLMError for a model not in
+    config.MODELS."""
+    effort = llm.run_effort(model, reasoning_effort)
+    extra = f"{FORMAT_VERSION}\0{REPLY_SCHEMA.text()}\0effort={effort}"
+    return llm.load_prompt(prompt, extra=extra)
+
+
+# --- The user message -----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
 class Item:
-    """A label or proposal to review: a contradicted label (`qualifiers` None) or a qualifier
-    proposal of the first-pass run."""
+    """A claim to review: its key in the claim tables, and its record as the pair's bundle has
+    it (its sentence the repair's, if it needed one)."""
 
-    kind: str
-    statement_id: str
-    pmid: str
-    qualifiers: dict[str, Any] | None = None
-    quote: str | None = None
-    claim: str | None = None
+    key: ClaimKey
+    record: ClaimRecord
 
     @property
-    def key(self) -> tuple[str, str, str, str]:
-        return _key(self.kind, self.statement_id, self.pmid, self.qualifiers)
+    def pair_id(self) -> str:
+        return self.key[0]
 
     @property
-    def item_id(self) -> str:
-        return item_id(self.kind, self.statement_id, self.pmid, self.qualifiers)
-
-
-def _key(
-    kind: str, statement_id: str, pmid: str, qualifiers: dict[str, Any] | None
-) -> tuple[str, str, str, str]:
-    # The reviews table stores '' for a contradicted label's qualifiers.
-    return (kind, statement_id, pmid, canonical(qualifiers) if qualifiers is not None else "")
-
-
-def item_id(
-    kind: str, statement_id: str, pmid: str, qualifiers: dict[str, Any] | None = None
-) -> str:
-    """Stable id of an item: its kind's initial and 12 hex digits of the SHA-256 of
-    (kind, statement_id, pmid, canonical qualifiers), e.g. 'c-1f3a09d2b7c4'."""
-    text = "\0".join(_key(kind, statement_id, pmid, qualifiers))
-    return f"{kind[0]}-{hashlib.sha256(text.encode('utf-8')).hexdigest()[:12]}"
-
-
-# --- Inputs ---------------------------------------------------------------------------------
-
-
-@dataclass
-class Work:
-    """What the review needs from the work directory."""
-
-    statements: dict[str, Statement]
-    sentences: dict[str, str]
-    entities: dict[str, Entity]
-    synonyms: dict[str, dict[str, list[str]]]  # pair_id -> node id -> step 3's [tiab] terms
-
-
-def load_work(work: Path) -> Work:
-    path = work / records.STATEMENTS
-    if not path.exists():
-        raise ReviewError(f"no {path}; run `kgb-augment select` first")
-    statements = {s.statement_id: s for s in records.read_records(path, Statement)}
-    sentences: dict[str, str] = {}
-    if (work / records.SENTENCES).exists():
-        for r in records.read_records(work / records.SENTENCES, SentenceRecord):
-            sentences[r.statement_id] = r.sentence
-    else:
-        missing = work / records.SENTENCES
-        print(f"review: no {missing}; describing edges from their slots", file=sys.stderr)
-    entities: dict[str, Entity] = {}
-    if (work / records.ENTITIES).exists():
-        entities = {e.id: e for e in records.read_records(work / records.ENTITIES, Entity)}
-    synonyms: dict[str, dict[str, list[str]]] = {}
-    if (work / records.PUBMED).exists():
-        for p in records.read_records(work / records.PUBMED, PubmedRecord):
-            synonyms[p.pair_id] = p.synonyms
-    return Work(statements, sentences, entities, synonyms)
-
-
-def resolve_label_run(
-    work: Path, label_model: str | None = None, label_prompt_version: str | None = None
-) -> tuple[str, str, LabelRun | None]:
-    """(model, prompt version) of the first-pass run to review, and `label_run.json`."""
-    run = records.read_label_run(work)
-    model = label_model or (run.model if run else None)
-    version = label_prompt_version or (run.prompt_version if run else None)
-    if not model or not version:
-        raise ReviewError(f"no {work / records.LABEL_RUN}; run `kgb-augment label` first")
-    return model, version, run
-
-
-def reviewable_items(
-    cache: LabelCache, model: str, prompt_version: str, statement_ids: list[str]
-) -> list[Item]:
-    """The run's labels that would add an edge: contradicted labels with a verified quote, and
-    qualifier proposals with a verified quote that pass the Biolink check."""
-    items = [
-        Item("contradicted", r.statement_id, r.pmid, None, r.quote, r.claim)
-        for r in cache.labels(prompt_version, model, statement_ids, label="contradicted")
-        if r.quote_valid is True
-    ]
-    items += [
-        Item("qualifier", p.statement_id, p.pmid, p.qualifiers, p.quote, p.claim)
-        for p in cache.proposals(prompt_version, model, statement_ids)
-        if p.quote_valid is True and p.valid is True
-    ]
-    return sorted(items, key=lambda i: (i.statement_id, KINDS.index(i.kind), i.pmid, i.key[3]))
-
-
-def reviewed_keys(
-    cache: LabelCache,
-    model: str,
-    prompt_version: str,
-    reviewer: str | None,
-    review_prompt_version: str,
-) -> set[tuple[str, str, str, str]]:
-    rows = cache.reviews(prompt_version, model, reviewer, review_prompt_version)
-    return {_key(r.kind, r.statement_id, r.pmid, r.qualifiers) for r in rows}
-
-
-def _with_abstracts(
-    items: list[Item], pubmed: PubMedCache
-) -> tuple[list[Item], dict[str, Abstract], int]:
-    """The items whose abstract is cached, the abstracts, and how many items had none."""
-    abstracts = pubmed.get_abstracts(i.pmid for i in items)
-    kept = [i for i in items if i.pmid in abstracts]
-    missing = len(items) - len(kept)
-    if missing:
-        print(
-            f"review: skipped {missing} items citing a PMID with no cached abstract",
-            file=sys.stderr,
-        )
-    return kept, abstracts, missing
-
-
-def by_pair(items: list[Item], work: Work, limit: int | None = None) -> dict[str, list[Item]]:
-    """Items grouped by pair, pairs sorted; only the first `limit` pairs if given."""
-    groups: dict[str, list[Item]] = defaultdict(list)
-    for item in items:
-        groups[work.statements[item.statement_id].pair_id].append(item)
-    pairs = sorted(groups)[:limit] if limit is not None else sorted(groups)
-    return {p: groups[p] for p in pairs}
-
-
-# --- Describing an item ---------------------------------------------------------------------
-
-
-def _words(value: Any) -> str:
-    if isinstance(value, list | tuple):
-        return ", ".join(_words(v) for v in value)
-    return str(value).removeprefix("biolink:").replace("_", " ")
-
-
-def _role_phrase(name: str, qualifiers: dict[str, Any], role: str) -> str:
-    phrase = name
-    for slot in ("form_or_variant", "part", "derivative", "aspect"):
-        value = qualifiers.pop(f"{role}_{slot}_qualifier", None)
-        if value:
-            phrase = f"{_words(value)} of {phrase}"
-    direction = qualifiers.pop(f"{role}_direction_qualifier", None)
-    return f"{_words(direction)} {phrase}" if direction else phrase
-
-
-def statement_words(
-    subject: str, predicate: str, object: str, qualifiers: dict[str, Any] | None = None
-) -> str:
-    """A plain rendering of a statement with its qualifiers, e.g. 'imatinib causes decreased
-    activity of ABL1'. Qualifiers with no place in the sentence follow in parentheses."""
-    rest = {k: v for k, v in (qualifiers or {}).items() if v}
-    predicate = rest.pop("qualified_predicate", None) or predicate
-    text = f"{_role_phrase(subject, rest, 'subject')} {_words(predicate)} "
-    text += _role_phrase(object, rest, "object")
-    if rest:
-        extra = [f"{_words(k.removesuffix('_qualifier'))}: {_words(v)}" for k, v in rest.items()]
-        text += f" ({'; '.join(sorted(extra))})"
-    return text
-
-
-def _name(node: str, work: Work) -> str:
-    entity = work.entities.get(node)
-    return entity.name if entity and entity.name else node
-
-
-def _entity(node: str, pair_id: str, work: Work) -> dict[str, Any]:
-    entity = work.entities.get(node)
-    name = _name(node, work)
-    terms = work.synonyms.get(pair_id, {}).get(node) or (entity.synonyms if entity else [])
-    seen = {name.lower()}
-    synonyms = []
-    for term in terms:
-        if term.lower() not in seen:
-            seen.add(term.lower())
-            synonyms.append(term)
-    category = entity.category[0].removeprefix("biolink:") if entity and entity.category else None
-    return {"name": name, "category": category, "synonyms": synonyms[: config.MAX_SYNONYMS]}
-
-
-def item_fields(item: Item, work: Work) -> dict[str, Any]:
-    """The item's statement, in words and structured, and for a qualifier item the
-    resulting qualifiers and statement."""
-    s = work.statements[item.statement_id]
-    subject, object = _name(s.subject, work), _name(s.object, work)
-    sentence = work.sentences.get(s.statement_id) or statement_words(
-        subject, s.predicate, object, s.qualifiers
-    )
-    fields: dict[str, Any] = {
-        "sentence": sentence,
-        "structured": {
-            "subject": s.subject,
-            "predicate": s.predicate,
-            "object": s.object,
-            **dict(sorted(s.qualifiers.items())),
-        },
-        "qualifiers": None,
-        "resulting_qualifiers": None,
-        "resulting_statement": None,
-        "quote": item.quote,
-        "claim": item.claim,
-    }
-    if item.kind == "qualifier":
-        merged = dict(sorted({**s.qualifiers, **(item.qualifiers or {})}.items()))
-        fields["qualifiers"] = item.qualifiers
-        fields["resulting_qualifiers"] = merged
-        fields["resulting_statement"] = statement_words(subject, s.predicate, object, merged)
-    return fields
+    def pmid(self) -> str:
+        return self.key[1]
 
 
 def _json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
+def _entity(
+    node: str, entities: Mapping[str, Entity], synonyms: Mapping[str, list[str]]
+) -> dict[str, Any]:
+    entity = entities.get(node)
+    name = entity.name if entity and entity.name else node
+    terms = synonyms.get(node) or (entity.synonyms if entity else [])
+    seen = {name.lower()}
+    others = []
+    for term in terms:
+        if term.lower() not in seen:
+            seen.add(term.lower())
+            others.append(term)
+    category = entity.category[0].removeprefix("biolink:") if entity and entity.category else None
+    return {"name": name, "category": category, "synonyms": others[: config.MAX_SYNONYMS]}
+
+
+def _context(context: ClaimContext) -> dict[str, str | None]:
+    """A claim's context as the extractor gave it: the species by its name, the anatomy as the
+    abstract names it."""
+    species = SPECIES.get(context.species or "", context.species)
+    return {"species": species, "anatomy": context.anatomy_name, "notes": context.notes}
+
+
+def structured(record: ClaimRecord) -> dict[str, Any]:
+    """The claim as the extractor gave it, with the pair's ids for X and Y and each statement
+    the way round Biolink reads it (`bundle.claim_record`)."""
+
+    def statement(s) -> dict[str, Any]:
+        return s.model_dump(exclude={"negated"}, exclude_none=True)
+
+    return {
+        "polarity": record.polarity,
+        "statement": statement(record.statement),
+        "also_supports": [statement(s) for s in record.also_supports],
+        "claim_role": record.claim_role,
+        "hedged": record.hedged,
+        "negative_finding_type": record.negative_finding_type,
+        "context": _context(record.context),
+    }
+
+
+def claim_text(record: ClaimRecord, names: Mapping[str, str]) -> str:
+    """The claim in English: its statement, negated for a negative claim."""
+    negated = record.polarity == "negative"
+    return sentences.sentence(record.statement.model_copy(update={"negated": negated}), names)
+
+
 def build_message(
-    pair_id: str, batch: list[tuple[str, Item]], work: Work, abstracts: dict[str, Abstract]
+    pair_id: str,
+    batch: Sequence[tuple[str, Item]],
+    entities: Mapping[str, Entity],
+    synonyms: Mapping[str, list[str]],
+    abstracts: Mapping[str, Abstract],
 ) -> str:
-    """The user message for one call: the pair's entities, the items under their local ids,
-    then each abstract the items cite, once."""
+    """The user message of one call: the pair's entities, the claims under their local ids,
+    then each abstract they're from, once. Its layout is FORMAT_VERSION."""
+    names = {n: _entity(n, entities, synonyms)["name"] for n in pair_nodes(pair_id)}
     lines = ["## Entities", ""]
     for node in pair_nodes(pair_id):
-        e = _entity(node, pair_id, work)
+        e = _entity(node, entities, synonyms)
         line = f"- {node}: {e['name']}"
         if e["category"]:
             line += f" ({e['category']})"
         if e["synonyms"]:
             line += f"; other names: {'; '.join(e['synonyms'])}"
         lines.append(line)
-    lines += ["", "## Items", ""]
+    lines += ["", "## Claims", ""]
     for local, item in batch:
-        f = item_fields(item, work)
+        r = item.record
+        lines += [f"### {local}: PMID:{item.pmid}", f"Claim: {claim_text(r, names)}"]
+        lines += [f"Also supports: {sentences.sentence(s, names)}" for s in r.also_supports]
         lines += [
-            f"### {local}: {item.kind}, PMID {item.pmid}",
-            f"Edge: {f['sentence']}",
-            f"Structured: {_json(f['structured'])}",
+            f"Structured: {_json(structured(r))}",
+            f"Evidence sentence: {_json(r.evidence_sentence)}",
+            "",
         ]
-        if item.kind == "qualifier":
-            lines += [
-                f"Proposed qualifiers: {_json(f['qualifiers'])}",
-                f"Resulting qualifiers: {_json(f['resulting_qualifiers'])}",
-                f"Resulting statement: {f['resulting_statement']}",
-            ]
-        if item.claim:
-            lines.append(f"First-pass claim: {item.claim}")
-        lines += [f"First-pass quote: {_json(item.quote or '')}", ""]
     lines += ["## Abstracts", ""]
     for pmid in dict.fromkeys(item.pmid for _, item in batch):
         a = abstracts[pmid]
-        lines += [f"### PMID {pmid}", f"Title: {a.title}", "", a.abstract.strip(), ""]
+        year = f", {a.year}" if a.year else ""
+        lines.append(f"### PMID:{pmid}{year}")
+        if a.publication_types:
+            lines.append(f"Publication types: {'; '.join(a.publication_types)}")
+        lines += [f"Title: {' '.join(a.title.split())}", f"Abstract: {a.abstract.strip()}", ""]
     return "\n".join(lines).rstrip() + "\n"
 
 
-def batches(groups: dict[str, list[Item]]) -> list[tuple[str, list[tuple[str, Item]]]]:
-    """One call per pair, with local ids R1, R2, ...; a pair whose items cite more than
-    config.ABSTRACTS_PER_CALL abstracts is split, as step 5 splits it."""
+def batches(groups: Mapping[str, Sequence[Item]]) -> list[tuple[str, list[tuple[str, Item]]]]:
+    """The calls for each pair's items, with local ids R1, R2, ...: a pair whose items cite more
+    than config.ABSTRACTS_PER_CALL abstracts is split, as the label step splits it, and so is
+    one with more than config.REVIEW_ITEMS_PER_CALL items."""
     out = []
     for pair, items in groups.items():
         pmids = list(dict.fromkeys(i.pmid for i in items))
-        for start in range(0, len(pmids), config.ABSTRACTS_PER_CALL):
-            chunk = set(pmids[start : start + config.ABSTRACTS_PER_CALL])
+        for chunk in map(set, chunks(pmids, config.ABSTRACTS_PER_CALL)):
             batch = [i for i in items if i.pmid in chunk]
-            out.append((pair, [(f"R{n}", item) for n, item in enumerate(batch, 1)]))
+            for group in chunks(batch, config.REVIEW_ITEMS_PER_CALL):
+                out.append((pair, [(f"R{n}", item) for n, item in enumerate(group, 1)]))
     return out
 
 
-def parse_reply(reply: Any, ids: dict[str, Item]) -> tuple[dict[str, tuple[str, str]], int]:
-    """Verdicts by local id, and the number of entries with an unknown id or verdict. Raises
-    ValueError if the reply has no `reviews` list."""
-    entries = reply.get("reviews") if isinstance(reply, dict) else None
-    if not isinstance(entries, list):
-        raise ValueError("no 'reviews' list in the reply")
+class Reply(NamedTuple):
+    verdicts: dict[str, tuple[str, str]]  # local id -> (verdict, reason)
+    repeated: int  # entries after an item's first verdict
+
+
+def parse_reply(reply: dict[str, Any], ids: Mapping[str, Item]) -> Reply:
+    """Verdicts by local id from a reply that fits REPLY_SCHEMA; an item's first verdict counts,
+    and one the reply leaves out stays unreviewed. Raises ValueError for an item beyond the
+    request's, or a verdict the schema doesn't have (a deployment may not enforce it), so the
+    call fails."""
+    beyond = sorted({e["item"] for e in reply["reviews"] if e["item"] not in ids})
+    if beyond:
+        raise ValueError(f"items beyond the request's {len(ids)}: {', '.join(beyond)}")
+    unknown = sorted({str(e["verdict"]) for e in reply["reviews"] if e["verdict"] not in VERDICTS})
+    if unknown:
+        raise ValueError(f"verdicts not {' or '.join(VERDICTS)}: {', '.join(unknown)}")
     verdicts: dict[str, tuple[str, str]] = {}
-    invalid = 0
-    for entry in entries:
-        if not isinstance(entry, dict):
-            invalid += 1
-            continue
-        local = str(entry.get("item", "")).strip()
-        verdict = str(entry.get("verdict", "")).strip().lower()
-        if local not in ids or verdict not in VERDICTS or local in verdicts:
-            invalid += 1
-            continue
-        verdicts[local] = (verdict, str(entry.get("reason") or "").strip())
-    return verdicts, invalid
+    repeated = 0
+    for entry in reply["reviews"]:
+        local = entry["item"]
+        if local in verdicts:
+            repeated += 1
+        else:
+            verdicts[local] = (entry["verdict"], entry["reason"].strip())
+    return Reply(verdicts, repeated)
 
 
-# --- Direct review --------------------------------------------------------------------------
+# --- The pass -------------------------------------------------------------------------------
 
 
-def _review_row(
-    item: Item,
-    verdict: str,
-    reason: str,
-    model: str,
-    prompt_version: str,
-    reviewer: str,
-    review_prompt_version: str,
-) -> ReviewRow:
-    return ReviewRow(
-        kind=item.kind,
-        statement_id=item.statement_id,
-        pmid=item.pmid,
-        prompt_version=prompt_version,
-        model=model,
-        qualifiers=item.qualifiers if item.kind == "qualifier" else None,
-        reviewer=reviewer,
-        review_prompt_version=review_prompt_version,
-        verdict=verdict,
-        reason=reason,
-    )
+def resolve_label_run(work: Path) -> LabelRun:
+    """The run to review: the one `label_run.json` names."""
+    run = records.read_label_run(work)
+    if run is None:
+        raise ReviewError(f"no {work / records.LABEL_RUN}; run `kgb-augment label` first")
+    return run
 
 
-def _counts() -> dict[str, int]:
-    return dict.fromkeys(KINDS, 0)
-
-
-def _record_review(
-    work: Path, run: LabelRun | None, model: str, prompt_version: str, reviewer: str, version: str
-) -> bool:
-    """Name the review in `label_run.json`, if that file names the run reviewed."""
-    if run is None or (run.model, run.prompt_version) != (model, prompt_version):
-        print(
-            f"review: {work / records.LABEL_RUN} names another run; left unchanged", file=sys.stderr
-        )
-        return False
-    update = {"reviewer": reviewer, "review_prompt_version": version}
+def _record_review(work: Path, run: LabelRun, reviewer: str, version: str, effort: str) -> None:
+    """Name the review in `label_run.json`, which names the run reviewed."""
+    update = {
+        "reviewer": reviewer,
+        "review_prompt_version": version,
+        "review_reasoning_effort": effort,
+    }
     records.write_label_run(work, run.model_copy(update=update))
-    return True
 
 
-def _call(client: Any, system: str, user: str, max_output_tokens: int, effort: str | None):
-    start = time.monotonic()
+def _client(model: str, max_output_tokens: int | None, reasoning_effort: str | None) -> Any:
+    # A client raises LLMError itself when its model's credentials are missing.
     try:
-        reply, usage = client.complete_json(
-            system, user, max_output_tokens=max_output_tokens, reasoning_effort=effort
+        return llm.client_for(
+            llm.model(model), max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort
         )
-    except Exception as e:
-        # Any failure, not only LLMError, counts against the failure budget: an exception
-        # escaping here would discard the replies of the calls still in flight.
-        message = str(e) if isinstance(e, llm.LLMError) else f"{type(e).__name__}: {e}"
-        return None, None, message or type(e).__name__, time.monotonic() - start
-    return reply, usage, None, time.monotonic() - start
-
-
-def _client(model: str) -> Any:
-    # `llm.Client` raises LLMError itself when the API key is missing.
-    try:
-        return llm.Client(llm.load_model(model))
     except llm.LLMError as e:
         raise ReviewError(f"can't use {model}: {e}") from e
 
 
-def _store(
-    cache: LabelCache,
-    summary: dict[str, Any],
-    pair: str,
-    ids: dict[str, Item],
-    result: tuple[Any, llm.Usage | None, str | None, float],
-    run_keys: tuple[str, str, str, str],
-) -> None:
-    """Log one call and store its verdicts, counting them in `summary`. Main thread only:
-    SQLite connections stay in the thread that made them."""
-    label_model, label_version, reviewer, version = run_keys
-    reply, usage, error, seconds = result
-    verdicts: dict[str, tuple[str, str]] = {}
-    if error is None:
-        try:
-            verdicts, invalid = parse_reply(reply, ids)
-            summary["invalid"] += invalid
-        except ValueError as e:
-            error = f"malformed reply: {e}"
-    usage = usage or llm.Usage()
-    cache.log_call(
-        CallRow(
-            step="review",
-            pair_id=pair,
-            model=reviewer,
-            prompt_version=version,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            cost=usage.cost,
-            seconds=usage.seconds or seconds,
-            error=error,
-        )
-    )
-    summary["calls"] += 1
-    summary["input_tokens"] += usage.input_tokens
-    summary["output_tokens"] += usage.output_tokens
-    if usage.cost is not None:
-        summary["cost"] = (summary["cost"] or 0.0) + usage.cost
-    if error is not None:
-        summary["failed_calls"] += 1
-        print(f"review: {pair}: {error}", file=sys.stderr)
-        return
-    rows = []
-    for local, (verdict, reason) in verdicts.items():
-        item = ids[local]
-        summary["accepted" if verdict == "accept" else "rejected"][item.kind] += 1
-        rows.append(
-            _review_row(item, verdict, reason, label_model, label_version, reviewer, version)
-        )
-    cache.put_reviews(rows)
-    summary["omitted"] += len(ids) - len(verdicts)
-
-
-def review_items(
+def _load(
     work: Path,
     cache_dir: Path,
+    input_dir: Path,
+    run: LabelRun,
+    reviewer: str,
+    version: str,
+    limit: int | None,
+) -> tuple[Bundles, dict[str, dict[str, list[str]]]]:
+    """The bundled pairs with this review's verdicts so far, and step 2's synonyms per pair."""
+    try:
+        loaded = bundle.load(
+            work,
+            cache_dir,
+            input_dir,
+            run,
+            reviewer=reviewer,
+            review_prompt_version=version,
+            limit=limit,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise ReviewError(str(e)) from e
+    wanted = {b.pair_id for b in loaded.pairs}
+    synonyms = {
+        r.pair_id: r.synonyms
+        for r in records.read_records(work / records.PUBMED, records.PubmedRecord)
+        if r.pair_id in wanted
+    }
+    return loaded, synonyms
+
+
+def to_review(loaded: Bundles) -> tuple[dict[str, list[Item]], dict[str, list[Item]]]:
+    """Each pair's claims that would count if upheld (`refine.would_count`), in its claims'
+    order: those with no verdict of this review yet, which the pass sends, and those with one,
+    upheld or rejected, which it doesn't. Pairs with none are left out. Identical claims of an
+    abstract share a key, and so one item."""
+    unreviewed: dict[str, list[Item]] = {}
+    reviewed: dict[str, list[Item]] = {}
+    for b in loaded.pairs:
+        items: dict[ClaimKey, Item] = {}
+        for i in refine.would_count(b.edges, b.claims, loaded.lattice, loaded.categories):
+            items.setdefault(b.keys[i], Item(b.keys[i], b.claims[i].record))
+        for item in items.values():
+            side = unreviewed if item.record.review is None else reviewed
+            side.setdefault(b.pair_id, []).append(item)
+    return unreviewed, reviewed
+
+
+def _count(groups: Mapping[str, Sequence[Item]]) -> int:
+    return sum(map(len, groups.values()))
+
+
+def _calls(
+    calls: Sequence[tuple[str, list[tuple[str, Item]]]],
+    groups: Mapping[str, Sequence[Item]],
+    entities: Mapping[str, Entity],
+    synonyms: Mapping[str, Mapping[str, list[str]]],
+    pubmed: PubMedCache,
+) -> Iterator[llm.Call]:
+    """A call per batch; a pair's abstracts are read only when its first call is made, and
+    `batches` gives a pair's calls one after another."""
+    read: dict[str, dict[str, Abstract]] = {}
+    for pid, batch in calls:
+        if pid not in read:
+            read = {pid: pubmed.get_abstracts(i.pmid for i in groups[pid])}
+        user = build_message(pid, batch, entities, synonyms.get(pid, {}), read[pid])
+        yield llm.Call(pid, user, dict(batch))
+
+
+def review_claims(
+    work: Path,
+    cache_dir: Path,
+    input_dir: Path,
     *,
     client: Any = None,
     model: str = config.REVIEW_MODEL,
     prompt: Path = config.REVIEW_PROMPT,
     workers: int = config.WORKERS,
-    reasoning_effort: str | None = REASONING_EFFORT,
-    max_output_tokens: int = MAX_OUTPUT_TOKENS,
+    reasoning_effort: str | None = None,
+    max_output_tokens: int | None = None,
     limit: int | None = None,
-    label_model: str | None = None,
-    label_prompt_version: str | None = None,
 ) -> dict[str, Any]:
-    """Review the pending items of the first-pass run with `model`, store the verdicts and
-    name the review in `label_run.json`. `client` (anything with `complete_json`) is built
-    from `model` if not given. The summary's `ok` is False if more than 5% of calls failed."""
-    label_model, label_version, run = resolve_label_run(work, label_model, label_prompt_version)
-    w = load_work(work)
-    system, version = llm.load_prompt(prompt, extra=FORMAT_VERSION)
+    """Review, with `model`, in one pass, the claims of the run `label_run.json` names that
+    would count and have no verdict of this review yet (`to_review`); store the verdicts and,
+    if no more than 5% of the calls the claims that would count need failed (those reviewed
+    before included), name the review in `label_run.json`. `input_dir` holds the graph whose
+    edges the claims would count for. `client` (anything with a client's `call`) is built from
+    `model` if not given and there is something to send, with `max_output_tokens` and
+    `reasoning_effort` overriding the model's own settings. `limit` reviews only the first
+    pairs by id. Raises ReviewError for a missing input or an unusable model."""
+    work, cache_dir, prompt = Path(work), Path(cache_dir), Path(prompt)
+    run = resolve_label_run(work)
+    try:
+        system, version = review_prompt(prompt, model, reasoning_effort)
+        effort = llm.run_effort(model, reasoning_effort)
+    except llm.LLMError as e:
+        raise ReviewError(f"can't use {model}: {e}") from e
     reviewer = model
     summary: dict[str, Any] = {
-        "label_model": label_model,
-        "label_prompt_version": label_version,
+        "label_model": run.model,
+        "label_prompt_version": run.prompt_version,
         "reviewer": reviewer,
         "review_prompt_version": version,
-        "items": _counts(),
-        "already_reviewed": 0,
-        "no_abstract": 0,
-        "pending": 0,
-        "pending_pairs": 0,
-        "sent": 0,
-        "accepted": _counts(),
-        "rejected": _counts(),
+        "reasoning_effort": effort,
+    }
+    warning = repair.stale(run)
+    if warning:
+        print(f"review: warning: {warning}", file=sys.stderr)
+    loaded, synonyms = _load(work, cache_dir, Path(input_dir), run, reviewer, version, limit)
+    groups, before = to_review(loaded)
+    calls = batches(groups)
+    summary |= {
+        "pairs": len(loaded.pairs),
+        "pairs_not_fully_labeled": len(loaded.unlabeled),
+        "pairs_not_looked_up": len(loaded.not_looked_up),
+        "skipped": dict(loaded.counts),
+        "claims_to_review": _count(groups),
+        "already_reviewed": _count(before),
+        "sent": sum(len(batch) for _, batch in calls),
+        "verdicts": dict.fromkeys(VERDICTS, 0),
         "omitted": 0,
-        "invalid": 0,
-        "calls": 0,
-        "failed_calls": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cost": None,
-        "label_run_updated": False,
-        "ok": True,
+        "repeated": 0,
     }
-    with LabelCache(cache_dir / config.LABEL_CACHE) as cache:
-        items = reviewable_items(cache, label_model, label_version, list(w.statements))
-        for item in items:
-            summary["items"][item.kind] += 1
-        done = reviewed_keys(cache, label_model, label_version, reviewer, version)
-        pending = [i for i in items if i.key not in done]
-        summary["already_reviewed"] = len(items) - len(pending)
-        with PubMedCache(cache_dir / config.PUBMED_CACHE) as pubmed:
-            pending, abstracts, summary["no_abstract"] = _with_abstracts(pending, pubmed)
-        summary["pending"] = len(pending)
-        groups = by_pair(pending, w, limit)
-        summary["pending_pairs"] = len(groups)
-        requests = [
-            (pair, dict(batch), build_message(pair, batch, w, abstracts))
-            for pair, batch in batches(groups)
-        ]
-        summary["sent"] = sum(len(ids) for _, ids, _ in requests)
-        if requests and client is None:
-            client = _client(model)
-        run_keys = (label_model, label_version, reviewer, version)
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            futures = {}
-            for pair, ids, user in requests:
-                args = (client, system, user, max_output_tokens, reasoning_effort)
-                futures[pool.submit(_call, *args)] = (pair, ids)
-            for n, future in enumerate(as_completed(futures), 1):
-                pair, ids = futures[future]
-                _store(cache, summary, pair, ids, future.result(), run_keys)
-                if len(requests) >= 20 and n % max(1, len(requests) // 10) == 0:
-                    print(f"review: {n}/{len(requests)} calls", file=sys.stderr)
-    calls = summary["calls"]
-    summary["ok"] = not calls or summary["failed_calls"] / calls <= MAX_FAILED_SHARE
-    if summary["ok"]:
-        summary["label_run_updated"] = _record_review(
-            work, run, label_model, label_version, reviewer, version
-        )
-    return summary
+    answered: set[ClaimKey] = set()  # the claims given a verdict in this run
+    total = llm.Tally()
+    with (
+        LabelCache(cache_dir / config.LABEL_CACHE) as cache,
+        PubMedCache(cache_dir / config.PUBMED_CACHE) as pubmed,
+    ):
 
-
-# --- Pi subagent: export and import ---------------------------------------------------------
-
-
-def instructions(prompt_text: str) -> str:
-    """The review prompt with its reply section replaced by the export's line formats."""
-    section = re.search(rf"^{re.escape(REPLY_SECTION)}[ \t]*$", prompt_text, re.M)
-    if section is None:
-        return prompt_text.rstrip() + "\n\n" + EXPORT_FORMAT
-    after = re.search(r"^## ", prompt_text[section.end() :], re.M)
-    rest = prompt_text[section.end() + after.start() :] if after else ""
-    return prompt_text[: section.start()] + EXPORT_FORMAT + ("\n" + rest if rest else "")
-
-
-def export_version(prompt: Path = config.REVIEW_PROMPT) -> tuple[str, str]:
-    """(instructions text, review prompt version) of the export. The version hashes the
-    instructions the prompt file produces, plus FORMAT_VERSION, under the name
-    '<prompt stem>-pi' (e.g. 'review-pi@1a2b3c4d'), so an import recomputes it as long as the
-    prompt is unchanged since the export."""
-    text = instructions(Path(prompt).read_text(encoding="utf-8"))
-    return text, llm.prompt_version(text, FORMAT_VERSION, f"{Path(prompt).stem}-pi")
-
-
-def instructions_path(path: Path) -> Path:
-    return Path(path).with_suffix(".instructions.md")
-
-
-def export_items(
-    work: Path,
-    cache_dir: Path,
-    path: Path,
-    *,
-    reviewer: str,
-    prompt: Path = config.REVIEW_PROMPT,
-    limit: int | None = None,
-    label_model: str | None = None,
-    label_prompt_version: str | None = None,
-) -> dict[str, Any]:
-    """Write the pending items to `path` as JSONL and the instructions next to it; no calls.
-
-    Pending means without a review by `reviewer` at the export's version: the reviewer the
-    import will record, and the one step 6 then honours (`label_run.json` names one)."""
-    label_model, label_version, _ = resolve_label_run(work, label_model, label_prompt_version)
-    w = load_work(work)
-    text, version = export_version(prompt)
-    with LabelCache(cache_dir / config.LABEL_CACHE) as cache:
-        items = reviewable_items(cache, label_model, label_version, list(w.statements))
-        done = reviewed_keys(cache, label_model, label_version, reviewer, version)
-    pending = [i for i in items if i.key not in done]
-    with PubMedCache(cache_dir / config.PUBMED_CACHE) as pubmed:
-        pending, abstracts, no_abstract = _with_abstracts(pending, pubmed)
-    groups = by_pair(pending, w, limit)
-    lines = []
-    for pair, pair_items in groups.items():
-        entities = {node: _entity(node, pair, w) for node in pair_nodes(pair)}
-        for item in pair_items:
-            a = abstracts[item.pmid]
-            lines.append(
-                {
-                    "item_id": item.item_id,
-                    "kind": item.kind,
-                    "statement_id": item.statement_id,
-                    "pair_id": pair,
-                    "pmid": item.pmid,
-                    "entities": entities,
-                    **item_fields(item, w),
-                    "title": a.title,
-                    "abstract": a.abstract,
-                    "label_model": label_model,
-                    "label_prompt_version": label_version,
-                    "review_prompt_version": version,
-                }
-            )
-    write_jsonl(Path(path), lines)
-    instructions_path(path).write_text(text, encoding="utf-8")
-    return {
-        "label_model": label_model,
-        "label_prompt_version": label_version,
-        "review_prompt_version": version,
-        "items": len(items),
-        "already_reviewed": len(items) - len(pending) - no_abstract,
-        "no_abstract": no_abstract,
-        "exported": len(lines),
-        "pairs": len(groups),
-        "path": Path(path),
-        "instructions": instructions_path(path),
-    }
-
-
-def import_verdicts(
-    work: Path,
-    cache_dir: Path,
-    path: Path,
-    *,
-    reviewer: str,
-    review_prompt_version: str | None = None,
-    prompt: Path = config.REVIEW_PROMPT,
-    label_model: str | None = None,
-    label_prompt_version: str | None = None,
-) -> dict[str, Any]:
-    """Store a Pi subagent's verdict lines, `{"item_id", "verdict", "reason"}`, as reviews
-    by `reviewer`, and name the review in `label_run.json`. Lines with an id that isn't an
-    item of the run are counted as `unknown`, lines that don't parse or have another verdict
-    as `invalid`; neither is stored."""
-    path = Path(path)
-    if not path.exists():
-        raise ReviewError(f"no verdict file {path}")
-    label_model, label_version, run = resolve_label_run(work, label_model, label_prompt_version)
-    w = load_work(work)
-    version = review_prompt_version or export_version(prompt)[1]
-    with LabelCache(cache_dir / config.LABEL_CACHE) as cache:
-        items = {
-            i.item_id: i
-            for i in reviewable_items(cache, label_model, label_version, list(w.statements))
-        }
-        rows: dict[str, ReviewRow] = {}
-        lines = unknown = invalid = 0
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            if not raw.strip():
-                continue
-            lines += 1
+        def on_result(call: llm.Call, reply: Any, usage: llm.Usage) -> str | None:
+            ids: dict[str, Item] = call.context
             try:
-                entry = json.loads(raw)
-            except json.JSONDecodeError:
-                invalid += 1
-                continue
-            if not isinstance(entry, dict):
-                invalid += 1
-                continue
-            iid = str(entry.get("item_id") or entry.get("item") or "").strip()
-            verdict = str(entry.get("verdict", "")).strip().lower()
-            if iid not in items:
-                unknown += 1
-            elif verdict not in VERDICTS:
-                invalid += 1
-            else:
-                reason = str(entry.get("reason") or "").strip()
-                rows[iid] = _review_row(
-                    items[iid], verdict, reason, label_model, label_version, reviewer, version
+                parsed = parse_reply(reply, ids)
+            except ValueError as e:
+                return f"malformed reply: {e}"
+            except Exception as e:
+                return f"could not read the reply: {type(e).__name__}: {e}"
+            rows = []
+            for local, (verdict, reason) in parsed.verdicts.items():
+                item = ids[local]
+                answered.add(item.key)
+                summary["verdicts"][verdict] += 1
+                rows.append(
+                    ClaimReviewRow(
+                        item.pair_id,
+                        item.pmid,
+                        run.prompt_version,
+                        run.model,
+                        item.key[2],
+                        reviewer,
+                        version,
+                        verdict,
+                        reason,
+                        answered_by=usage.model,
+                    )
                 )
-        cache.put_reviews(rows.values())
-    accepted, rejected = _counts(), _counts()
-    for row in rows.values():
-        (accepted if row.verdict == "accept" else rejected)[row.kind] += 1
-    updated = bool(rows) and _record_review(
-        work, run, label_model, label_version, reviewer, version
-    )
-    return {
-        "label_model": label_model,
-        "label_prompt_version": label_version,
-        "reviewer": reviewer,
-        "review_prompt_version": version,
-        "lines": lines,
-        "imported": len(rows),
-        "accepted": accepted,
-        "rejected": rejected,
-        "unknown": unknown,
-        "invalid": invalid,
-        "label_run_updated": updated,
+            cache.put_claim_reviews(rows)
+            summary["repeated"] += parsed.repeated
+            summary["omitted"] += len(ids) - len(parsed.verdicts)
+            return None
+
+        if calls:
+            if client is None:
+                client = _client(model, max_output_tokens, reasoning_effort)
+            total = llm.run_calls(
+                _calls(calls, groups, loaded.entities, synonyms, pubmed),
+                client,
+                on_result,
+                system=system,
+                schema=REPLY_SCHEMA,
+                cache=cache,
+                step="review",
+                model=reviewer,
+                prompt_version=version,
+                total=len(calls),
+                workers=workers,
+            )
+    # The calls the claims reviewed before took, upheld or rejected; with this run's, they are
+    # the calls the review needs, and the 5% rule takes the failed calls as a share of them.
+    needed = total.calls + len(batches(before))
+    summary |= {
+        "unreviewed": sum(i.key not in answered for items in groups.values() for i in items),
+        "calls": total.calls,
+        "calls_needed": needed,
+        "failed_calls": total.failed,
+        "fallback_served": total.fallback_served,
+        "input_tokens": total.input_tokens,
+        "cache_read_tokens": total.cache_read_tokens,
+        "cache_write_tokens": total.cache_write_tokens,
+        "output_tokens": total.output_tokens,
+        "cost": total.cost,
     }
+    summary["ok"] = not llm.too_many_failed(needed, total.failed)
+    if summary["ok"]:
+        _record_review(work, run, reviewer, version, effort)
+    return summary
 
 
 # --- CLI ------------------------------------------------------------------------------------
@@ -759,143 +478,75 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workers", type=int, default=config.WORKERS, help="parallel calls")
     parser.add_argument(
         "--reasoning-effort",
-        default=REASONING_EFFORT,
-        help="reasoning effort sent to the model; 'none' to leave it out",
-    )
-    parser.add_argument("--max-output-tokens", type=int, default=MAX_OUTPUT_TOKENS)
-    parser.add_argument("--limit", type=int, default=None, help="review at most N pairs")
-    parser.add_argument(
-        "--label-model", default=None, help="first-pass model (default: label_run.json)"
+        default=None,
+        help="reasoning effort sent to the model, or 'none' to leave it out (default: the "
+        "model's in config.MODELS); it is part of the review prompt version, so another effort "
+        "reviews afresh",
     )
     parser.add_argument(
-        "--label-prompt-version",
+        "--max-output-tokens",
+        type=int,
         default=None,
-        help="first-pass prompt version (default: label_run.json)",
-    )
-    io = parser.add_mutually_exclusive_group()
-    io.add_argument(
-        "--export",
-        dest="export_file",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="write the pending items as JSONL for a Pi subagent (and FILE's .instructions.md); "
-        "needs --reviewer; no calls",
-    )
-    io.add_argument(
-        "--import",
-        dest="import_file",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="store a Pi subagent's verdict lines; needs --reviewer",
+        help="output token cap per call (default: the model's in config.MODELS)",
     )
     parser.add_argument(
-        "--reviewer",
-        default=None,
-        help="who reviews, for --export and --import (e.g. 'pi:gpt-6.1-sol'): export "
-        "exports what this reviewer hasn't reviewed, import records the verdicts as theirs",
+        "--limit", type=int, default=None, help="review only the first N pairs by id"
     )
-    parser.add_argument(
-        "--review-prompt-version",
-        default=None,
-        help="for --import: the version printed by --export (default: recomputed from --prompt)",
-    )
-
-
-def _kinds(counts: dict[str, int]) -> str:
-    return ", ".join(f"{counts[k]} {k}" for k in KINDS)
 
 
 def _print_review(s: dict[str, Any]) -> None:
     print(
-        f"review: run {s['label_model']} {s['label_prompt_version']}; "
-        f"reviewer {s['reviewer']} {s['review_prompt_version']}"
+        f"review: run {s['label_model']} {s['label_prompt_version']}; reviewer {s['reviewer']} "
+        f"(effort {s['reasoning_effort']}) {s['review_prompt_version']}"
     )
+    left = ", ".join(f"{n} {why}" for why, n in s["skipped"].items() if n)
     print(
-        f"review: {sum(s['items'].values())} items to review ({_kinds(s['items'])}); "
-        f"{s['already_reviewed']} already reviewed, {s['no_abstract']} without an abstract, "
-        f"{s['pending']} pending in {s['pending_pairs']} pairs"
+        f"review: {s['pairs']} pairs; {s['pairs_not_fully_labeled']} not fully labeled (left for "
+        f"a label run to finish), {s['pairs_not_looked_up']} with anatomy names never looked up "
+        "(left for a ground run)" + (f"; skipped: {left}" if left else "")
     )
-    reviewed = sum(s["accepted"].values()) + sum(s["rejected"].values())
-    detail = "; ".join(
-        f"{k} {s['accepted'][k]} accepted, {s['rejected'][k]} rejected" for k in KINDS
-    )
+    v = s["verdicts"]
     print(
-        f"review: {reviewed} reviewed ({detail}); {s['omitted']} left out of the replies "
-        f"(retried next run), {s['invalid']} invalid entries"
+        f"review: {s['claims_to_review']} claims that would count to review, "
+        f"{s['already_reviewed']} reviewed before; {s['sent']} sent: {v['upheld']} upheld, "
+        f"{v['reject']} rejected; {s['omitted']} left out of the replies (sent again next run), "
+        f"{s['repeated']} repeated entries"
     )
+    if s["unreviewed"]:
+        print(
+            f"review: {s['unreviewed']} claims that would count still have no verdict; step 6 "
+            "holds their pairs until a rerun reviews them",
+            file=sys.stderr,
+        )
     cost = "unknown" if s["cost"] is None else f"${s['cost']:.4f}"
+    n = s["fallback_served"]
+    served = f", {n} answered by a fallback model" if n else ""
     print(
-        f"review: {s['calls']} calls, {s['failed_calls']} failed; {s['input_tokens']:,} input "
-        f"and {s['output_tokens']:,} output tokens; cost {cost}"
+        f"review: {s['calls']} calls, {s['failed_calls']} failed{served}; {s['input_tokens']:,} "
+        f"input ({s['cache_read_tokens']:,} read from the cache, {s['cache_write_tokens']:,} "
+        f"written to it) and {s['output_tokens']:,} output tokens; cost {cost}"
     )
     if not s["ok"]:
         print(
-            f"review: more than {MAX_FAILED_SHARE:.0%} of calls failed; label_run.json "
-            "unchanged, rerun to retry",
+            f"review: {s['failed_calls']} of the {s['calls_needed']} calls the claims that would "
+            f"count need failed (more than {llm.MAX_FAILED_SHARE:.0%}; those reviewed before "
+            "count too); label_run.json unchanged, rerun to retry",
             file=sys.stderr,
         )
 
 
 def run(args: argparse.Namespace) -> int:
-    effort = args.reasoning_effort
-    effort = None if effort is None or effort.lower() in ("", "none") else effort
     try:
-        if args.export_file is not None:
-            if not args.reviewer:
-                raise ReviewError(
-                    "--export needs --reviewer NAME (who will review, e.g. 'pi:MODEL'), the "
-                    "same one --import is given"
-                )
-            s = export_items(
-                args.work,
-                args.cache_dir,
-                args.export_file,
-                prompt=args.prompt,
-                reviewer=args.reviewer,
-                limit=args.limit,
-                label_model=args.label_model,
-                label_prompt_version=args.label_prompt_version,
-            )
-            print(
-                f"review: exported {s['exported']} items in {s['pairs']} pairs to {s['path']} "
-                f"({s['already_reviewed']} already reviewed, {s['no_abstract']} without an "
-                f"abstract); instructions in {s['instructions']}"
-            )
-            print(f"review: review prompt version {s['review_prompt_version']}")
-            return 0
-        if args.import_file is not None:
-            if not args.reviewer:
-                raise ReviewError("--import needs --reviewer NAME (who reviewed, e.g. 'pi:MODEL')")
-            s = import_verdicts(
-                args.work,
-                args.cache_dir,
-                args.import_file,
-                reviewer=args.reviewer,
-                review_prompt_version=args.review_prompt_version,
-                prompt=args.prompt,
-                label_model=args.label_model,
-                label_prompt_version=args.label_prompt_version,
-            )
-            print(
-                f"review: imported {s['imported']} of {s['lines']} verdict lines as "
-                f"{s['reviewer']} {s['review_prompt_version']}: accepted {_kinds(s['accepted'])}; "
-                f"rejected {_kinds(s['rejected'])}; {s['unknown']} unknown item ids, "
-                f"{s['invalid']} invalid lines"
-            )
-            return 0 if s["imported"] or not s["lines"] else 1
-        s = review_items(
+        s = review_claims(
             args.work,
             args.cache_dir,
+            args.input,
             model=args.model,
             prompt=args.prompt,
             workers=args.workers,
-            reasoning_effort=effort,
+            reasoning_effort=args.reasoning_effort,
             max_output_tokens=args.max_output_tokens,
             limit=args.limit,
-            label_model=args.label_model,
-            label_prompt_version=args.label_prompt_version,
         )
     except ReviewError as e:
         print(f"review: {e}", file=sys.stderr)
