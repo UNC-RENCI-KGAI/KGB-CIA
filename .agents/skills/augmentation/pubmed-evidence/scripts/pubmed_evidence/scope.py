@@ -1,8 +1,8 @@
-"""Step 2 (`kgb-augment select`): choose the edges worth checking in the literature, and group
+"""Step 1 (`kgb-augment select`): choose the edges worth checking in the literature, and group
 them by node pair.
 
 An edge is checked when abstracts state its relationship as a claim that a paper could
-contradict (DESIGN.md, "Step 2: Which edges to query"). Rules pick edges by (subject category,
+contradict (DESIGN.md, "Step 1: Which edges to query"). Rules pick edges by (subject category,
 predicate, object category), matching on Biolink ancestry so the child predicates and
 categories the transform picks are covered. The first rule that matches an edge decides:
 
@@ -16,9 +16,16 @@ A rule matches an edge in its own direction, and also reversed when the rule is 
 Biolink marks the edge's predicate symmetric (`interacts_with`, `binds`, ...), since a source
 may write either "A binds B" or "B binds A".
 
-Negated source edges are skipped: step 6 only adds negated edges, and checking a source's own
-negative finding against the literature is out of scope for now. Edges whose subject or object
-is not in `nodes.jsonl` are skipped too. Both are counted in the report.
+A negated source edge (`negated: true`) is kept like any other, as its own statement apart from
+the positive one. Nothing is narrower than a negated statement (`refine.Lattice.entails`), so
+step 6 never supports it. The edges step 6 added on an earlier run (their `id` starts with
+`kgbcia-augmentation:`) are skipped: step 6 proposes them again from the edges they refine,
+which are checked instead. Edges whose subject or object is not in `nodes.jsonl` are skipped
+too. Both are counted in the report, as are the negated edges kept, and the kept edges whose
+predicate doesn't read from their subject to their object the way Biolink's domain, range and
+canonical direction put it (`misdirected_edges`, by `biolink.oriented`): 'gene
+condition_associated_with_gene disease'. They're kept and checked as written, but the label
+step reads claims Biolink's way round, so claims rarely reach them.
 
 Kept edges become one `Statement` per distinct statement (`graphio.statement_id`), one `Pair`
 per unordered node pair and one `Entity` per node in a kept pair, in the work directory:
@@ -54,6 +61,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pubmed_evidence import biolink, config, records
 from pubmed_evidence.graphio import (
     EDGES,
+    ID_PREFIX,
     NODES,
     edge_statement_id,
     extras,
@@ -61,11 +69,13 @@ from pubmed_evidence.graphio import (
     is_negated,
     pair_id,
     pair_nodes,
+    pmid_key,
     pmid_of,
     qualifiers_of,
     read_edges,
     read_jsonl,
     read_nodes,
+    write_jsonl,
 )
 from pubmed_evidence.records import Entity, Pair, Statement
 from shared.schema import Node
@@ -78,14 +88,15 @@ GENE = "biolink:GeneOrGeneProduct"
 CHEMICAL = "biolink:ChemicalEntity"
 
 # Edge slots read as a confidence score for capped rules, best (highest) value wins. Scales
-# differ between sources, so `--min-score` compares against the raw value.
+# differ between sources, so `--min-score` compares against the raw value. Not
+# `lit_support_score`: step 6 writes that, from the literature, and a source's confidence is
+# wanted.
 SCORE_SLOTS = (
     "score",
     "confidence_score",
     "has_confidence_score",
     "combined_score",
     "stringdb_combined_score",
-    "evidence_score",
 )
 # Node slots that give an entity's synonyms, besides its name.
 SYNONYM_SLOTS = ("symbol", "synonym", "full_name")
@@ -281,7 +292,7 @@ def usable_name(node_id: str, name: str | None) -> str | None:
 
 
 def entity_of(node: Node) -> Entity:
-    """The node as step 3 searches for it and step 4 names it. A node whose name is only its
+    """The node as step 2 searches for it and step 3 names it. A node whose name is only its
     identifier is named by its first symbol or synonym instead, or left unnamed."""
     slots = extras(node)
     name = usable_name(node.id, node.name)
@@ -318,6 +329,7 @@ class _Accumulator:
         "predicate",
         "object",
         "qualifiers",
+        "negated",
         "rule",
         "edges",
         "sources",
@@ -330,6 +342,7 @@ class _Accumulator:
         self.predicate = edge.predicate
         self.object = edge.object
         self.qualifiers = qualifiers_of(edge)
+        self.negated = is_negated(edge)
         self.rule = rule
         self.edges = 0
         self.sources: set[str] = set()
@@ -357,10 +370,6 @@ def _read_categories(input_dir: Path) -> dict[str, tuple[str, ...]]:
         cats = (value,) if isinstance(value, str) else tuple(value)
         out[d["id"]] = shared.setdefault(cats, cats)
     return out
-
-
-def _pmid_key(pmid: str) -> tuple[int, str]:
-    return (int(pmid), pmid) if pmid.isdigit() else (sys.maxsize, pmid)
 
 
 def _apply_caps(
@@ -418,7 +427,7 @@ def select(
     min_score: float | None = None,
     rules_file: Path | None = None,
 ) -> dict:
-    """Run step 2: write the work files and return the scope report."""
+    """Run step 1: write the work files and return the scope report."""
     rules = load_rules(rules_file) if rules_file is not None else DEFAULT_RULES
     order = {r.id: i for i, r in enumerate(rules)}
     # Nodes are read twice: categories now, since rules match on them as edges stream past,
@@ -429,13 +438,13 @@ def select(
     statements: dict[str, _Accumulator] = {}
     skipped: Counter[tuple[str, str, str, str]] = Counter()
     matched_edges: Counter[str] = Counter()
-    edges_read = negated = missing = 0
+    edges_read = earlier = missing = 0
     for edge in read_edges(input_dir):
         edges_read += 1
         if edges_read % PROGRESS_EVERY == 0:
             print(f"{STEP}: {edges_read:,} edges read", file=sys.stderr)
-        if is_negated(edge):
-            negated += 1
+        if edge.id and edge.id.startswith(ID_PREFIX):
+            earlier += 1
             continue
         s_cats = categories.get(edge.subject)
         o_cats = categories.get(edge.object)
@@ -474,7 +483,7 @@ def select(
                 pair_id=pid,
                 nodes=pair_nodes(pid),
                 statement_ids=sids,
-                source_pmids=sorted(pmids, key=_pmid_key),
+                source_pmids=sorted(pmids, key=pmid_key),
                 rules=rule_ids,
             )
         )
@@ -486,10 +495,11 @@ def select(
             predicate=acc.predicate,
             object=acc.object,
             qualifiers=acc.qualifiers,
+            negated=acc.negated,
             rule=acc.rule,
             edge_count=acc.edges,
             sources=sorted(acc.sources),
-            source_pmids=sorted(acc.pmids, key=_pmid_key),
+            source_pmids=sorted(acc.pmids, key=pmid_key),
             score=acc.score,
         )
         for sid, acc in sorted(statements.items(), key=lambda kv: (kv[1].pair_id, kv[0]))
@@ -499,9 +509,9 @@ def select(
     entities = [entity_of(node) for node in read_nodes(input_dir) if node.id in wanted]
     entities.sort(key=lambda e: e.id)
 
-    records.write_records(work / records.ENTITIES, entities)
-    records.write_records(work / records.STATEMENTS, statement_records)
-    records.write_records(work / records.PAIRS, pairs)
+    write_jsonl(work / records.ENTITIES, entities)
+    write_jsonl(work / records.STATEMENTS, statement_records)
+    write_jsonl(work / records.PAIRS, pairs)
 
     per_rule: dict[str, dict[str, Any]] = {}
     for rule in rules:
@@ -537,13 +547,20 @@ def select(
         "capped_limit": capped_limit,
         "min_score": min_score,
         "edges_read": edges_read,
-        "negated_skipped": negated,
+        "earlier_run_skipped": earlier,
         "missing_node_skipped": missing,
         "kept": {
             "edges": sum(s.edge_count for s in statement_records),
             "statements": len(statement_records),
             "pairs": len(pairs),
             "entities": len(entities),
+            "negated_edges": sum(s.edge_count for s in statement_records if s.negated),
+            "misdirected_edges": sum(
+                s.edge_count
+                for s in statement_records
+                if biolink.oriented(categories[s.subject], s.predicate, categories[s.object])
+                != (s.predicate, False)
+            ),
         },
         "rules": per_rule,
         "skipped": [
@@ -564,9 +581,9 @@ def select(
 def summary(report: dict) -> list[str]:
     kept = report["kept"]
     lines = [
-        f"read {report['edges_read']:,} edges; kept {kept['edges']:,} edges as "
-        f"{kept['statements']:,} statements in {kept['pairs']:,} pairs "
-        f"({kept['entities']:,} entities)"
+        f"read {report['edges_read']:,} edges; kept {kept['edges']:,} edges "
+        f"({kept['negated_edges']:,} negated) as {kept['statements']:,} statements in "
+        f"{kept['pairs']:,} pairs ({kept['entities']:,} entities)"
     ]
     for rule_id, r in report["rules"].items():
         if r["tier"] == "skip":
@@ -581,7 +598,7 @@ def summary(report: dict) -> list[str]:
     by_skip = sum(e["edges"] for e in report["skipped"] if e["rule"] != "unmatched")
     unmatched = sum(e["edges"] for e in report["skipped"] if e["rule"] == "unmatched")
     lines.append(
-        f"skipped {report['negated_skipped']:,} negated, "
+        f"skipped {report['earlier_run_skipped']:,} added by an earlier step 6, "
         f"{report['missing_node_skipped']:,} with a node missing from {NODES}, "
         f"{by_skip:,} by skip rules, {unmatched:,} unmatched"
     )
@@ -634,6 +651,15 @@ def run(args: argparse.Namespace) -> int:
         return 1
     for line in summary(report):
         print(f"{STEP}: {line}")
+    misdirected = report["kept"]["misdirected_edges"]
+    if misdirected:
+        print(
+            f"{STEP}: warning: {misdirected:,} kept edges have a predicate that Biolink's "
+            "domain, range and canonical direction don't read from their subject to their "
+            "object; they're checked as written, but claims, read Biolink's way round, rarely "
+            "reach them",
+            file=sys.stderr,
+        )
     print(
         f"{STEP}: wrote {records.STATEMENTS}, {records.PAIRS}, {records.ENTITIES} and "
         f"{records.SCOPE_REPORT} in {args.work}"

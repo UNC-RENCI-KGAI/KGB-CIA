@@ -1,15 +1,13 @@
-"""The command line shared by `kgb-augment` and the skill's scripts.
+"""The command line shared by `kgb-augment` and the skill's `scripts/augment.py`.
 
-`main` is `kgb-augment` (`agents/augmentation/cli.py` hands it its arguments): with no
+`main` is both (`agents/augmentation/cli.py` hands it `kgb-augment`'s arguments): with no
 subcommand it runs every step in order with its defaults, which is what `shared/pipeline.py`
 calls, as `main([])`; each step is also a subcommand:
 
-    kgb-augment select | pubmed | sentences | label | review | apply | evaluate
+    kgb-augment select | pubmed | label | ground | review | apply | evaluate
 
-`step_main` runs one step as a command of its own, for the scripts next to this package
-(`select_edges.py`, `search_pubmed.py`, ...). The common options (`--input`, `--output`,
-`--work`, `--cache-dir`) go before or after the subcommand. Step modules are imported only when
-they run.
+The common options (`--input`, `--output`, `--work`, `--cache-dir`) go before or after the
+subcommand. Step modules are imported only when they run.
 """
 
 from __future__ import annotations
@@ -22,21 +20,34 @@ from pathlib import Path
 from pubmed_evidence import config, records
 
 DESCRIPTION = (
-    "Enrich the baseline graph with extra datasets and PubMed evidence for or against edges."
+    "Enrich the baseline graph with extra datasets, and with PubMed evidence for its edges and "
+    "more specific edges."
 )
 
 # (subcommand, module, help). The full run is every step but `evaluate`, in this order.
 STEPS = [
-    ("select", "pubmed_evidence.scope", "step 2: choose the edges to check, group by pair"),
-    ("pubmed", "pubmed_evidence.pubmed", "step 3: search PubMed per pair, fetch abstracts"),
-    ("sentences", "pubmed_evidence.sentences", "step 4: write each statement as a sentence"),
-    ("label", "pubmed_evidence.label", "step 5: an LLM labels abstracts against statements"),
-    ("review", "pubmed_evidence.review", "step 5b: a stronger model reviews new-edge labels"),
-    ("apply", "pubmed_evidence.apply", "step 6: apply the labels to the graph"),
-    ("evaluate", "pubmed_evidence.evaluate", "score cached labels against a gold set"),
+    ("select", "pubmed_evidence.scope", "step 1: choose the edges to check, group by pair"),
+    ("pubmed", "pubmed_evidence.pubmed", "step 2: search PubMed per pair, fetch abstracts"),
+    ("label", "pubmed_evidence.label", "step 3: an LLM extracts the claims of each pair"),
+    ("ground", "pubmed_evidence.ground", "step 4: ground the claims' anatomy names to UBERON"),
+    (
+        "review",
+        "pubmed_evidence.review",
+        "step 5: a stronger model reviews the claims that would count",
+    ),
+    (
+        "apply",
+        "pubmed_evidence.apply",
+        "step 6: refine each checked edge from its claims, write the graph",
+    ),
+    (
+        "evaluate",
+        "pubmed_evidence.evaluate",
+        "score claims and refinements against a gold set, or draw the pairs to curate",
+    ),
 ]
 MODULES = {name: module for name, module, _ in STEPS}
-FULL_RUN = ["select", "pubmed", "sentences", "label", "review", "apply"]
+FULL_RUN = ["select", "pubmed", "label", "ground", "review", "apply"]
 
 
 def _add_common(parser: argparse.ArgumentParser, *, top: bool) -> None:
@@ -83,8 +94,14 @@ def _parser(prog: str = "kgb-augment") -> argparse.ArgumentParser:
     full.add_argument(
         "--model",
         dest="full_model",
-        help=f"bulk labeling model for step 5 (default: the one label_run.json names, else "
+        help=f"bulk labeling model for step 3 (default: the one label_run.json names, else "
         f"{config.BULK_MODEL})",
+    )
+    full.add_argument(
+        "--reasoning-effort",
+        dest="full_reasoning_effort",
+        help="reasoning effort for step 3's model, or 'none' to omit (default: the one "
+        "label_run.json names, if its model is labeling, else the model's in config.MODELS)",
     )
     full.add_argument(
         "--review-model",
@@ -93,15 +110,13 @@ def _parser(prog: str = "kgb-augment") -> argparse.ArgumentParser:
         f"{config.REVIEW_MODEL})",
     )
     full.add_argument(
-        "--infores", dest="full_infores", help="primary_knowledge_source of the new edges"
-    )
-    full.add_argument(
         "--limit", dest="full_limit", type=int, help="search and label only the first N pairs"
     )
     full.add_argument(
         "--skip-review",
         action="store_true",
-        help="skip the second pass; step 6 then adds only supporting PMIDs, no new edges",
+        help="skip the review step; step 6 holds every pair with a claim that would count but "
+        "has no review, and writes its edges unchanged",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="STEP")
     for name, module_path, help_text in STEPS:
@@ -116,30 +131,39 @@ def _resolve(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-FULL_RUN_OPTIONS = ("full_model", "full_review_model", "full_infores", "full_limit")
+FULL_RUN_OPTIONS = ("full_model", "full_reasoning_effort", "full_review_model", "full_limit")
 
 
 def _overrides(name: str, common: argparse.Namespace, run) -> dict:
     """What the full run sets on a step, beyond its defaults.
 
-    It continues the run `label_run.json` names, if any: that run's model, prompt and reviewer,
-    so after the skill has tuned a run, `main([])` reuses its cached labels and reviews instead
-    of relabeling everything with the defaults. `--model` and `--review-model` override.
+    It continues the run `label_run.json` names, if any: that run's model, prompt, effort,
+    reviewer and review effort, so after the skill has tuned a run, `main([])` reuses its cached
+    claims and reviews instead of relabeling everything with the defaults. `--model`,
+    `--reasoning-effort` and `--review-model` override; the run's effort carries over only
+    while its model is labeling, and the review's while its reviewer is reviewing.
     """
     if name == "pubmed":
         return {"limit": common.full_limit}
-    if name == "apply":
-        return {"infores": common.full_infores}
     if name == "label":
-        out = {"limit": common.full_limit, "model": common.full_model}
+        out = {
+            "limit": common.full_limit,
+            "model": common.full_model,
+            "reasoning_effort": common.full_reasoning_effort,
+        }
         if run is not None:
             out["model"] = common.full_model or run.model
             if run.prompt and Path(run.prompt).exists():
                 out["prompt"] = Path(run.prompt)
+            if common.full_reasoning_effort is None and out["model"] == run.model:
+                out["reasoning_effort"] = run.reasoning_effort
         return out
     if name == "review":
         reviewer = run.reviewer if run is not None else None
-        return {"model": common.full_review_model or reviewer}
+        out = {"model": common.full_review_model or reviewer}
+        if reviewer is not None and out["model"] == reviewer:
+            out["reasoning_effort"] = run.review_reasoning_effort
+        return out
     return {}
 
 
@@ -159,14 +183,6 @@ def _step_args(name: str, common: argparse.Namespace, run=None) -> argparse.Name
 def run_all(common: argparse.Namespace) -> int:
     run = records.read_label_run(common.work)
     steps = [s for s in FULL_RUN if not (common.skip_review and s == "review")]
-    # A review imported from a Pi subagent can't be redone by a direct call; rerunning it with
-    # the default model would replace it. Its items stay reviewed; new ones wait for the skill.
-    if run is not None and (run.reviewer or "").startswith("pi:") and "review" in steps:
-        if not common.full_review_model:
-            print(
-                f"[augmentation] keeping {run.reviewer}'s review; skipping review", file=sys.stderr
-            )
-            steps.remove("review")
     for i, name in enumerate(steps, 1):
         print(f"[augmentation] {i}/{len(steps)} {name}", file=sys.stderr)
         module = importlib.import_module(MODULES[name])
@@ -177,16 +193,6 @@ def run_all(common: argparse.Namespace) -> int:
     return 0
 
 
-def step_main(name: str, argv: list[str] | None = None, prog: str | None = None) -> int:
-    """Run one step as its own command: the common options and that step's, with defaults."""
-    module = importlib.import_module(MODULES[name])
-    help_text = next(h for n, _, h in STEPS if n == name)
-    parser = argparse.ArgumentParser(prog=prog, description=help_text)
-    _add_common(parser, top=True)
-    module.add_arguments(parser)
-    return module.run(_resolve(parser.parse_args(argv)))
-
-
 def main(argv: list[str] | None = None, prog: str = "kgb-augment") -> int:
     parser = _parser(prog)
     args = _resolve(parser.parse_args(argv))
@@ -195,8 +201,9 @@ def main(argv: list[str] | None = None, prog: str = "kgb-augment") -> int:
     # A step's own defaults would silently win over these.
     if any(getattr(args, k) is not None for k in FULL_RUN_OPTIONS) or args.skip_review:
         parser.error(
-            "--model, --review-model, --infores, --limit and --skip-review before a step name "
-            f"are for the full run; put them after it (kgb-augment {args.command} --model ...)"
+            "--model, --reasoning-effort, --review-model, --limit and --skip-review before a "
+            f"step name are for the full run; put them after it ({parser.prog} {args.command} "
+            "--model ...)"
         )
     module = importlib.import_module(MODULES[args.command])
     return module.run(args)

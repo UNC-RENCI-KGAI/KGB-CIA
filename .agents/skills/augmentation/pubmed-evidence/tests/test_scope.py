@@ -1,4 +1,4 @@
-"""Step 2: which edges are kept, how they become statements and pairs, and the report."""
+"""Step 1: which edges are kept, how they become statements and pairs, and the report."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
-from pubmed_evidence import config, records, scope
+from pubmed_evidence import config, graphio, records, scope
 from pubmed_evidence.graphio import pair_id, write_jsonl
 from pubmed_evidence.records import Entity, Pair, Statement
 from toy import (
@@ -22,6 +22,7 @@ from toy import (
     TP53,
 )
 
+from shared import schema
 from shared.schema import Edge, Node
 
 GENE_GENE = pair_id(TP53, MDM2)
@@ -38,7 +39,7 @@ def _run(graph: Path, work: Path, **kw):
 
 def test_duplicate_statement_is_one_statement_with_both_sources(toy_graph, tmp_path):
     _, statements, pairs, _ = _run(toy_graph, tmp_path / "work")
-    treats = [s for s in statements if s.predicate == "biolink:treats"]
+    treats = [s for s in statements if s.predicate == "biolink:treats" and s.subject == IMATINIB]
     assert len(treats) == 1
     t = treats[0]
     assert (t.subject, t.object, t.rule) == (IMATINIB, CML, "chemical-treats-disease")
@@ -65,16 +66,35 @@ def test_qualified_edge_is_its_own_statement(toy_graph, tmp_path):
     assert pair.nodes == tuple(sorted((IMATINIB, ABL1)))
 
 
-def test_skipped_and_negated_edges_are_reported_not_kept(toy_graph, tmp_path):
+def test_statement_ids_match_the_shared_schema():
+    """`shared.schema.Statement.id` is the id select gives a statement."""
+    for edge in EDGES:
+        qualifiers = graphio.qualifiers_of(edge)
+        statement = schema.Statement(
+            subject=edge.subject,
+            predicate=edge.predicate,
+            object=edge.object,
+            qualified_predicate=qualifiers.pop("qualified_predicate", None),
+            qualifiers=qualifiers,
+            negated=graphio.is_negated(edge),
+        )
+        assert statement.id == graphio.edge_statement_id(edge)
+
+
+def test_skipped_edges_are_reported_and_negated_edges_kept(toy_graph, tmp_path):
     report, statements, pairs, entities = _run(toy_graph, tmp_path / "work")
     assert {s.predicate for s in statements}.isdisjoint(
         {"biolink:participates_in", "biolink:expressed_in", "biolink:orthologous_to"}
     )
     assert report["edges_read"] == len(EDGES)
-    assert report["negated_skipped"] == 1
+    assert "negated_skipped" not in report
     assert report["missing_node_skipped"] == 0
-    assert ASPIRIN not in entities
-    assert not any(ASPIRIN in p for p in pairs)
+    # The negated source edge is checked like any other.
+    [negated] = [s for s in statements if s.negated]
+    assert (negated.subject, negated.rule) == (ASPIRIN, "chemical-treats-disease")
+    assert negated.statement_id == graphio.edge_statement_id(EDGES[-1])
+    assert pairs[pair_id(ASPIRIN, CML)].statement_ids == [negated.statement_id]
+    assert ASPIRIN in entities
     skipped = {(e["predicate"], e["rule"]): e for e in report["skipped"]}
     assert set(skipped) == {
         ("biolink:participates_in", "skip:pathway-go"),
@@ -87,7 +107,46 @@ def test_skipped_and_negated_edges_are_reported_not_kept(toy_graph, tmp_path):
     assert expressed["edges"] == 1
     assert report["rules"]["pathway-go"] == {"tier": "skip", "skipped_edges": 1}
     kept = report["kept"]
-    assert kept == {"edges": 8, "statements": 7, "pairs": 5, "entities": 6}
+    assert kept == {
+        "edges": 9,
+        "statements": 8,
+        "pairs": 6,
+        "entities": 7,
+        "negated_edges": 1,
+        "misdirected_edges": 0,
+    }
+    assert "kept 9 edges (1 negated)" in scope.summary(report)[0]
+
+
+def test_a_negated_edge_is_its_own_statement_beside_the_positive_one(toy_graph, tmp_path):
+    update = {"negated": False, "primary_knowledge_source": "infores:x"}
+    positive = EDGES[-1].model_copy(update=update)
+    graph = tmp_path / "graph"
+    write_jsonl(graph / "nodes.jsonl", NODES)
+    write_jsonl(graph / "edges.jsonl", [*EDGES, positive])
+    _, statements, pairs, _ = _run(graph, tmp_path / "work")
+    aspirin = {s.negated: s for s in statements if s.subject == ASPIRIN}
+    assert set(aspirin) == {True, False}
+    assert aspirin[True].statement_id != aspirin[False].statement_id
+    assert aspirin[False].statement_id == graphio.edge_statement_id(positive)
+    assert sorted(pairs[pair_id(ASPIRIN, CML)].statement_ids) == sorted(
+        s.statement_id for s in aspirin.values()
+    )
+
+
+def test_an_earlier_runs_new_edges_are_skipped(toy_graph, tmp_path):
+    # A qualified edge step 6 added: its source statement is checked, never the edge itself.
+    added = EDGES[2].model_copy(
+        update={"id": "kgbcia-augmentation:0123456789abcdef", "causal_mechanism_qualifier": "x"}
+    )
+    graph = tmp_path / "graph"
+    write_jsonl(graph / "nodes.jsonl", NODES)
+    write_jsonl(graph / "edges.jsonl", [*EDGES, added])
+    report, statements, _, _ = _run(graph, tmp_path / "work")
+    assert report["earlier_run_skipped"] == 1 and report["edges_read"] == len(EDGES) + 1
+    assert report["kept"]["statements"] == 8
+    assert not any(s.qualifiers.get("causal_mechanism_qualifier") for s in statements)
+    assert "1 added by an earlier step 6" in " ".join(scope.summary(report))
 
 
 def test_gene_gene_pair_deduped_across_directions(toy_graph, tmp_path):
@@ -151,6 +210,8 @@ def test_capped_rule_keeps_best_scored_pairs(tmp_path):
         _edge("NCBIGene:0", "biolink:interacts_with", "NCBIGene:1", score=0.5),
         _edge("NCBIGene:0", "biolink:interacts_with", "NCBIGene:2", combined_score=0.9),
         _edge("NCBIGene:0", "biolink:interacts_with", "NCBIGene:3", score=True),  # not a score
+        # Step 6's literature support, not a source's confidence.
+        _edge("NCBIGene:1", "biolink:interacts_with", "NCBIGene:3", lit_support_score=9),
         _edge("NCBIGene:4", "biolink:physically_interacts_with", "NCBIGene:0", score=0.7),
         _edge("NCBIGene:0", "biolink:physically_interacts_with", "NCBIGene:4", score=0.2),
     ]
@@ -159,7 +220,7 @@ def test_capped_rule_keeps_best_scored_pairs(tmp_path):
     assert set(pairs) == {pair_id("NCBIGene:0", "NCBIGene:2"), pair_id("NCBIGene:0", "NCBIGene:4")}
     # The 0-4 pair keeps both directions; its best score is 0.7.
     assert len(pairs[pair_id("NCBIGene:0", "NCBIGene:4")].statement_ids) == 2
-    assert report["rules"]["gene-gene"]["dropped_by_cap"]["pairs"] == 2
+    assert report["rules"]["gene-gene"]["dropped_by_cap"]["pairs"] == 3
     assert all(s.score is not None for s in statements)
 
 
@@ -188,6 +249,28 @@ def test_symmetric_predicate_matches_reversed_and_missing_nodes(tmp_path):
             "rule": "unmatched",
         }
     ]
+
+
+def test_misdirected_edges_are_kept_and_counted(tmp_path, capsys):
+    """Claims are read in the subject and object order Biolink's domain and range give; a
+    source edge that isn't is reported, not dropped."""
+    nodes = [
+        Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
+        Node(id="MONDO:1", category=["biolink:Disease"], name="d"),
+        Node(id="MONDO:2", category=["biolink:Disease"], name="e"),
+    ]
+    edges = [
+        _edge("NCBIGene:1", "biolink:condition_associated_with_gene", "MONDO:1"),
+        _edge("NCBIGene:1", "biolink:gene_associated_with_condition", "MONDO:2"),
+    ]
+    graph = _graph(tmp_path / "g", nodes, edges)
+    work = tmp_path / "work"
+    report, statements, _, _ = _run(graph, work)
+    assert {s.predicate for s in statements} == {e.predicate for e in edges}
+    assert report["kept"]["misdirected_edges"] == 1
+    args = argparse.Namespace(input=graph, work=work)
+    assert scope.run(args) == 0
+    assert "warning: 1 kept edges have a predicate" in capsys.readouterr().err
 
 
 def test_entities_have_synonyms_without_their_name(toy_graph, tmp_path):
