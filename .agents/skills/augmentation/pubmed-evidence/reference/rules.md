@@ -1,7 +1,7 @@
-# Scope rules (step 2)
+# Scope rules (step 1)
 
-`select_edges.py` (`kgb-augment select`) keeps the edges worth checking in the literature: those
-whose relationship abstracts state as a claim that a paper could contradict. Rules choose them
+`augment.py select` (`kgb-augment select`) keeps the edges worth checking in the literature:
+those whose relationship abstracts state as a claim that a paper could contradict. Rules choose them
 by (subject category, predicate, object category). The rules are data: the built-in ones are
 `DEFAULT_RULES` in `scripts/pubmed_evidence/scope.py`, and `--rules FILE` replaces them.
 
@@ -20,8 +20,12 @@ by (subject category, predicate, object category). The rules are data: the built
   when the rule is `symmetric` or Biolink marks the edge's predicate symmetric (`binds`,
   `interacts_with`, `physically_interacts_with`, ...). So Protein `binds` chemical is kept by
   `chemical-affects-gene`.
-- **Not matched at all:** negated edges (`negated: true`) and edges with a node missing from
-  `nodes.jsonl` are skipped before any rule and counted in the report.
+- **Negated edges** (`negated: true`) are matched like any other, as their own statement. Step
+  6 checks them, and never supports them: nothing is narrower than a negated statement
+  (DESIGN.md, step 6).
+- **Not matched at all:** the edges step 6 added on an earlier run (`id` starting
+  `kgbcia-augmentation:`; step 6 proposes them again from the edges they refine) and edges with
+  a node missing from `nodes.jsonl` are skipped before any rule and counted in the report.
 
 Tiers: `query` keeps every matching edge; `capped` keeps only the best-scored pairs (below);
 `skip` keeps nothing, and exists so the report can say which skip rule covered an edge type,
@@ -71,7 +75,8 @@ screen; phenotype names are long and rarely found. So a `capped` rule keeps at m
 
 A statement's score is the highest numeric value in any of these slots on any of the edges
 that make it: `score`, `confidence_score`, `has_confidence_score`, `combined_score`,
-`stringdb_combined_score`, `evidence_score` (`SCORE_SLOTS`). Booleans and NaN don't count.
+`stringdb_combined_score` (`SCORE_SLOTS`); not the `lit_support_score` step 6 writes. Booleans
+and NaN don't count.
 Scales differ between sources (STRING's raw combined score is 0–1000), and
 `--min-score` compares against the raw value.
 
@@ -106,6 +111,12 @@ The file is checked before anything runs: valid JSON, a non-empty list, no unkno
 unique ids, and every CURIE a Biolink element (`bmt`, Biolink 4.4.6). A bad file stops the
 step with a one-line message. Record why you changed the scope in `notes.md`.
 
+The rules also set what the label step asks for. A pair's claims may use the predicates of the
+rules it matched (`pairs.jsonl`'s `rules`), their descendants and their `opposite_of`
+partners, each read from the rule's subject to its object (DESIGN.md, step 3). The label step
+reads the rules file that `scope_report.json` names, and each rule's reply schema is part of
+the label prompt version, so a rules file that changes a predicate list starts fresh claims.
+
 ## `scope_report.json`
 
 Written next to the step's other files:
@@ -113,10 +124,17 @@ Written next to the step's other files:
 | Key | Content |
 | --- | --- |
 | `input`, `rules_file`, `capped_limit`, `min_score` | What the step ran on |
-| `edges_read`, `negated_skipped`, `missing_node_skipped` | Edge counts before any rule |
-| `kept` | `edges`, `statements`, `pairs`, `entities` kept in all |
+| `edges_read`, `earlier_run_skipped`, `missing_node_skipped` | Edge counts before any rule |
+| `kept` | `edges`, `statements`, `pairs`, `entities` kept in all; `negated_edges` among the edges; `misdirected_edges` (below) |
 | `rules` | Per rule id. Query and capped: `tier`, `matched_edges`, `matched_statements`, and the `edges`, `statements` and `pairs` kept; capped rules add `dropped_by_min_score` (`statements`, `edges`) and `dropped_by_cap` (`pairs`, `statements`, `edges`). Skip: `tier`, `skipped_edges` |
 | `skipped` | One entry per (subject category, predicate, object category) not kept, using each node's first (most specific) category: `edges` and `rule` (`skip:<id>` or `unmatched`), most edges first |
 
 Read the largest `unmatched` entries: one that states a claim a paper could contradict (a
 predicate or category no rule lists) may deserve a rule.
+
+`kept.misdirected_edges` counts the kept edges whose predicate doesn't read from their subject
+to their object the way Biolink's domain, range and canonical direction put it
+(`biolink.oriented`), such as 'gene condition_associated_with_gene disease'; the step warns
+when there are any. They're checked as written, but the label step reads claims Biolink's way
+round ('gene gene_associated_with_condition disease'), so claims rarely reach them. Report them
+to the transformation team.

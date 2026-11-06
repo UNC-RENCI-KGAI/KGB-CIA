@@ -2,7 +2,8 @@
 
 **Team:** @UNC-RENCI-KGAI/augmentation · **Existing asset:** PubMed; Bagel / LitCoin for text
 
-Enrich the baseline graph with extra datasets and PubMed evidence for or against edges.
+Enrich the baseline graph with extra datasets, and with PubMed evidence for its edges and more
+specific edges.
 
 The agent is the **pubmed-evidence** skill,
 [`.agents/skills/augmentation/pubmed-evidence/`](../../.agents/skills/augmentation/pubmed-evidence/):
@@ -12,31 +13,38 @@ The agent is the **pubmed-evidence** skill,
 - [`DESIGN.md`](../../.agents/skills/augmentation/pubmed-evidence/DESIGN.md): each step and the
   choices behind it;
 - [`README.md`](../../.agents/skills/augmentation/pubmed-evidence/README.md): how to run it,
-  script by script;
+  step by step;
 - `reference/`, `prompts/`, `scripts/` (the library is `scripts/pubmed_evidence/`) and `tests/`.
 
 This package keeps only `cli.py`, the stage's entry point: `kgb-augment` and
 `shared/pipeline.py` call it, and it hands its arguments to the skill's library.
 
 In short: choose the edges whose relationships papers state as claims, search PubMed for each
-node pair, have an LLM label every abstract against every edge (with a checked verbatim quote)
-and propose Biolink qualifiers, have a stronger model review the labels that would add edges,
-then add the supporting PMIDs to the edges' `publications` and new edges for reviewed
-contradictions (`negated: true`) and qualifiers. The LLM only labels; code does the rest, and
-the labels are cached, so the graph can be rebuilt without calling a model.
+node pair, have an LLM write down the claims each abstract makes about the pair (each with a
+checked verbatim sentence), ground their anatomy to UBERON, and have a stronger model review
+every claim that would count. Then code refines every checked edge from its pair's claims, as
+step 6 of the skill's `DESIGN.md` says: an edge an abstract supports gains that abstract's PMID,
+and a more specific statement an abstract makes is proposed as a new edge beside the originals.
+The LLM only extracts and reviews claims; code refines, and the claims are cached, so the graph
+can be rebuilt without calling a model.
 
 ## Run it alone
 
 ```bash
 uv run kgb-augment --input <filter output dir> --output <path>   # every step, with defaults
-uv run kgb-augment STEP --help    # STEP: select, pubmed, sentences, label, review, apply, evaluate
+uv run kgb-augment STEP --help    # STEP: select, pubmed, label, ground, review, apply, evaluate
 ```
 
-Each step is also a script in the skill's `scripts/` (`select_edges.py`, `search_pubmed.py`,
-...), with the same options; the skill's README lists them. Set `RENCI_AZURE_API_KEY` for
-labeling and review, and `NCBI_EMAIL` (plus `NCBI_API_KEY` for 10 requests a second) for the
-PubMed search. With a `label_run.json` in the work directory, the full run continues that run
-(its model, prompt and reviewer) and reuses its cached labels.
+The skill's `scripts/augment.py` takes the same arguments; the skill's README lists each
+step's options. Set `RENCI_AZURE_API_KEY` for labeling and review with the RENCI models
+(`ANTHROPIC_API_KEY`, or an `ant auth login` profile, with Claude models), and `NCBI_EMAIL`
+(plus `NCBI_API_KEY` for 10 requests a second) for the PubMed search. With a `label_run.json`
+in the work directory, the full run continues that run (its model, prompt, reasoning effort,
+reviewer and review effort) and reuses its cached claims and verdicts; `--reasoning-effort`
+labels at another effort (default: the model's own, low for gpt-6-luna). `--skip-review` leaves
+out the review: step 6 then holds every pair with a claim that would count but has no review,
+and writes its edges unchanged. `kgb-augment apply --species-in-proposals` keeps the species in
+proposed edges, which `SPECIES_IN_PROPOSALS` in the skill's `config.py` leaves out by default.
 
 ## Input / output
 
@@ -45,25 +53,38 @@ Uses the KGX records in `shared/schema.py`.
 - **Input** (`--input`, default `data/filter`): the filtered baseline graph, `nodes.jsonl` and
   `edges.jsonl` (or ORION's `normalized_*.jsonl`, or `.gz`).
 - **Output** (`--output`, default `data/augmentation`): `nodes.jsonl` unchanged, and
-  `edges.jsonl` with every input edge in input order, supporting PMIDs appended to
-  `publications`, followed by the new negated and then qualified edges. Every new edge has
-  `primary_knowledge_source: infores:kgbcia-augmentor` (`--infores`), `knowledge_level:
-  knowledge_assertion` and `agent_type: text_mining_agent`.
-- **Work directory** (`--work`, default `<output>/work`) and **caches** (`--cache-dir`, default
-  `data/augmentation/cache`): described in the skill's
+  `edges.jsonl` with every input edge in input order, each with an `id`, followed by the
+  proposed edges.
+  - Each checked edge is an `AugmentedEdge` with its findings in `lit_*` fields: its support
+    score (how many abstracts support it), their PMIDs, the more specific edges that refine it
+    (`lit_refined_by`), its context notes, and `lit_evidence` (every abstract read for the
+    pair, each claim marked with whether it supports the edge). The supporting PMIDs its
+    source didn't cite are appended to its `publications` and listed in
+    `lit_added_publications`. An unsupported edge is checked with score 0 and its
+    `publications` unchanged.
+  - Originals are never removed, negated or replaced. A more specific statement that an edge
+    of the pair already makes isn't added again: the original names that edge in
+    `lit_refined_by`.
+  - Each proposed edge names the originals it refines in `original_edge_ids`, and has
+    `primary_knowledge_source: infores:kgbcia-augmentor`, `supporting_data_source:
+    [infores:pubmed]`, `knowledge_level: knowledge_assertion`, `agent_type: text_mining_agent`,
+    and its supporting PMIDs as `publications`.
+  - The edges of a held pair (a claim that would count has no review, or names anatomy the
+    ground step never looked up) are written unchanged, and counted.
+- **Work directory** (`--work`, default `<output>/work`): among each step's files,
+  `refinements.jsonl` (each refined pair's edges, proposed edges and links) and
+  `apply_report.json`. These and the **caches** (`--cache-dir`, default
+  `data/augmentation/cache`) are described in the skill's
   [`reference/work-files.md`](../../.agents/skills/augmentation/pubmed-evidence/reference/work-files.md).
 
 ## Status
 
 - Every step is implemented and tested without network (the skill's `tests/`, including an
-  end-to-end run of this package's `main([])` with PubMed, NodeNorm and the models faked).
-- Tested on Monarch's ORION output (`data/normalized_2026jul22_...`, 24,641 edges): step 2
-  kept 4,985 pairs (213 ClinGen gene–disease, 4,772 dictyBase and Xenbase gene–phenotype). A
-  40-pair sample ran through real PubMed, gpt-6-luna labeling and gpt-5.6-terra review for
-  about $0.08: 133 confirmed labels added 144 PMIDs to 20 edges, and review accepted 12 of 15
-  qualifier proposals, which became 7 qualified edges (loss-of-function forms, UBE3A's missing
-  expression). Gene–disease searches found papers for 18 of 20 pairs; Xenbase phenotype names
-  found none, and dictyBase phenotypes have no names to search.
+  end-to-end run of this package's `main([])` with PubMed, NodeNorm, the Name Resolver and the
+  models faked).
+- The claims and the refinement haven't run live yet: a tuning sample, which also measures the
+  cost, and a relabel of both graphs (Monarch and DrugCentral) are next. The earlier statement
+  labels of both graphs stay in the cache, unread.
 - No gold set yet, so the models are still unvalidated defaults.
-- Open items (scope with the filter team, `negated` handling team-wide) are in
-  the skill's `DESIGN.md`.
+- Open items (scope with the filter team, `negated` handling team-wide, what's not built yet)
+  are in the skill's `DESIGN.md`.

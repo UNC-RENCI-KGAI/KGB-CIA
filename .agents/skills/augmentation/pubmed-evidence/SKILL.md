@@ -1,15 +1,15 @@
 ---
 name: pubmed-evidence
-description: Check a Biolink knowledge graph's edges against PubMed — choose the edges worth checking, search PubMed for each node pair, have an LLM label every abstract as confirming, contradicting or not bearing on each edge and propose Biolink qualifiers, have a stronger model review the labels that add edges, then add supporting PMIDs and new negated or qualified edges to the graph. Use when asked to run, tune or rerun the augmentation agent, or to add literature evidence to the KGB-CIA graph.
+description: Check a Biolink knowledge graph's edges against PubMed — choose the edges worth checking, search PubMed for each node pair, have an LLM extract the claims each abstract makes about the pair, ground their anatomy to UBERON, have a stronger model review every claim that would count, then refine every checked edge in code: add the PMIDs of the abstracts that support it to its publications, and propose the more specific edges the abstracts state beside the originals. Use when asked to run, tune or rerun the augmentation agent, or to add literature evidence to the KGB-CIA graph.
 ---
 
 # PubMed evidence for the graph's edges
 
 `DESIGN.md` explains each step and the choices behind it; read it before a first run. In short:
 **you decide, the code transforms.** You run the steps one at a time, read what each wrote,
-tune the labeling prompt on a sample, choose the model, and then run the full set. You never
-edit the graph, the caches or the labels by hand: every change to the graph comes from
-`apply_labels.py` reading the label cache, so it can be rebuilt.
+tune the extraction prompt on a sample, choose the model, and then run the full set. You never
+edit the graph, the caches or the claims by hand: every change to the graph comes from
+`augment.py apply` refining each edge from the cached claims, so it can be rebuilt.
 
 ## Inputs and outputs
 
@@ -17,59 +17,75 @@ edit the graph, the caches or the labels by hand: every change to the graph come
   ORION's `normalized_nodes.jsonl` and `normalized_edges.jsonl`; `.gz` works). Default
   `data/filter`; `--input DIR`.
 - **Output:** the augmented graph in `--output DIR` (default `data/augmentation`): the same
-  nodes, the same edges with supporting PMIDs added to `publications`, then the new negated and
-  qualified edges.
+  nodes, then every input edge with an `id`, each checked one with its findings in `lit_*`
+  fields (its support score, the PMIDs that support it, the more specific edges, every
+  abstract's claims), then the proposed edges. A checked edge's `publications` gain the
+  supporting PMIDs its source didn't cite, listed again in `lit_added_publications`. Originals
+  are never removed: each names the more specific edges its supporting claims make in
+  `lit_refined_by`, and each proposed edge names the originals it refines in
+  `original_edge_ids`.
 - **Work directory** `OUT/work` (`--work DIR`): each step's files, the run manifest
-  `label_run.json`, the sample and evaluation reports, your tuned prompts and rules, and your
-  `notes.md`. `reference/work-files.md` describes every file.
+  `label_run.json`, each refined pair's record (`refinements.jsonl`), the sample and evaluation
+  reports, your tuned prompts and rules, and your `notes.md`. `reference/work-files.md`
+  describes every file.
 - **Caches** in `data/augmentation/cache` (`--cache-dir`, or `KGB_AUGMENT_CACHE_DIR` for the
-  shared RENCI drive): PubMed responses and every LLM label. Reruns reuse them, so rerunning a
-  step is cheap. Only one process should write to a cache at a time.
+  shared RENCI drive): PubMed responses, anatomy groundings, the pinned UBERON release, and
+  every claim, check, review and repair. Reruns reuse them, so rerunning a step is cheap. Only
+  one process should write to a cache at a time.
 
 Pass the same `--input`, `--output`, `--work` and `--cache-dir` to every step. Put downloads,
 helper scripts and other scratch work in `OUT/work/`, not elsewhere.
 
 ## Scripts
 
-All in `scripts/`, run from the repository root (they're `uv run --script` files and install
-their own dependencies; they read the repository's `shared/schema.py` and `.pi/models.json`).
-Use `--help` on any of them.
+One script, `scripts/augment.py`, runs every step: `augment.py STEP` for one, `augment.py` alone
+for all of them. Run it from the repository root (it's a `uv run --script` file and installs
+its own dependencies; it reads the repository's `shared/schema.py`). The models it can call,
+with their prices and default settings, are `MODELS` in `scripts/pubmed_evidence/config.py`.
+Use `--help`, or `augment.py STEP --help` for a step's options.
 
-| Script | Use |
+| Command | Use |
 |---|---|
-| `select_edges.py [--rules FILE] [--capped-limit N] [--min-score X]` | Step 2: keep the edges worth checking, by scope rule (`reference/rules.md`), grouped by node pair; `scope_report.json` counts what each rule kept and every edge type skipped |
-| `search_pubmed.py [--limit N] [--max-abstracts N] [--refresh]` | Step 3: one PubMed search per pair (names, synonyms, MeSH), the abstracts it finds and those the edges already cite |
-| `write_sentences.py` | Step 4: each statement as an English sentence, in Biolink's reading order for qualifiers |
-| `label_abstracts.py [--model M] [--prompt FILE] [--sample N --seed S] [--gold FILE] [--dry-run]` | Step 5: one call per pair labels every abstract against every statement and proposes qualifiers; quotes are checked in code |
-| `review_labels.py [--model M]` or `--export FILE --reviewer NAME` / `--import FILE --reviewer NAME` | Step 5b: a stronger model reviews the contradictions and qualifier proposals, which become edges |
-| `apply_labels.py [--infores CURIE] [--no-review]` | Step 6: the cached labels into the graph |
-| `evaluate_models.py --gold FILE [--run MODEL[@PROMPT_VERSION] ...]` | Score cached labels against a hand-labeled gold set |
-| `run_all.py` | Every step but evaluate, in order: what the pipeline runs |
+| `augment.py select [--rules FILE] [--capped-limit N] [--min-score X]` | Step 1: keep the edges worth checking, by scope rule (`reference/rules.md`), grouped by node pair; `scope_report.json` counts what each rule kept and every edge type skipped |
+| `augment.py pubmed [--limit N] [--max-abstracts N] [--refresh]` | Step 2: one PubMed search per pair (names, synonyms, MeSH), the abstracts it finds and those the edges already cite |
+| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and the review model repairs evidence sentences that weren't found |
+| `augment.py ground [--refresh]` | Step 4: the anatomy the claims name, to UBERON terms; pins the UBERON release. No model calls |
+| `augment.py review [--model M]` | Step 5: a stronger model upholds or rejects, in one pass, each claim that would count: one that would add a PMID to an edge or propose a more specific edge |
+| `augment.py apply [--no-review] [--species-in-proposals]` | Step 6: refine each checked edge from its pair's claims (its supporting PMIDs, and the more specific edges they propose) and write the graph, `refinements.jsonl` and `apply_report.json` |
+| `augment.py evaluate [--gold FILE] [--run MODEL[@PROMPT_VERSION] ...] [--species-in-proposals]` | Score a run's claims, and the support, PMIDs and proposals they lead to, against a curator's gold set |
+| `augment.py evaluate --draw N [--seed S]` | Draw N pairs for a gold set from `refinements.jsonl`, stratified by outcome (unsupported, supported, refined) and predicate family, into `work/gold_pairs.jsonl` |
+| `augment.py` | Every step but evaluate, in order: what the pipeline runs |
 
-`uv run kgb-augment STEP` (steps `select`, `pubmed`, `sentences`, `label`, `review`, `apply`,
-`evaluate`) is the same thing under the pipeline's name.
+`uv run kgb-augment` takes the same arguments under the pipeline's name.
 
 ## Before you start
 
-- `RENCI_AZURE_API_KEY` must be set for labeling and review (not for `--dry-run`). If it isn't,
-  stop and say so; don't look for a key.
+- Labeling and review (not `--dry-run`) need the model's credentials: `RENCI_AZURE_API_KEY`
+  for the RENCI models, and for Claude models (`claude-...`) `ANTHROPIC_API_KEY` or an
+  `ant auth login` profile. If they're missing, the step stops and says so; stop too, and
+  don't look for a key. Labeling also uses the review model's, for the sentence repair pass;
+  the label summary says if the pass was skipped for lack of them.
 - `NCBI_EMAIL` should be set (NCBI asks for a contact address); `NCBI_API_KEY` raises the rate
   from 3 to 10 requests a second. Never fill either in yourself with an address or key you
   found; if they're unset, the script warns and runs at the lower rate.
-- Large PubMed jobs belong off-peak: weekends, or 9pm–5am ET on weekdays. `search_pubmed.py`
+- The ground step needs no key: it calls the RENCI Name Resolver (`NAMERES_URL`) and NodeNorm,
+  and fetches UBERON's release once.
+- Large PubMed jobs belong off-peak: weekends, or 9pm–5am ET on weekdays. `augment.py pubmed`
   warns when a big uncached job starts at peak hours.
 
 ## Workflow
 
-1. **Select the edges.** `select_edges.py`. Read `work/scope_report.json`: pairs kept per rule,
-   pairs dropped by the gene–gene and gene–phenotype caps, and the `skipped` list of edge types
-   with the skip rule that covered them or `unmatched`. Look at the largest `unmatched` types:
-   one that states a claim a paper could contradict (a predicate or category the rules don't
-   cover) may deserve a rule. To change the scope, write `work/rules.json` (`reference/rules.md`)
-   and rerun with `--rules work/rules.json`; say why in `notes.md`. Record the pair count per
-   rule in `notes.md`: it sets the cost.
+1. **Select the edges.** `augment.py select`. Read `work/scope_report.json`: pairs kept per rule,
+   pairs dropped by the gene–gene and gene–phenotype caps, the negated edges kept, and the
+   `skipped` list of edge types with the skip rule that covered them or `unmatched`. Look at the
+   largest `unmatched` types: one that states a claim a paper could contradict (a predicate or
+   category the rules don't cover) may deserve a rule. To change the scope, write
+   `work/rules.json` (`reference/rules.md`) and rerun with `--rules work/rules.json`; say why in
+   `notes.md`. If `kept.misdirected_edges` isn't 0, note those edges for the transformation
+   team: claims rarely reach them. Record the pair count per rule in `notes.md`: it sets the
+   cost.
 
-2. **Search PubMed.** `search_pubmed.py`. One search per pair plus one fetch per ~200
+2. **Search PubMed.** `augment.py pubmed`. One search per pair plus one fetch per ~200
    abstracts: about 30,000 pairs an hour with an API key, 10,000 without. For a long job, run
    it as a background task with stderr redirected to `work/pubmed.log`, and wait for it to
    finish rather than polling. Failed pairs are listed on stderr (it returns 1 when more than
@@ -78,108 +94,142 @@ Use `--help` on any of them.
    literature. Pairs whose node has no usable name aren't searched; long ontology names
    (phenotypes especially) rarely appear in abstracts. Note what you find in `notes.md`.
 
-3. **Write the sentences.** `write_sentences.py`. Skim `work/sentences.jsonl`: each statement
-   should read as a plain claim ("imatinib causes decreased activity of ABL1"). A predicate
-   without a hand-written phrase falls back to its Biolink name; if one reads badly, note it in
-   `notes.md` for the code (`PREDICATE_PHRASES` in `scripts/pubmed_evidence/sentences.py`).
-
-4. **Estimate the cost.** `label_abstracts.py --dry-run`. It makes no calls; it prints the
+3. **Estimate the cost.** `augment.py label --dry-run`. It makes no calls; it prints the
    number of calls and the estimated tokens and cost of a full run with the default model
    (`--model` for another), and writes the first request to `work/label_request_example.txt`.
-   Read that file once to see exactly what the model gets. Unless you were given a budget,
-   don't start a full labeling run estimated above $100: tune the prompt on samples, then stop
-   and report the estimate.
+   Read that file once to see exactly what the model gets. The estimate assumes 2,000 output
+   tokens a call, a guess until a sample measures it. Unless you were given a budget, don't
+   start a full labeling run estimated above $100: tune the prompt on samples, then stop and
+   report the estimate.
 
-5. **Tune the prompt on a sample.** Copy `prompts/label.md` to `work/prompts/label.md` and run
-   `label_abstracts.py --prompt work/prompts/label.md --sample 25 --seed 1`.
-   Read `work/label_sample.md` and judge every `confirmed` and `contradicted` label and every
-   proposal against its abstract yourself. Look for:
-   - quotes that failed the check (`quote_valid: false`): paraphrased or stitched quotes;
-   - `contradicted` used for absence of evidence, for an opposite direction (that should be
-     `ambiguous` plus a qualifier proposal), or for a negative finding limited to one variant,
-     population, species or comparator;
-   - labels about a different entity: a related drug, a gene family member, another species
-     when the edge is about human;
-   - `no_evidence` where the abstract plainly states the relationship (missed synonyms?);
-   - qualifier proposals that only restate the edge, that the abstract doesn't support, or that
-     are invalid (their `errors` say why). Proposals become edges, so many near-identical ones
-     across pairs are a prompt problem.
+4. **Tune the prompt on a sample.** Copy `prompts/label.md` to `work/prompts/label.md` and run
+   `augment.py label --prompt work/prompts/label.md --sample 25 --seed 1`. The prompt includes
+   the shared claim rules (`{{include claim-rules.md}}`), which the review prompt includes too;
+   a copy reads `claim-rules.md` from beside it if there is one, else the skill's. Read
+   `work/label_sample.md` and judge every claim against its abstract yourself. Look for:
+   - evidence sentences `NOT FOUND`: paraphrased or stitched ones, and each one's repair beside
+     it, which should be the sentence the claim rests on or `none`, never a loosely related
+     one;
+   - `INVALID` claims and their errors (the summary lists the most common): qualifiers the
+     predicate doesn't take, `causes` without an aspect or direction, a predicate that "fits
+     neither way" between the nodes, `also_supports` entries that add nothing;
+   - negatives without explicit language: absence of evidence, safety, cost or approval
+     status, "not studied", a better drug recommended instead (all no claim);
+   - claims stated higher or lower than the abstract: a direction or aspect the text doesn't
+     give, `treats` from a mouse study;
+   - mixed results not split by context, and anatomy that isn't a tissue or organ (cell types
+     and cell lines belong in the notes);
+   - claims about a different entity: a related drug, a drug class, a gene family member;
+   - the role and hedging: background given as a primary finding, a "may" not marked hedged;
+   - the study design against the publication types shown beside it;
+   - abstracts with no claims where the abstract plainly states the relationship (missed
+     synonyms?).
    Edit `work/prompts/label.md` to fix what you find, and rerun the same sample (any change to
-   the prompt is a new prompt version, so it starts fresh labels), then a new seed so you don't
+   the prompt is a new prompt version, so it starts fresh claims), then a new seed so you don't
    tune to one sample. Three rounds are usually enough. Log each change and the error it fixed
-   in `notes.md`. Don't edit the skill's own prompt; propose the change in `notes.md`.
+   in `notes.md`. Don't edit the skill's own prompts; propose the change in `notes.md`, and say
+   there if you changed a copy of `claim-rules.md`, since the review keeps reading the skill's.
 
-6. **Choose the model.** If there is a gold set (hand-labeled (statement, PMID) lines,
-   `reference/formats.md`, e.g. `data/augmentation/gold.jsonl`), label it with each candidate
-   model and score them:
+5. **Choose the model.** A gold set (`reference/formats.md`, e.g.
+   `data/augmentation/gold.jsonl`) holds a curator's claims for the abstracts of some pairs and
+   the edges of those pairs to score; the pairs file it was drawn from (`gold_pairs.jsonl`,
+   below) names those pairs. Label exactly those pairs with each candidate model, and score
+   them:
    ```
-   label_abstracts.py --gold GOLD --prompt work/prompts/label.md --model gpt-6-luna
-   label_abstracts.py --gold GOLD --prompt work/prompts/label.md --model gpt-5.6-luna
-   evaluate_models.py --gold GOLD --run gpt-6-luna --run gpt-5.6-luna
+   augment.py label --pairs PAIRS --prompt work/prompts/label.md --model gpt-6-luna
+   augment.py label --pairs PAIRS --prompt work/prompts/label.md --model gpt-5.6-luna
+   augment.py evaluate --gold GOLD --run gpt-6-luna --run gpt-5.6-luna
    ```
    Candidates for the bulk pass: `gpt-6-luna`, `gpt-5.6-luna`, `DeepSeek-V4-Flash`,
-   `gpt-oss-120b`. Read `work/evaluate_report.md`. Precision on `confirmed` and `contradicted`
-   matters most (those labels change the graph); choose the cheapest model that is close to the
-   best on them, and say why in `notes.md`. Without a gold set, keep the default model, say in
-   `notes.md` that the choice is unvalidated, and point to `work/label_sample.jsonl`: it is in
-   the gold format, so a person can fill in `gold_label` to make one.
+   `gpt-oss-120b`, and `claude-haiku-5-5` if Claude credentials are set (its refused calls
+   show in the label summary's failures). Read `work/evaluate_report.md`. First the gold side,
+   step 6's refinement on the curator's claims: if it leaves unsupported an edge the curator's
+   abstracts plainly state, or proposes an edge they don't, the claims or the gold edges are
+   wrong, not the model. Then the comparison: PMID and proposal precision matter most (a wrong
+   PMID cites a paper for what it doesn't say, and a wrong proposal is a false edge), then
+   support accuracy and claim precision. Choose the cheapest model that is close to the best on
+   them, and say why in `notes.md`. Without a gold set, keep the default model, say in
+   `notes.md` that the choice is unvalidated, and once apply has refined the edges, draw the
+   pairs for one: `augment.py evaluate --draw 150 --seed 1` writes `work/gold_pairs.jsonl`,
+   stratified by outcome and predicate family so that unsupported edges and edges with
+   proposals are both in it, and `augment.py label --pairs work/gold_pairs.jsonl` writes
+   `work/label_sample.jsonl` for its pairs. A curator makes the gold set by adding
+   `gold_claims` to its lines, and an edge line for each edge to score; say so in `notes.md`.
 
-7. **Label everything.** `label_abstracts.py --prompt work/prompts/label.md --model MODEL`, as
-   a background task (stderr to `work/label.log`). When it succeeds it writes
-   `work/label_run.json`, which names the model and prompt version that review, step 6 and the
-   pipeline's full run use (`--sample` and `--gold` runs never change it). If more than 5% of
-   calls fail it returns 1; rerun the same command to retry, since labels already made are
-   cached.
+6. **Label everything.** `augment.py label --prompt work/prompts/label.md --model MODEL`, as a
+   background task (stderr to `work/label.log`). When it succeeds it writes
+   `work/label_run.json`, which names the model, prompt version, effort and sentence repairs
+   that ground, review, step 6 and the pipeline's full run use (`--sample`, `--pairs` and
+   `--dry-run` runs never change it). If more than 5% of the calls its pairs need fail (those
+   answered by earlier runs count too, so a few calls that keep failing don't stop later runs)
+   it returns 1; rerun the same command to retry, since answers already made are cached. A pair
+   with an abstract still unanswered stays unchecked until a run answers it.
 
-8. **Review the labels that add edges.** A stronger model checks only the `contradicted`
-   labels and qualifier proposals, which become new edges.
-   - Directly (the default, and the cheaper way): `review_labels.py`
-     (default model `gpt-5.6-terra`; `--model gpt-6.1-sol` is the other candidate).
-   - Or as a Pi subagent, for a few hundred items or fewer:
-     `review_labels.py --export work/review_items.jsonl --reviewer pi:MODEL` writes the items
-     that reviewer hasn't reviewed and `work/review_items.instructions.md`. Give a subagent (on
-     `gpt-6.1-sol` or `gpt-5.6-terra`) both files; it writes one verdict line per item to
-     `work/review_verdicts.jsonl` as the instructions say (`reference/formats.md`). Then
-     `review_labels.py --import work/review_verdicts.jsonl --reviewer pi:MODEL`.
-   Read a few rejections: a reviewer that rejects most items means the first pass is too loose,
-   so go back to step 5.
+7. **Ground the anatomy.** `augment.py ground`. Its summary counts the anatomy names grounded
+   to UBERON and those that weren't (they stay notes and narrow nothing), and names the UBERON
+   release it pinned in the cache and recorded in `label_run.json`. Grounding is exact by
+   design, so a plural or a cell type doesn't ground; note any common name that should have. It
+   returns 1 if UBERON can't be fetched or more than 5% of lookups fail; rerun it. Until a
+   rerun looks up a name whose lookup failed, apply holds its pair.
 
-9. **Apply.** `apply_labels.py`. Read `work/apply_report.json`: edges given PMIDs, PMIDs added,
-   negated and qualified edges added, and what was skipped (invalid quotes, unreviewed, already
-   in the graph). Check that the output has every input edge plus the new ones, and look up two
-   or three new edges' PMIDs in the abstracts to confirm they say what the edge says.
+8. **Review the claims that would count.** `augment.py review` (default model
+   `gpt-5.6-terra`; the other candidates are `gpt-6.1-sol`, `claude-sonnet-5-5` and
+   `claude-opus-5-5`). In one pass it sends every claim that would count and has no verdict of
+   this reviewer and prompt yet: each one that would add a PMID to an edge or propose a more
+   specific edge. Read a few rejections: a reviewer that rejects most claims means the
+   extraction is too loose, so go back to workflow step 4. Claims whose call failed, or that a
+   reply left out, are sent again on the next run; until then step 6 holds their pairs. It
+   returns 1 if more than 5% of the calls the claims that would count need fail, those
+   reviewed before included.
+
+9. **Apply.** `augment.py apply`. Read `work/apply_report.json`: edges checked, supported,
+   unsupported and refined by more specific edges; the PMIDs added to `publications`; proposed
+   edges, links to edges that already make their statement, and the species-qualified
+   proposals folded into ones without a species; the pairs held (claims no review has judged,
+   or anatomy never looked up) and the edges in scope left unchecked (pairs not fully labeled
+   or not searched); the claims used, counting, upheld, rejected and unreviewed; the repaired
+   sentences; and the UBERON release. Held pairs mean a review or ground run is still owed:
+   rerun it, then apply. Check that the output has every input edge plus the proposed ones.
+   Read a few lines of `work/refinements.jsonl`, and look up two or three added PMIDs and
+   proposed edges' PMIDs in their abstracts to confirm they say what the edge says. Proposed
+   edges carry no species unless you pass `--species-in-proposals`; the originals' support is
+   the same either way.
 
 10. **Write `work/notes.md`:** the commands you ran, counts from each step's summary, the
     prompt changes and why, the model choice and its basis, the total cost (from the label and
-    review summaries), and questions for other teams (scope rules, naming problems, sentences
-    that read badly).
+    review summaries), and questions for other teams (scope rules, naming problems, misdirected
+    edges).
 
 ## The full run without you
 
-`run_all.py` (and `kgb-augment` with no subcommand, which `shared/pipeline.py` calls) runs
-select → pubmed → sentences → label → review → apply. With no `work/label_run.json` it uses the
+`augment.py` with no step (and `kgb-augment` with none, which `shared/pipeline.py` calls) runs
+select → pubmed → label → ground → review → apply. With no `work/label_run.json` it uses the
 skill's prompts and the default models; with one, it continues the run you left there (its
-model, prompt file and reviewer), reusing every cached label. So leave `work/label_run.json`
-naming the run you chose, and keep the tuned prompt where it says. Tuning and model choice
-happen here, in the skill.
+model, prompt file and reasoning effort, and its reviewer and the review's effort), reusing
+every cached claim and verdict. So leave `work/label_run.json` naming the run you chose, and
+keep the tuned prompt where it says. Tuning and model choice happen here, in the skill.
+
+`--skip-review` leaves out the review step. Apply then holds every pair with a claim that
+would count but has no review, and writes its edges unchanged, so the run adds nothing
+unreviewed.
 
 ## Rules
 
-- Change the graph only through `apply_labels.py`. Don't edit `edges.jsonl`, the caches or
+- Change the graph only through `augment.py apply`. Don't edit `edges.jsonl`, the caches or
   `label_run.json` by hand.
-- Don't apply unreviewed contradictions or qualifiers (`--no-review`) unless you were told to;
-  say so in `notes.md` if you were.
-- Don't delete the caches: they hold paid-for labels and are shared.
+- `apply --no-review` counts claims no review has judged. It is for testing only: don't use it
+  for a graph anyone will read, unless you were told to, and say so in `notes.md` if you were.
+- Don't delete the caches: they hold paid-for claims and are shared.
 - If a step fails in a way rerunning doesn't fix, stop and report its output rather than working
   around it.
 
 ## Reference
 
-- `DESIGN.md` — what each step does and why: scope, the PubMed query, sentences, labels and
-  qualifiers, applying them, caching, open items
-- `reference/rules.md` — step 2's scope rules and the `--rules` file format
-- `reference/work-files.md` — every work file and cache, their fields, and how ids and prompt
+- `DESIGN.md`: what each step does and why: scope, the PubMed query, claims and their checks,
+  grounding, review, how step 6 refines each edge, the gold set, caching, cost, open items
+- `reference/rules.md`: step 1's scope rules, the `--rules` file format and `scope_report.json`
+- `reference/work-files.md`: every work file and cache, their fields, and how ids and prompt
   versions are formed
-- `reference/formats.md` — the gold set, the model reply formats, the review export and import
-  lines
-- `prompts/label.md`, `prompts/review.md` — the two system prompts
+- `reference/formats.md`: the gold set and the model reply formats
+- `prompts/label.md`, `prompts/review.md`, `prompts/repair.md`: the three system prompts, and
+  `prompts/claim-rules.md`, the rules the label and review prompts share

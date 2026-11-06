@@ -5,85 +5,101 @@ Checks a knowledge graph's edges against PubMed, the augmentation stage of KGB-C
 - chooses the edges whose relationships papers state as claims (a drug treats a disease, a gene
   causes one, two proteins bind) and groups them by node pair;
 - searches PubMed for each pair and fetches the abstracts, plus those the edges already cite;
-- has an LLM label every abstract as confirming, contradicting or not bearing on each edge, with
-  a verbatim quote, and propose the Biolink qualifiers the abstracts support;
-- has a stronger model review the labels that would add edges;
-- adds the supporting PMIDs to the original edges' `publications`, and new edges for reviewed
-  contradictions (`negated: true`) and qualifiers.
+- has an LLM write down the claims each abstract makes about the pair, each with its study
+  design, role, hedging, context and a verbatim evidence sentence, and checks every claim in
+  code against Biolink and the abstract;
+- grounds the anatomy the claims name to UBERON;
+- has a stronger model find the evidence sentences code couldn't find, and review every claim
+  that would count;
+- refines every checked edge from its pair's claims, as DESIGN.md's step 6 says: an edge
+  the abstracts support gains their PMIDs in its `publications`, with its support score and
+  evidence, and each more specific statement they make is proposed as a new edge beside the
+  originals, which stay.
 
-The LLM only labels; code does everything else, and every label is cached, so the graph can be
-rebuilt from the cache without calling a model. [`DESIGN.md`](DESIGN.md) explains each step and
-the choices behind it. [`SKILL.md`](SKILL.md) is the workflow an agent follows: run each step,
-read what it wrote, tune the labeling prompt on a sample, choose the model, then run the full
-set.
+The LLM only extracts and reviews claims; code refines, and every claim is cached, so the graph
+can be rebuilt from the cache without calling a model. [`DESIGN.md`](DESIGN.md) explains each
+step and the choices behind it. [`SKILL.md`](SKILL.md) is the workflow an agent follows: run
+each step, read what it wrote, tune the extraction prompt on a sample, choose the model, then
+run the full set.
 
 ## How it works
 
 ```
-select_edges.py     graph            ->  work/: statements, pairs, entities, scope_report.json
-search_pubmed.py    pairs, entities  ->  work/pubmed.jsonl; searches and abstracts to the cache
-write_sentences.py  statements       ->  work/sentences.jsonl
-label_abstracts.py  all of the above ->  labels to the cache; work/label_run.json
-review_labels.py    the labels that add edges -> verdicts to the cache
-apply_labels.py     graph + cache    ->  OUT/nodes.jsonl, OUT/edges.jsonl, work/apply_report.json
-evaluate_models.py  gold set + cache ->  work/evaluate_report.md
-run_all.py          every step but evaluate, in order
+augment.py select     graph            ->  work/: statements, pairs, entities, scope_report.json
+augment.py pubmed     pairs, entities  ->  work/pubmed.jsonl; searches and abstracts to the cache
+augment.py label      pairs + abstracts -> claims, checks and sentence repairs to the cache;
+                                           work/label_run.json
+augment.py ground     the claims       ->  anatomy groundings and the UBERON release to the cache
+augment.py review     graph + claims   ->  verdicts on the claims that would count, to the cache
+augment.py apply      graph + caches   ->  OUT/nodes.jsonl, OUT/edges.jsonl,
+                                           work/refinements.jsonl, work/apply_report.json
+augment.py evaluate   gold set + cache ->  work/evaluate_report.md
+augment.py evaluate --draw N   refinements -> work/gold_pairs.jsonl, the pairs to curate
+augment.py            every step but evaluate, in order
 ```
 
 Each step reads the files of the steps before it, so any one reruns alone. The caches
-(`data/augmentation/cache/`: `pubmed.sqlite`, `labels.sqlite`) hold everything that costs a
-request or tokens; a rerun asks only for what's new.
+(`data/augmentation/cache/`: `pubmed.sqlite`, `labels.sqlite`, `uberon-basic.obo`) hold
+everything that costs a request or tokens; a rerun asks only for what's new.
 
 ## Run it alone
 
-The scripts are `uv run --script` files and install their own dependencies. Run them from the
-repository root: they read the repository's KGX records (`shared/schema.py`) and `.pi/models.json`,
-and their default paths (`data/filter`, `data/augmentation`) are relative to it.
+`scripts/augment.py` is a `uv run --script` file and installs its own dependencies. Run it from
+the repository root: it reads the repository's KGX records (`shared/schema.py`), and its
+default paths (`data/filter`, `data/augmentation`) are relative to it. The models it can call,
+with their prices, are in `scripts/pubmed_evidence/config.py` (`MODELS`).
 
 ```bash
-S=.agents/skills/augmentation/pubmed-evidence/scripts
-$S/select_edges.py --input data/filter --output data/augmentation
-$S/search_pubmed.py --output data/augmentation
-$S/write_sentences.py --output data/augmentation
-$S/label_abstracts.py --output data/augmentation --dry-run     # cost estimate, no calls
-$S/label_abstracts.py --output data/augmentation --model gpt-6-luna
-$S/review_labels.py --output data/augmentation
-$S/apply_labels.py --input data/filter --output data/augmentation
+A=.agents/skills/augmentation/pubmed-evidence/scripts/augment.py
+$A --input data/filter --output data/augmentation select
+$A --output data/augmentation pubmed
+$A --output data/augmentation label --dry-run     # cost estimate, no calls
+$A --output data/augmentation label --model gpt-6-luna
+$A --output data/augmentation ground
+$A --input data/filter --output data/augmentation review
+$A --input data/filter --output data/augmentation apply
 ```
 
-`--help` on any script lists its options. Every script takes `--input` (the graph), `--output`
-(where step 6 writes the augmented graph), `--work` (default `<output>/work`) and `--cache-dir`
-(default `data/augmentation/cache`, or `KGB_AUGMENT_CACHE_DIR` for the shared RENCI drive).
+`--help` lists the steps, and `augment.py STEP --help` a step's options. Every step takes
+`--input` (the graph), `--output` (where step 6 writes the augmented graph), `--work` (default
+`<output>/work`) and `--cache-dir` (default `data/augmentation/cache`, or `KGB_AUGMENT_CACHE_DIR`
+for the shared RENCI drive), before or after the step's name.
 
-| Script | Main options (default) |
+| Step | Main options (default) |
 | --- | --- |
-| `select_edges.py` | `--rules FILE` (built-in rules), `--capped-limit` (10,000), `--min-score` (none) |
-| `search_pubmed.py` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm` |
-| `label_abstracts.py` | `--model` (gpt-5.6-luna), `--prompt FILE`, `--sample N --seed S`, `--gold FILE`, `--dry-run`, `--workers` (8), `--limit N` |
-| `review_labels.py` | `--model` (gpt-5.6-terra), `--export FILE --reviewer NAME`, `--import FILE --reviewer NAME` |
-| `apply_labels.py` | `--infores` (infores:kgbcia-augmentor), `--no-review` |
-| `evaluate_models.py` | `--gold FILE`, `--run MODEL[@PROMPT_VERSION]` (repeatable) |
-| `run_all.py` | `--model`, `--review-model`, `--infores`, `--limit`, `--skip-review` |
+| `select` | `--rules FILE` (built-in rules), `--capped-limit` (10,000), `--min-score` (none) |
+| `pubmed` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm` |
+| `label` | `--model` (gpt-6-luna), `--reasoning-effort E` (the model's: low for gpt-6-luna), `--prompt FILE`, `--sample N --seed S` or `--pairs FILE`, `--dry-run`, `--no-repair`, `--abstracts-per-call` (20), `--workers` (8), `--limit N` |
+| `ground` | `--refresh` |
+| `review` | `--model` (gpt-5.6-terra), `--reasoning-effort E`, `--prompt FILE`, `--limit N` |
+| `apply` | `--no-review` (for testing only), `--species-in-proposals` (off: `config.SPECIES_IN_PROPOSALS`), `--model`, `--prompt-version`, `--reviewer`, `--review-prompt-version` (default: from `label_run.json`) |
+| `evaluate` | `--gold FILE` (`<work>/gold.jsonl`), `--run MODEL[@PROMPT_VERSION]` (repeatable; default the run in `label_run.json`), `--species-in-proposals` (off, as apply); or `--draw N --seed S` (0) to draw the pairs to curate |
+| (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--skip-review` |
 
-Environment: `RENCI_AZURE_API_KEY` for labeling and review (not for `--dry-run`); `NCBI_EMAIL`,
-and `NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search.
+Environment: `RENCI_AZURE_API_KEY` for labeling and review with the RENCI models (not for
+`--dry-run`), and `ANTHROPIC_API_KEY` or an `ant auth login` profile with Claude models;
+labeling also needs the review model's, `RENCI_AZURE_API_KEY` by default, for the sentence
+repair pass. `NCBI_EMAIL`, and `NCBI_API_KEY` for 10 requests a second instead of 3, for the
+PubMed search. `NAMERES_URL` points the ground step at another Name Resolver.
 
-The same library is the pipeline's augmentation stage: `uv run kgb-augment STEP ...` takes the
-same options (steps `select`, `pubmed`, `sentences`, `label`, `review`, `apply`, `evaluate`), and
-`kgb-augment` alone is `run_all.py`.
+The same library is the pipeline's augmentation stage: `uv run kgb-augment` takes the same
+arguments as `augment.py`.
 
 ## Layout
 
 ```
 SKILL.md, DESIGN.md, README.md
-prompts/            label.md and review.md, the two system prompts; a prompt's text sets its
-                    version, so an edit starts fresh labels
-reference/          rules.md (step 2's scope rules), work-files.md (every file and cache),
-                    formats.md (gold set, model replies, the review export/import lines)
-scripts/            one script per step
-scripts/pubmed_evidence/   the library: config, graphio, records, cache, quotes, biolink, llm,
-                    scope, pubmed, sentences, label, review, apply, evaluate, cli
-tests/              no network: PubMed, NodeNorm and the models are faked; Biolink is real
+prompts/            label.md, review.md and repair.md, the three system prompts, and
+                    claim-rules.md, which label.md and review.md both include; a prompt's text
+                    sets its version, so an edit starts fresh answers
+reference/          rules.md (step 1's scope rules), work-files.md (every file and cache),
+                    formats.md (gold set, model replies)
+scripts/            augment.py, the one entry script
+scripts/pubmed_evidence/   the library: config, graphio, records, cache, quotes, biolink,
+                    sentences, llm, scope, pubmed, label, repair, uberon, ground, bundle,
+                    refine (step 6's rules, for one pair), review, apply, evaluate, cli
+tests/              no network: PubMed, NodeNorm, the Name Resolver, UBERON's release and the
+                    models are faked; Biolink is real
 ```
 
 ## Tests
