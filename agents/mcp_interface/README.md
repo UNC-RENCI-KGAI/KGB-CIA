@@ -38,7 +38,8 @@ uv run kgbcia-mcp serve --enable-cypher            # stdio
 uvx kgbcia-mcp serve --enable-cypher               # once published to PyPI
 ```
 
-Building the dump and deploying Neo4j: see `deploy/RUNBOOK.md`.
+The dump preparation and deployment files are intentionally deferred to the next build-order
+step; `deploy/RUNBOOK.md` does not exist yet.
 
 ## Input / output
 
@@ -47,8 +48,9 @@ from the cleaning stage or, until that exists, `data/transformation/merged/`. Ev
 have an `id` and a `kgbcia_source_records` list. Plus the per-source `transform_report.json`
 files under `data/transformation/`.
 
-**Output:** no graph files. This stage produces a Neo4j dump, an artifacts tarball (reports,
-graph metadata, hub list), and a running MCP server.
+**Output:** `check` writes no graph files. `kgbcia-mcp hubs` writes `hubs.json`; the server
+returns JSON-serializable, read-only query results. A later build-order step will produce the
+Neo4j dump and artifact tarball (`manifest.json`, graph metadata, hubs and reports).
 
 ## Neo4j notes
 
@@ -57,4 +59,15 @@ appear, read-only behavior), filled in after the first load.
 
 ## Status
 
-Not implemented yet. Implementation follows the build order in `AGENTS.md`.
+Build-order steps 1 and 2 are implemented: the standalone uv workspace package, streaming
+pre-dump check, configuration and artifact loading, TransformReport lineage, bounded Neo4j
+service, stdio/HTTP FastMCP server, fixed graph tools, optional read-only Cypher, and pipeline
+CLI. Unit tests use an in-code toy graph and a mocked Neo4j service; they do not need a database
+or network. The server starts without Neo4j settings and creates the driver only on the first
+tool query; unconfigured or unreachable Neo4j returns a structured error and hint without
+breaking the MCP session. Pi registration is intentionally deferred until an instance exists.
+
+The package pins FastMCP 3.4.11 (released October 20, 2026). Build-order step 3 remains: dump
+preparation, development artifacts, indexes, Docker, Helm, local-k8s validation and the real
+Neo4j integration smoke tests. Until that load confirms the assumptions, the constants marked
+`TODO(k8s)` in `services/neo4j_service.py` and this README's Neo4j notes remain provisional.
