@@ -1,0 +1,31 @@
+# AWS/k3s overlay. Replace URLs and checksums at install time; never commit credentials.
+neo4j:
+  dumpUrl: https://example.invalid/kgb.dump
+  dumpSha256: 0000000000000000000000000000000000000000000000000000000000000000
+  service:
+    type: LoadBalancer
+    httpEnabled: false
+  storage:
+    size: 500Gi
+  resources:
+    requests:
+      cpu: "4"
+      memory: 24Gi
+    limits:
+      cpu: "8"
+      memory: 32Gi
+  memory:
+    heapInitial: 12Gi
+    heapMax: 16Gi
+    pageCache: 12Gi
+  transaction:
+    timeout: 30s
+    memoryMax: 8Gi
+  bolt:
+    threadPoolMin: 10
+    threadPoolMax: 200
+
+mcp:
+  enabled: false
+  artifactsUrl: https://example.invalid/artifacts.tar.gz
+  artifactsSha256: 0000000000000000000000000000000000000000000000000000000000000000

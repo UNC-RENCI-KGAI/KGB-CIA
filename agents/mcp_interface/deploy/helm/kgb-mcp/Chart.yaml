@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kgb-mcp
+description: KGB-CIA's read-only Neo4j graph and optional MCP HTTP service
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

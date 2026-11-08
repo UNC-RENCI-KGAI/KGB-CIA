@@ -31,6 +31,12 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument("--input", type=Path, help="directory containing nodes.jsonl/edges.jsonl")
+    parser.add_argument(
+        "--report",
+        type=Path,
+        action="append",
+        help="transform_report.json to validate (repeatable; defaults to discovered reports)",
+    )
     args = parser.parse_args(arguments)
     input_dir = args.input or resolve_default_input()
     if input_dir is None:
@@ -39,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
             "data/transformation/merged."
         )
         return 1
-    result = check_graph(input_dir)
+    result = check_graph(input_dir, args.report)
     print(format_check_result(result))
     return 0 if result.ok else 1
 

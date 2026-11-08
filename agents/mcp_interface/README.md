@@ -27,6 +27,8 @@ Pipeline stage: an offline check that the final graph is ready to be dumped into
 
 ```bash
 uv run kgb-mcp check --input <dir with nodes.jsonl and edges.jsonl>
+# For a local development graph whose reports are outside data/transformation/:
+uv run kgb-mcp check --input <graph-dir> --report <transform_report.json>
 ```
 
 MCP server, against a running Neo4j:

@@ -83,3 +83,76 @@ confirm that its command starts.
   `name`, `synonym`, and `equivalent_identifiers`.
 - Unconfirmed ID matching, index names, and full-text list behavior are named constants in
   `neo4j_service.py` with `# TODO(k8s): confirm on first load`.
+
+## Approved build-order step 3 plan
+
+### Files and tests
+
+- Add `deploy/make_dev_artifacts.py`, `deploy/extra_indexes.cypher`,
+  `deploy/prepare_dump.sh`, `deploy/Dockerfile`, and `deploy/.env.example`.
+- Add the `deploy/helm/kgb-mcp/` chart (`Chart.yaml`, helpers, Secret, Service,
+  StatefulSet, optional MCP Deployment/Service/Ingress, and values files), plus
+  `deploy/RUNBOOK.md`. Extend `tests/test_mcp_interface.py` with deterministic
+  unit coverage for synthetic development artifacts and index-script inputs; keep
+  Docker and cluster operations out of CI. Add conditional Helm lint/template
+  coverage when `helm` is available.
+
+### Dump preparation
+
+`make_dev_artifacts.py` will read the local sample's KGX files, synthesize one
+`TransformReport` per primary knowledge source and mappings per
+`(predicate, subject category, object category)`, then write rewritten development
+edges with IDs and list-valued `kgbcia_source_records` (including selected multiple
+entries), marking all reports `source_version: "synthetic"`.
+
+`prepare_dump.sh` will: validate explicit input/output arguments; run the pinned
+ORION image's `orion-neo4j-dump`; load that dump into a temporary writable pinned
+Neo4j 5.26 Community container; execute `extra_indexes.cypher` and
+`CALL db.awaitIndexes()`; collect the required first-load inspection output; run
+`kgbcia-mcp hubs`; stop the temporary database; produce the final kgb dump; create
+an artifacts tarball containing manifest, graph metadata, hubs, and reports; and
+print SHA-256 values for both artifacts. It will clean up temporary containers and
+volumes on success or failure.
+
+`extra_indexes.cypher` will make the idempotent full-text named-thing index and
+relationship `id` range indexes generated from `db.relationshipTypes()`, then await
+indexes. The Dockerfile will build the optional HTTP MCP image from the standalone
+package and run `kgbcia-mcp serve --transport http` as a non-root user.
+
+### Helm chart
+
+The chart will pin one exact Neo4j 5.26 Community patch in `values.yaml`; the
+StatefulSet uses a PVC and checksum-marker-based idempotent download and load init
+containers. Values expose the dump/artifact URLs and checksums, Neo4j password via
+an existing Secret reference, resource/cache/heap/transaction/Bolt limits, and
+Service exposure. The default is private `ClusterIP`, read-only from first start,
+and MCP disabled. The optional MCP resources receive the in-cluster Bolt URI,
+artifacts URL/checksum, health probes, and optional Ingress. `values-dev.yaml` and
+`values-aws.yaml` change only environment sizing/exposure inputs and contain no
+secrets. Templates will be checked with `helm lint` and `helm template` for all
+three values files.
+
+### Runbook outline
+
+1. Build synthetic sample artifacts and run the offline check.
+2. Prepare, inspect, checksum, and record a release dump/artifacts tarball.
+3. Publish both files to the local HTTP file server (development) or S3 (AWS), and
+   update only URLs/checksums in the applicable values inputs.
+4. Create the Neo4j password Secret, install/upgrade the chart, wait for the load,
+   port-forward Bolt, and run health/read-only/lineage verification.
+5. Cover AWS prerequisites and cost hygiene (stop between sessions and delete after
+   judging), without performing AWS work in this step.
+
+### Approved deployment decisions
+
+- The chart and dump preparation pin `neo4j:5.26.31-community`.
+- ORION is pinned to
+  `ghcr.io/robokopu24/orion@sha256:913006ca778f3279e1563078bb25801714db62778e3e35d6e33062eb057b6994`
+  (v2.0.13; Neo4j 5.25.1; `orion-neo4j-dump` verified).
+- Synthetic mappings derive endpoint categories from `nodes.jsonl`, using each node's
+  first category.
+- The chart will reference a pre-created Secret with `neo4j-auth` and
+  `user-password`. It sets `NEO4J_AUTH` from `neo4j-auth`; a post-install hook
+  will idempotently create the values-configured `kgbcia` account in the system
+  database. Whether this works while the graph database is read-only remains a
+  `TODO(k8s)` for the first cluster load.

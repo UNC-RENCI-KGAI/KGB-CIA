@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from neo4j import GraphDatabase, Query
+from neo4j import GraphDatabase
 from neo4j.exceptions import Neo4jError
 from neo4j.graph import Node, Path, Relationship
 from neo4j.spatial import Point
@@ -107,11 +107,12 @@ class Neo4jService:
 
         if row_limit < 1 or row_limit > _MAX_FETCH:
             raise ValueError(f"row_limit must be between 1 and {_MAX_FETCH}")
-        query = Query(cypher, timeout=timeout)
         query_parameters = dict(parameters or {})
 
         def collect(transaction: Any) -> ReadResult:
-            records = transaction.run(query, query_parameters)
+            # ManagedTransaction.run intentionally rejects neo4j.Query objects.
+            # Server-side transaction limits provide the timeout for managed reads.
+            records = transaction.run(cypher, query_parameters)
             rows: list[dict[str, Any]] = []
             truncated = False
             for record in records:
@@ -637,10 +638,8 @@ class Neo4jService:
         return property_name, value
 
     def _explain_read_only(self, cypher: str, parameters: Mapping[str, Any]) -> None:
-        query = Query(f"EXPLAIN {cypher}", timeout=10.0)
-
         def inspect_plan(transaction: Any) -> None:
-            summary = transaction.run(query, dict(parameters)).consume()
+            summary = transaction.run(f"EXPLAIN {cypher}", dict(parameters)).consume()
             query_type = str(summary.query_type).lower()
             if query_type not in {"r", "read_only", "querytype.read_only"}:
                 raise ValueError(

@@ -2,6 +2,8 @@ import asyncio
 import hashlib
 import io
 import json
+import runpy
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -357,6 +359,7 @@ class _FakeRecord:
 
 class _FakeTransaction:
     def run(self, _query, parameters):
+        assert isinstance(_query, str)
         assert parameters == {"answer": 42}
         return [_FakeRecord(1), _FakeRecord(2), _FakeRecord(3)]
 
@@ -995,3 +998,79 @@ def test_lineage_tools_cover_direct_edges_and_exact_and_candidate_explanations(m
         assert "not an exact" in candidate.data["hint"]
 
     asyncio.run(exercise())
+
+
+def test_make_dev_artifacts_creates_synthetic_lineage(tmp_path):
+    module = runpy.run_path(
+        Path(__file__).parents[1] / "agents/mcp_interface/deploy/make_dev_artifacts.py"
+    )
+    input_dir = tmp_path / "sample"
+    input_dir.mkdir()
+    nodes = [
+        {"id": "CHEBI:1", "category": ["biolink:SmallMolecule", "biolink:NamedThing"]},
+        {"id": "NCBIGene:2", "category": ["biolink:Gene", "biolink:NamedThing"]},
+    ]
+    edges = [
+        {
+            "subject": "CHEBI:1",
+            "predicate": "biolink:related_to",
+            "object": "NCBIGene:2",
+            "primary_knowledge_source": "infores:example",
+        }
+        for _ in range(25)
+    ]
+    (input_dir / "nodes.jsonl").write_text("".join(json.dumps(node) + "\n" for node in nodes))
+    (input_dir / "edges.jsonl").write_text("".join(json.dumps(edge) + "\n" for edge in edges))
+
+    output_dir = tmp_path / "synthetic"
+    counts = module["create_dev_artifacts"](input_dir, output_dir)
+
+    assert counts == {"nodes": 2, "edges": 25, "reports": 1}
+    report_path = next((output_dir / "reports").glob("**/transform_report.json"))
+    report = json.loads(report_path.read_text())
+    assert check_graph(output_dir, [report_path]).ok
+    assert report["source_version"] == "synthetic"
+    mapping = report["mappings"][0]
+    assert (mapping["subject_category"], mapping["object_category"]) == (
+        "biolink:SmallMolecule",
+        "biolink:Gene",
+    )
+    rewritten = [json.loads(line) for line in (output_dir / "edges.jsonl").read_text().splitlines()]
+    assert all(edge["id"].startswith("synthetic-") for edge in rewritten)
+    assert all(isinstance(edge["kgbcia_source_records"], list) for edge in rewritten)
+    assert len(rewritten[-1]["kgbcia_source_records"]) == 2
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_helm_chart_lints_and_templates_all_values_files():
+    chart = Path(__file__).parents[1] / "agents/mcp_interface/deploy/helm/kgb-mcp"
+    for values_name in ("values.yaml", "values-dev.yaml", "values-aws.yaml"):
+        values = chart / values_name
+        for command in (
+            ["helm", "lint", str(chart), "-f", str(values)],
+            ["helm", "template", "kgb-mcp", str(chart), "-f", str(values)],
+        ):
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_dump_scripts_pin_images_and_create_idempotent_indexes():
+    root = Path(__file__).parents[1] / "agents/mcp_interface/deploy"
+    preparation = (root / "prepare_dump.sh").read_text()
+    indexes = (root / "extra_indexes.cypher").read_text()
+    assert "neo4j:5.26.31-community" in preparation
+    orion_image = (
+        "ghcr.io/robokopu24/orion@sha256:"
+        "913006ca778f3279e1563078bb25801714db62778e3e35d6e33062eb057b6994"
+    )
+    assert orion_image in preparation
+    assert "orion-neo4j-dump /input/nodes.jsonl /input/edges.jsonl /work/orion" in preparation
+    assert "kgbcia-mcp hubs" in preparation
+    assert "cypher-shell --format plain" in preparation
+    assert "sed '1d'" in preparation
+    assert 'docker exec "$container_name" mkdir -p /data/dump-export' in preparation
+    assert 'neo4j-admin database dump "$DATABASE" --to-path=/data/dump-export' in preparation
+    assert 'docker cp "$dump_container:/data/dump-export/$DATABASE.dump"' in preparation
+    assert "kgbcia_relationship_id_" in preparation
+    assert "CREATE FULLTEXT INDEX kgbcia_node_fulltext IF NOT EXISTS" in indexes
+    assert "CALL db.awaitIndexes()" in indexes

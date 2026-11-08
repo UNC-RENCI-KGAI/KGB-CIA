@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kgb-mcp.fullname" . }}-create-user
+  labels:
+    {{- include "kgb-mcp.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 12
+  template:
+    metadata:
+      labels:
+        {{- include "kgb-mcp.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-user
+          image: {{ .Values.neo4j.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NEO4J_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "secret.existingSecret is required" .Values.secret.existingSecret }}
+                  key: {{ .Values.secret.adminAuthKey }}
+            - name: NEO4J_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.existingSecret }}
+                  key: {{ .Values.secret.userPasswordKey }}
+            - name: NEO4J_APP_USER
+              value: {{ .Values.neo4j.user | quote }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              case "$NEO4J_APP_USER" in *[!A-Za-z0-9_-]*|'') exit 2;; esac
+              admin_password="${NEO4J_AUTH#neo4j/}"
+              until cypher-shell -a bolt://{{ include "kgb-mcp.neo4jService" . }}:7687 \
+                -u neo4j -p "$admin_password" -d system 'RETURN 1' >/dev/null 2>&1; do sleep 5; done
+              cypher-shell -a bolt://{{ include "kgb-mcp.neo4jService" . }}:7687 \
+                -u neo4j -p "$admin_password" -d system -P app_password="$NEO4J_APP_PASSWORD" \
+                "CREATE USER $NEO4J_APP_USER IF NOT EXISTS SET PASSWORD \$app_password CHANGE NOT REQUIRED"

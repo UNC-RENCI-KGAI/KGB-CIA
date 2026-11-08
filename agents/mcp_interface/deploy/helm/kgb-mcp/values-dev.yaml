@@ -1,0 +1,26 @@
+# Local-k8s development overlay. Supply reachable URLs and real checksums at install time.
+neo4j:
+  dumpUrl: https://stars.renci.org/var/data_services/kgbcia/kgb.dump
+  dumpSha256: 5f3e7f0fdad1074ff0ff0eaea23ce95eb98a2a04639cc7b38d15bbe4809b0cc5
+  service:
+    type: NodePort
+    httpEnabled: true
+  storage:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  memory:
+    heapInitial: 1Gi
+    heapMax: 2Gi
+    pageCache: 1Gi
+
+mcp:
+  # The primary deployment uses local stdio MCP servers; enable only for HTTP-only clients.
+  enabled: false
+  artifactsUrl: https://stars.renci.org/var/data_services/kgbcia/artifacts.tar.gz
+  artifactsSha256: 3ec97998f4716dffe7be69c13327b79ad1529c1b974c3ff228453486702cae56
