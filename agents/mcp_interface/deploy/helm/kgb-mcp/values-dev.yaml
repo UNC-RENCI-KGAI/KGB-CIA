@@ -3,7 +3,8 @@ neo4j:
   dumpUrl: https://stars.renci.org/var/data_services/kgbcia/kgb.dump
   dumpSha256: 5f3e7f0fdad1074ff0ff0eaea23ce95eb98a2a04639cc7b38d15bbe4809b0cc5
   service:
-    type: LoadBalancer
+    # Local Pi testing uses kubectl port-forward; no LoadBalancer controller is required.
+    type: ClusterIP
     httpEnabled: true
   storage:
     size: 5Gi
@@ -11,9 +12,11 @@ neo4j:
     requests:
       cpu: 500m
       memory: 2Gi
+      ephemeral-storage: 512Mi
     limits:
       cpu: "2"
       memory: 4Gi
+      ephemeral-storage: 2Gi
   memory:
     heapInitial: 1G
     heapMax: 2G

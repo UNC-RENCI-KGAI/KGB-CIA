@@ -44,6 +44,8 @@ spec:
               wget -qO /data/import/neo4j.dump.download '{{ required "neo4j.dumpUrl is required" .Values.neo4j.dumpUrl }}'
               echo "$expected  /data/import/neo4j.dump.download" | sha256sum -c -
               mv /data/import/neo4j.dump.download /data/import/neo4j.dump
+          resources:
+            {{- toYaml .Values.neo4j.initResources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data
@@ -64,6 +66,8 @@ spec:
           securityContext:
             runAsUser: 7474
             runAsGroup: 7474
+          resources:
+            {{- toYaml .Values.neo4j.initResources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data

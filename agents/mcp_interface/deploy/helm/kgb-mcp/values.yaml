@@ -29,9 +29,20 @@ neo4j:
     requests:
       cpu: "1"
       memory: 2Gi
+      ephemeral-storage: 512Mi
     limits:
       cpu: "2"
       memory: 4Gi
+      ephemeral-storage: 2Gi
+  initResources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+      ephemeral-storage: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+      ephemeral-storage: 1Gi
   # Neo4j accepts decimal-style size suffixes (G, M), unlike Kubernetes resources.
   memory:
     heapInitial: 1G

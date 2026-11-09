@@ -11,9 +11,11 @@ neo4j:
     requests:
       cpu: "4"
       memory: 24Gi
+      ephemeral-storage: 2Gi
     limits:
       cpu: "8"
       memory: 32Gi
+      ephemeral-storage: 10Gi
   memory:
     heapInitial: 12G
     heapMax: 16G

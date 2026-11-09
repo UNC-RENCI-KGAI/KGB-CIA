@@ -37,8 +37,16 @@ spec:
             - |
               case "$NEO4J_APP_USER" in *[!A-Za-z0-9_-]*|'') exit 2;; esac
               admin_password="${NEO4J_AUTH#neo4j/}"
+              # `RETURN` is a user-database query and is rejected by `system`.
+              # Use the graph database only to wait for Bolt/authentication, then
+              # switch to `system` for the administrative CREATE USER command.
               until cypher-shell -a bolt://{{ include "kgb-mcp.neo4jService" . }}:7687 \
-                -u neo4j -p "$admin_password" -d system 'RETURN 1' >/dev/null 2>&1; do sleep 5; done
+                -u neo4j -p "$admin_password" -d {{ .Values.neo4j.database | quote }} 'RETURN 1' >/dev/null 2>&1; do sleep 5; done
+              # cypher-shell parameters use `name => Cypher-literal` syntax. Escape
+              # backslashes and quotes before embedding the Secret value as a literal.
+              app_password_literal=$(printf '%s' "$NEO4J_APP_PASSWORD" | sed \
+                -e 's/\\/\\\\/g' -e "s/'/\\\\'/g")
               cypher-shell -a bolt://{{ include "kgb-mcp.neo4jService" . }}:7687 \
-                -u neo4j -p "$admin_password" -d system -P app_password="$NEO4J_APP_PASSWORD" \
+                -u neo4j -p "$admin_password" -d system \
+                --param "app_password => '$app_password_literal'" \
                 "CREATE USER $NEO4J_APP_USER IF NOT EXISTS SET PASSWORD \$app_password CHANGE NOT REQUIRED"
