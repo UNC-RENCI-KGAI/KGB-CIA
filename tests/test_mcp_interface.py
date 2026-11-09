@@ -1052,6 +1052,9 @@ def test_helm_chart_lints_and_templates_all_values_files():
         ):
             result = subprocess.run(command, capture_output=True, text=True, check=False)
             assert result.returncode == 0, result.stdout + result.stderr
+            if command[1] == "template":
+                assert "/data/import/neo4j.dump" in result.stdout
+                assert ".kgbcia-load.sha256" in result.stdout
 
 
 def test_dump_scripts_pin_images_and_create_idempotent_indexes():

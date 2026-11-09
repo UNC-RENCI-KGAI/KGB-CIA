@@ -19,6 +19,7 @@ neo4j:
   service:
     type: ClusterIP
     annotations: {}
+    loadBalancerIP: ""
     loadBalancerSourceRanges: []
     httpEnabled: false
   storage:
@@ -31,13 +32,14 @@ neo4j:
     limits:
       cpu: "2"
       memory: 4Gi
+  # Neo4j accepts decimal-style size suffixes (G, M), unlike Kubernetes resources.
   memory:
-    heapInitial: 1Gi
-    heapMax: 2Gi
-    pageCache: 1Gi
+    heapInitial: 1G
+    heapMax: 2G
+    pageCache: 1G
   transaction:
     timeout: 30s
-    memoryMax: 1Gi
+    memoryMax: 1G
   bolt:
     threadPoolMin: 5
     threadPoolMax: 100

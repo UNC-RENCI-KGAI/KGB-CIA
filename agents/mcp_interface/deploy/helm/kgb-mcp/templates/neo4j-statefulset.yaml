@@ -33,15 +33,17 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - |
-              marker=/data/.kgbcia-dump.sha256
+              # neo4j-admin discovers <database>.dump under --from-path, regardless
+              # of the public release filename (which is intentionally kgb.dump).
+              marker=/data/.kgbcia-load.sha256
               expected='{{ required "neo4j.dumpSha256 is required" .Values.neo4j.dumpSha256 }}'
-              if [ -f "$marker" ] && [ "$(cat "$marker")" = "$expected" ] && [ -f /data/import/kgb.dump ]; then
+              if [ -f "$marker" ] && [ "$(cat "$marker")" = "$expected" ] && [ -f /data/import/neo4j.dump ]; then
                 exit 0
               fi
               mkdir -p /data/import
-              wget -qO /data/import/kgb.dump.download '{{ required "neo4j.dumpUrl is required" .Values.neo4j.dumpUrl }}'
-              echo "$expected  /data/import/kgb.dump.download" | sha256sum -c -
-              mv /data/import/kgb.dump.download /data/import/kgb.dump
+              wget -qO /data/import/neo4j.dump.download '{{ required "neo4j.dumpUrl is required" .Values.neo4j.dumpUrl }}'
+              echo "$expected  /data/import/neo4j.dump.download" | sha256sum -c -
+              mv /data/import/neo4j.dump.download /data/import/neo4j.dump
           volumeMounts:
             - name: data
               mountPath: /data

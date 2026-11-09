@@ -15,12 +15,12 @@ neo4j:
       cpu: "8"
       memory: 32Gi
   memory:
-    heapInitial: 12Gi
-    heapMax: 16Gi
-    pageCache: 12Gi
+    heapInitial: 12G
+    heapMax: 16G
+    pageCache: 12G
   transaction:
     timeout: 30s
-    memoryMax: 8Gi
+    memoryMax: 8G
   bolt:
     threadPoolMin: 10
     threadPoolMax: 200

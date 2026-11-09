@@ -3,7 +3,7 @@ neo4j:
   dumpUrl: https://stars.renci.org/var/data_services/kgbcia/kgb.dump
   dumpSha256: 5f3e7f0fdad1074ff0ff0eaea23ce95eb98a2a04639cc7b38d15bbe4809b0cc5
   service:
-    type: NodePort
+    type: LoadBalancer
     httpEnabled: true
   storage:
     size: 5Gi
@@ -15,9 +15,9 @@ neo4j:
       cpu: "2"
       memory: 4Gi
   memory:
-    heapInitial: 1Gi
-    heapMax: 2Gi
-    pageCache: 1Gi
+    heapInitial: 1G
+    heapMax: 2G
+    pageCache: 1G
 
 mcp:
   # The primary deployment uses local stdio MCP servers; enable only for HTTP-only clients.

@@ -10,6 +10,9 @@ metadata:
   {{- end }}
 spec:
   type: {{ .Values.neo4j.service.type }}
+  {{- with .Values.neo4j.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
   {{- with .Values.neo4j.service.loadBalancerSourceRanges }}
   loadBalancerSourceRanges:
     {{- toYaml . | nindent 4 }}
