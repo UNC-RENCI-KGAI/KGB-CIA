@@ -16,5 +16,7 @@ Uses the record types in `shared/schema.py`. Describe the exact files here once 
 
 ## Status
 
-See the tracking issue for this team on GitHub. Replace this section with what works, what
-doesn't, and how to try it.
+The `kgb-filter` command is still a stub. The `describe-graph` skill
+(`.agents/skills/filter/describe-graph/`) does the first half of the filter's job: given the
+user's own source, it measures how much of it the pre-built sources already share and
+recommends which sources to focus on, with that list as the default.
