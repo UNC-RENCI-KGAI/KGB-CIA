@@ -34,14 +34,21 @@ uv run kgb-mcp check --input <graph-dir> --report <transform_report.json>
 MCP server, against a running Neo4j:
 
 ```bash
-export NEO4J_URI=neo4j://<host>:7687 NEO4J_USER=<user> NEO4J_PASSWORD=<password>
+export NEO4J_URI=bolt://<host>:7687 NEO4J_USER=<user> NEO4J_PASSWORD=<password>
 export KGB_MCP_ARTIFACTS=<dir or URL of the artifacts tarball>
+export KGB_MCP_ARTIFACTS_SHA256=<required when artifacts is a URL>
 uv run kgbcia-mcp serve --enable-cypher            # stdio
 uvx kgbcia-mcp serve --enable-cypher               # once published to PyPI
 ```
 
-The dump preparation and deployment files are intentionally deferred to the next build-order
-step; `deploy/RUNBOOK.md` does not exist yet.
+For the local cluster, port-forward Bolt and source the local ignored deployment environment
+before starting Pi or the server:
+
+```bash
+kubectl -n <namespace> port-forward svc/kgb-mcp-neo4j 7687:7687
+set -a; . agents/mcp_interface/deploy/.env; set +a
+uv run kgbcia-mcp serve --enable-cypher
+```
 
 ## Input / output
 
@@ -51,25 +58,35 @@ have an `id` and a `kgbcia_source_records` list. Plus the per-source `transform_
 files under `data/transformation/`.
 
 **Output:** `check` writes no graph files. `kgbcia-mcp hubs` writes `hubs.json`; the server
-returns JSON-serializable, read-only query results. A later build-order step will produce the
+returns JSON-serializable, read-only query results. `deploy/prepare_dump.sh` produces the
 Neo4j dump and artifact tarball (`manifest.json`, graph metadata, hubs and reports).
 
 ## Neo4j notes
 
-Facts about the loaded database that the server relies on (index names, how IDs and lists
-appear, read-only behavior), filled in after the first load.
+Confirmed on the local-k8s Neo4j 5.26.31 load in November 2026:
+
+- Every graph node has the ``biolink:NamedThing`` anchor label. Categories are labels, not a
+  `category` property; node CURIEs are in `id`.
+- Relationship IDs are stored in `r.id`; provenance lists, including
+  `kgbcia_source_records`, return as native Neo4j string arrays.
+- `kgbcia_node_fulltext` is online over `name`, `synonym`, and the StringArray
+  `equivalent_identifiers` property. The generated `kgbcia_relationship_id_*` range indexes are
+  online for relationship `id` properties.
+- The chart's `server.databases.default_to_read_only=true` rejects a graph `CREATE` through a
+  raw driver session as well as through `query_cypher`.
+- Neo4j Community permits the separate `kgbcia` account to create and drop users in `system`
+  despite the graph database being read-only. This is a documented security risk in the runbook;
+  before any public deployment the maintainer must explicitly accept it or choose the
+  `NEO4J_AUTH=none` alternative.
 
 ## Status
 
-Build-order steps 1 and 2 are implemented: the standalone uv workspace package, streaming
+Build-order steps 1 through 3 are implemented: the standalone uv workspace package, streaming
 pre-dump check, configuration and artifact loading, TransformReport lineage, bounded Neo4j
-service, stdio/HTTP FastMCP server, fixed graph tools, optional read-only Cypher, and pipeline
-CLI. Unit tests use an in-code toy graph and a mocked Neo4j service; they do not need a database
-or network. The server starts without Neo4j settings and creates the driver only on the first
-tool query; unconfigured or unreachable Neo4j returns a structured error and hint without
-breaking the MCP session. Pi registration is intentionally deferred until an instance exists.
+service, stdio/HTTP FastMCP server, dump preparation, indexes, Docker image, Helm chart, and
+local-k8s deployment. The live integration smoke test exercises graph information, schema,
+node and edge lookup, paths, connected nodes, lineage, Cypher reads, and raw-driver write
+rejection against the 200-abstract development graph.
 
-The package pins FastMCP 3.4.11 (released October 20, 2026). Build-order step 3 remains: dump
-preparation, development artifacts, indexes, Docker, Helm, local-k8s validation and the real
-Neo4j integration smoke tests. Until that load confirms the assumptions, the constants marked
-`TODO(k8s)` in `services/neo4j_service.py` and this README's Neo4j notes remain provisional.
+The package pins FastMCP 3.4.11 (released October 20, 2026). Pi registration is configured for
+local stdio use; source the ignored deployment environment before launching Pi.

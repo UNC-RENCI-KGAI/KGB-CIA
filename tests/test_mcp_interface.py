@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import io
 import json
+import os
 import runpy
 import shutil
 import subprocess
@@ -36,6 +37,8 @@ from kgbcia_mcp.services.neo4j_service import (
     ReadResult,
     serialize_neo4j_value,
 )
+from neo4j import GraphDatabase
+from neo4j.exceptions import Neo4jError
 from neo4j.graph import Graph as Neo4jGraph
 from neo4j.graph import Node as Neo4jNode
 from neo4j.spatial import CartesianPoint
@@ -1055,6 +1058,88 @@ def test_helm_chart_lints_and_templates_all_values_files():
             if command[1] == "template":
                 assert "/data/import/neo4j.dump" in result.stdout
                 assert ".kgbcia-load.sha256" in result.stdout
+
+
+requires_neo4j = pytest.mark.skipif(
+    not os.getenv("NEO4J_URI"), reason="set NEO4J_URI to run the Neo4j integration smoke test"
+)
+
+
+@requires_neo4j
+def test_integration_smoke_against_configured_neo4j():
+    """Exercise the deployed graph, provenance, and read-only enforcement."""
+
+    settings = Settings.from_env()
+    settings.require_neo4j()
+    bundle = load_artifacts(settings.artifacts or "", settings.artifacts_sha256)
+    service = Neo4jService(
+        settings.neo4j_uri,
+        settings.neo4j_user,
+        settings.neo4j_password,
+        settings.neo4j_database,
+        lineage=LineageIndex(bundle.reports),
+        graph_metadata=bundle.graph_metadata,
+        hubs=server_module._hub_ids(bundle.hubs),
+    )
+    try:
+        info = service.get_graph_info()
+        schema = service.get_schema()
+        assert info["node_count"] > 0
+        assert info["edge_count"] > 0
+        assert "biolink:NamedThing" not in schema["categories"]
+        assert schema["predicates"]
+
+        edge_row = service.execute_read(
+            """
+            MATCH (source:`biolink:NamedThing`)-[edge]->(target:`biolink:NamedThing`)
+            RETURN source.id AS source_id, target.id AS target_id, edge.id AS edge_id,
+                   [label IN labels(target) WHERE label <> $anchor][0] AS target_category
+            LIMIT 1
+            """,
+            {"anchor": "biolink:NamedThing"},
+            row_limit=1,
+        ).rows[0]
+        source_id = edge_row["source_id"]
+        target_id = edge_row["target_id"]
+        edge_id = edge_row["edge_id"]
+
+        assert service.search_nodes(source_id)["results"]
+        assert service.get_node(source_id)["node"]["id"] == source_id
+        assert service.summarize_node_edges(source_id)["total"] > 0
+        node_edges = service.get_node_edges(source_id)
+        assert node_edges["results"]
+        assert node_edges["results"][0]["edge"]["primary_knowledge_source"]
+        direct = service.get_edges_between(source_id, target_id, include_lineage=True)
+        assert direct["results"]
+        assert direct["results"][0]["lineage"]["provenance"]["primary_knowledge_source"]
+        assert service.find_paths(source_id, target_id, max_hops=1)["results"]
+        assert service.find_connected_nodes(source_id, edge_row["target_category"], max_hops=1)[
+            "results"
+        ]
+        explanation = service.explain_edge(edge_id)
+        assert explanation["provenance"]["primary_knowledge_source"]
+        assert service.query_cypher("MATCH (n:`biolink:NamedThing`) RETURN count(n) AS node_count")[
+            "results"
+        ]
+        with pytest.raises(ValueError, match="write and administrative"):
+            service.query_cypher("CREATE (:`biolink:NamedThing` {id: 'forbidden'})")
+    finally:
+        service.close()
+
+    driver = GraphDatabase.driver(
+        settings.neo4j_uri,
+        auth=(settings.neo4j_user, settings.neo4j_password),
+    )
+    try:
+        with pytest.raises(Neo4jError):
+            with driver.session(database=settings.neo4j_database) as session:
+                session.execute_write(
+                    lambda transaction: transaction.run(
+                        "CREATE (:`biolink:NamedThing` {id: 'kgbcia:forbidden-write'})"
+                    ).consume()
+                )
+    finally:
+        driver.close()
 
 
 def test_dump_scripts_pin_images_and_create_idempotent_indexes():

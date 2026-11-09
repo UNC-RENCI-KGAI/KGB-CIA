@@ -15,17 +15,14 @@ from neo4j.time import Date, DateTime, Duration, Time
 
 from ..lineage import LineageIndex
 
-# TODO(k8s): confirm on first load that every node carries this anchor label.
+# Confirmed on the local-k8s Neo4j 5.26.31 load (November 2026).
 NAMED_THING_LABEL = "biolink:NamedThing"
-# TODO(k8s): confirm on first load that node CURIEs match through this property.
 NODE_ID_PROPERTY = "id"
-# TODO(k8s): confirm on first load that edge IDs match relationship property `id`.
 EDGE_ID_PROPERTY = "id"
-# TODO(k8s): confirm on first load against SHOW INDEXES.
 FULLTEXT_INDEX_NAME = "kgbcia_node_fulltext"
-# TODO(k8s): confirm on first load that list properties are accepted by Neo4j full-text indexes.
+# Neo4j 5.26 accepts the equivalent-identifiers StringArray property in this index.
 FULLTEXT_INDEX_PROPERTIES = ("name", "synonym", "equivalent_identifiers")
-# TODO(k8s): confirm generated relationship index names against SHOW INDEXES.
+# Generated per relationship type; SHOW INDEXES confirmed these names and id properties.
 RELATIONSHIP_ID_INDEX_PREFIX = "kgbcia_relationship_id_"
 
 _MAX_LIMIT = 500

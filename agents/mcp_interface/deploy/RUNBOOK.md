@@ -69,11 +69,20 @@ maintainer-operated helper, passing the existing namespace. It creates or update
 bash agents/mcp_interface/deploy/create_neo4j_secret.sh <namespace>
 ```
 
+For a password rotation, supply the existing Neo4j admin password and the new `kgbcia`
+password, then run `helm upgrade`. The post-upgrade Job reconciles the database account to
+`user-password`; updating the Secret alone does not change an already-created Neo4j user.
+
 Passwords traverse plain Bolt in this initial deployment. Treat the network path as
 trusted; TLS is intentionally out of scope. Neo4j Community has no role-based access
 control, so the database-level read-only setting and resource limits are the protections.
-The first cluster run must also confirm whether the secondary account can manage users or
-passwords despite read-only graph data.
+
+**Confirmed on local k8s (November 2026):** the separate `kgbcia` account can create and
+drop users in `system` even while graph writes are rejected by the read-only database setting.
+This is an accepted risk only if the maintainer explicitly approves it before public exposure.
+Otherwise use the alternative `NEO4J_AUTH=none` deployment pattern with read-only and resource
+limits; it avoids sending a reusable Bolt password over plain text but also removes password
+authentication entirely.
 
 ## 5. Install or upgrade the local cluster deployment
 

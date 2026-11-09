@@ -50,3 +50,9 @@ spec:
                 -u neo4j -p "$admin_password" -d system \
                 --param "app_password => '$app_password_literal'" \
                 "CREATE USER $NEO4J_APP_USER IF NOT EXISTS SET PASSWORD \$app_password CHANGE NOT REQUIRED"
+              # Keep the database credential synchronized if the Secret is rotated
+              # after an earlier successful install.
+              cypher-shell -a bolt://{{ include "kgb-mcp.neo4jService" . }}:7687 \
+                -u neo4j -p "$admin_password" -d system \
+                --param "app_password => '$app_password_literal'" \
+                "ALTER USER $NEO4J_APP_USER SET PASSWORD \$app_password CHANGE NOT REQUIRED"
