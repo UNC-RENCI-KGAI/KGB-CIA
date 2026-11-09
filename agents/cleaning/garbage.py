@@ -10,12 +10,16 @@ An edge is dropped, checked in this order, when it:
 - `no_primary_knowledge_source`: has no provenance, so the MCP interface can't explain it.
 - `dangling`: names a node that isn't in nodes.jsonl.
 - `unresolved_node`: touches a node NodeNorm couldn't resolve (no equivalent identifiers).
-  Pass `keep_unresolved=True` to keep these.
-- `drop_list:<name>`: matches a precomputed drop list, such as an evidence check's output.
+- `drop_list:<name>`: is listed in `<name>.jsonl` in the drop-lists directory, such as an
+  evidence check's output.
 
-A node is dropped when it is `unresolved` (unless kept) or `orphan`: no kept edge touches it.
-Edges kept but worth a look are counted as flags: `self_loop`, `knowledge_level_not_provided`
-and `agent_type_not_provided`.
+A node is dropped when it is `unresolved` or `orphan`: no kept edge touches it. Edges kept but
+worth a look are counted as flags: `self_loop`, `knowledge_level_not_provided` and
+`agent_type_not_provided`.
+
+Nothing here is optional. A source that loses most of its edges to unresolved nodes is listed
+under `attention` with the CURIE prefixes responsible: the fix is in that source's metadata (an
+id pattern or prefix), not in keeping ids nothing else can join.
 
 Drop lists key edges by subject, predicate, object and primary knowledge source, not by edge
 id: the merge assigns new uuids on every run, so ids wouldn't match the next build.
@@ -32,6 +36,7 @@ from pathlib import Path
 EdgeKey = tuple[str, str, str, str]
 
 EXAMPLES_PER_REASON = 5
+ATTENTION_SHARE = 0.5  # a source losing at least this share of its edges is listed under attention
 
 
 def edge_key(edge: dict) -> EdgeKey:
@@ -65,6 +70,13 @@ def load_drop_list(path: Path) -> set[EdgeKey]:
     return keys
 
 
+def load_drop_lists(directory: Path) -> dict[str, set[EdgeKey]]:
+    """Every `*.jsonl` drop list in a directory, by file stem. A missing directory means none."""
+    if not directory.is_dir():
+        return {}
+    return {path.stem: load_drop_list(path) for path in sorted(directory.glob("*.jsonl"))}
+
+
 def is_resolved(node: dict) -> bool:
     """Whether NodeNorm resolved the node. ORION leaves equivalent_identifiers empty when not."""
     return bool(node.get("equivalent_identifiers"))
@@ -92,6 +104,7 @@ class Report:
     edges_out: int = 0
     dropped_edges: Counter = field(default_factory=Counter)
     dropped_edges_by_source: dict = field(default_factory=lambda: defaultdict(Counter))
+    unresolved_prefixes_by_source: dict = field(default_factory=lambda: defaultdict(Counter))
     dropped_nodes: Counter = field(default_factory=Counter)
     unresolved_nodes_by_prefix: Counter = field(default_factory=Counter)
     flags: Counter = field(default_factory=Counter)
@@ -103,11 +116,32 @@ class Report:
         if len(self.examples[reason]) < EXAMPLES_PER_REASON:
             self.examples[reason].append(record)
 
+    def attention(self) -> list[dict]:
+        """Sources that lost at least ATTENTION_SHARE of their edges, worst first."""
+        found = []
+        for source, dropped in self.dropped_edges_by_source.items():
+            lost = sum(dropped.values())
+            total = lost + self.edges_out_by_source[source]
+            if total and lost / total >= ATTENTION_SHARE:
+                prefixes = self.unresolved_prefixes_by_source.get(source, Counter())
+                found.append(
+                    {
+                        "source": source,
+                        "edges_in": total,
+                        "edges_out": total - lost,
+                        "share_dropped": round(lost / total, 3),
+                        "reasons": dict(dropped.most_common()),
+                        "unresolved_prefixes": dict(prefixes.most_common(5)),
+                    }
+                )
+        return sorted(found, key=lambda a: (-a["share_dropped"], -a["edges_in"]))
+
     def to_dict(self) -> dict:
         return {
             "settings": self.settings,
             "nodes": {"in": self.nodes_in, "out": self.nodes_out},
             "edges": {"in": self.edges_in, "out": self.edges_out},
+            "attention": self.attention(),
             "dropped_edges": dict(self.dropped_edges.most_common()),
             "dropped_edges_by_source": {
                 source: dict(counts.most_common())
@@ -129,7 +163,6 @@ def edge_drop_reason(
     edge: dict,
     known: set[str],
     unresolved: set[str],
-    keep_unresolved: bool,
     drop_lists: dict[str, set[EdgeKey]],
 ) -> str | None:
     """Why this edge is dropped, or None to keep it."""
@@ -140,7 +173,7 @@ def edge_drop_reason(
         return "no_primary_knowledge_source"
     if subject not in known or obj not in known:
         return "dangling"
-    if not keep_unresolved and (subject in unresolved or obj in unresolved):
+    if subject in unresolved or obj in unresolved:
         return "unresolved_node"
     if drop_lists:
         key = edge_key(edge)
@@ -160,30 +193,25 @@ def edge_flags(edge: dict) -> Iterable[str]:
         yield "agent_type_not_provided"
 
 
-def collect(
-    input_dir: Path,
-    output_dir: Path,
-    *,
-    keep_unresolved: bool = False,
-    drop_list_paths: Iterable[Path] = (),
-) -> Report:
+def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = None) -> Report:
     """Clean input_dir's nodes.jsonl and edges.jsonl into output_dir, and return the report.
 
-    Three streaming passes, so only node ids are held in memory: nodes (which ids exist and
-    which are unresolved), edges (filter, and note which nodes kept edges touch), nodes again
-    (write the ones still in use).
+    Drop lists are read from drop_lists_dir, by default `output_dir/drop_lists`. Three streaming
+    passes, so only node ids are held in memory: nodes (which ids exist and which are
+    unresolved), edges (filter, and note which nodes kept edges touch), nodes again (write the
+    ones still in use).
     """
     nodes_path, edges_path = input_dir / "nodes.jsonl", input_dir / "edges.jsonl"
     for path in (nodes_path, edges_path):
         if not path.exists():
             raise FileNotFoundError(f"no {path.name} in {input_dir}")
-    drop_list_paths = list(drop_list_paths)
-    drop_lists = {path.stem: load_drop_list(path) for path in drop_list_paths}
+    drop_lists_dir = drop_lists_dir or output_dir / "drop_lists"
+    drop_lists = load_drop_lists(drop_lists_dir)
     report = Report(
         settings={
-            "input": str(input_dir),
-            "keep_unresolved": keep_unresolved,
-            "drop_lists": {str(path): len(drop_lists[path.stem]) for path in drop_list_paths},
+            "input": str(input_dir.resolve()),
+            "drop_lists_dir": str(drop_lists_dir),
+            "drop_lists": {name: len(keys) for name, keys in drop_lists.items()},
         }
     )
 
@@ -205,11 +233,14 @@ def collect(
         for edge in read_jsonl(edges_path):
             report.edges_in += 1
             source = edge.get("primary_knowledge_source") or "(none)"
-            reason = edge_drop_reason(edge, known, unresolved, keep_unresolved, drop_lists)
+            reason = edge_drop_reason(edge, known, unresolved, drop_lists)
             if reason:
                 report.dropped_edges[reason] += 1
                 report.dropped_edges_by_source[source][reason] += 1
                 report.example(reason, edge)
+                if reason == "unresolved_node":
+                    for end in {edge["subject"], edge["object"]} & unresolved:
+                        report.unresolved_prefixes_by_source[source][prefix(end)] += 1
                 continue
             for flag in edge_flags(edge):
                 report.flags[flag] += 1
@@ -225,7 +256,7 @@ def collect(
             node_id = node.get("id")
             if not node_id:
                 reason = "malformed"
-            elif not keep_unresolved and node_id in unresolved:
+            elif node_id in unresolved:
                 reason = "unresolved"
             elif node_id not in used:
                 reason = "orphan"
@@ -248,6 +279,9 @@ def summary(report: Report) -> str:
         f"Nodes: {report.nodes_in:,} in, {report.nodes_out:,} out",
         f"Edges: {report.edges_in:,} in, {report.edges_out:,} out",
     ]
+    if report.settings["drop_lists"]:
+        lists = ", ".join(f"{k} ({v:,})" for k, v in report.settings["drop_lists"].items())
+        lines.append(f"Drop lists applied: {lists}")
     for title, counts in (
         ("Dropped edges", report.dropped_edges),
         ("Dropped nodes", report.dropped_nodes),
@@ -256,7 +290,13 @@ def summary(report: Report) -> str:
         if counts:
             lines.append(f"{title}:")
             lines += [f"  {reason}: {n:,}" for reason, n in counts.most_common()]
-    if report.unresolved_nodes_by_prefix:
-        top = ", ".join(f"{p} {n:,}" for p, n in report.unresolved_nodes_by_prefix.most_common(5))
-        lines.append(f"Unresolved nodes by prefix (top 5): {top}")
+    attention = report.attention()
+    if attention:
+        lines.append("Needs attention (fix in the source's metadata, then rebuild):")
+        for a in attention:
+            prefixes = ", ".join(a["unresolved_prefixes"]) or "-"
+            lines.append(
+                f"  {a['source']}: {a['share_dropped']:.0%} of {a['edges_in']:,} edges dropped; "
+                f"unresolved prefixes: {prefixes}"
+            )
     return "\n".join(lines)

@@ -32,21 +32,8 @@ def main(argv: list[str] | None = None) -> int:
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
-        help="where to write the cleaned graph and cleaning_report.json (default: data/cleaning)",
-    )
-    parser.add_argument(
-        "--keep-unresolved",
-        action="store_true",
-        help="keep nodes NodeNorm couldn't resolve, and their edges",
-    )
-    parser.add_argument(
-        "--drop-list",
-        type=Path,
-        action="append",
-        default=[],
-        metavar="JSONL",
-        help="edges to drop, one JSON object per line with subject, predicate, object and "
-        "primary_knowledge_source; repeatable",
+        help="where to write the cleaned graph and cleaning_report.json; drop lists are read "
+        "from its drop_lists/ (default: data/cleaning)",
     )
     args = parser.parse_args(argv)
 
@@ -54,12 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Cleaning: --output must differ from --input")
         return 2
     try:
-        report = garbage.collect(
-            args.input,
-            args.output,
-            keep_unresolved=args.keep_unresolved,
-            drop_list_paths=args.drop_list,
-        )
+        report = garbage.collect(args.input, args.output)
     except FileNotFoundError as e:
         print(f"Cleaning: {e}")
         print("  run the transformation stage first, or pass --input")

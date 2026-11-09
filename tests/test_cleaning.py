@@ -92,19 +92,43 @@ def test_collect_drops_and_flags(graph, tmp_path):
     assert written["dropped_edges_by_source"]["infores:test"]["dangling"] == 1
 
 
-def test_keep_unresolved(graph, tmp_path):
-    report = garbage.collect(graph, tmp_path / "clean", keep_unresolved=True)
-    assert "unresolved_node" not in report.dropped_edges
-    assert "unresolved" not in report.dropped_nodes
-    assert report.edges_out == 4
+def test_attention_names_sources_losing_most_edges(tmp_path):
+    src = tmp_path / "merged"
+    src.mkdir()
+    _write(src / "nodes.jsonl", [_node("UniProtKB:A"), _node("ko:K1", resolved=False)])
+    _write(
+        src / "edges.jsonl",
+        [
+            _edge("ko:K1", "UniProtKB:A", primary_knowledge_source="infores:kegg"),
+            _edge(
+                "ko:K1",
+                "UniProtKB:A",
+                primary_knowledge_source="infores:kegg",
+                predicate="biolink:related_to",
+            ),
+            _edge("UniProtKB:A", "UniProtKB:A"),
+        ],
+    )
+    report = garbage.collect(src, tmp_path / "clean")
+    [kegg] = report.attention()
+    assert kegg["source"] == "infores:kegg" and kegg["share_dropped"] == 1.0
+    assert kegg["unresolved_prefixes"] == {"ko": 2}
+    assert "infores:kegg: 100% of 2 edges dropped; unresolved prefixes: ko" in garbage.summary(
+        report
+    )
 
 
-def test_drop_list_matches_on_edge_key_not_id(graph, tmp_path):
-    drop = tmp_path / "evidence_check.jsonl"
-    _write(drop, [{**_edge("UniProtKB:A", "UniProtKB:B"), "id": "uuid-from-another-build"}])
-    report = garbage.collect(graph, tmp_path / "clean", drop_list_paths=[drop])
+def test_drop_lists_folder_matches_on_edge_key_not_id(graph, tmp_path):
+    out = tmp_path / "clean"
+    (out / "drop_lists").mkdir(parents=True)
+    _write(
+        out / "drop_lists" / "evidence_check.jsonl",
+        [{**_edge("UniProtKB:A", "UniProtKB:B"), "id": "uuid-from-another-build"}],
+    )
+    report = garbage.collect(graph, out)
     assert report.dropped_edges["drop_list:evidence_check"] == 1
     assert report.edges_out == 2
+    assert report.settings["drop_lists"] == {"evidence_check": 1}
 
 
 def test_drop_list_line_needs_full_key(tmp_path):

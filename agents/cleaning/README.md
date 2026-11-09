@@ -8,11 +8,13 @@ why. Maps to the accuracy and pruning criterion.
 ## Run it alone
 
 ```bash
-uv run kgb-clean                                   # data/transformation/merged -> data/cleaning
-uv run kgb-clean --input <dir> --output <dir>
-uv run kgb-clean --keep-unresolved                 # keep nodes NodeNorm couldn't resolve
-uv run kgb-clean --drop-list evidence_check.jsonl  # also drop these edges; repeatable
+uv run kgb-clean                                # data/transformation/merged -> data/cleaning
+uv run kgb-clean --input <dir> --output <dir>   # only when the graph lives somewhere else
 ```
+
+There are no options to choose between: every rule always applies, so the pipeline's
+no-argument run is the real run. To drop more edges, put a drop list in `<output>/drop_lists/`
+(see below) rather than passing anything.
 
 ## Input / output
 
@@ -23,9 +25,18 @@ uv run kgb-clean --drop-list evidence_check.jsonl  # also drop these edges; repe
 
 - `nodes.jsonl`, `edges.jsonl`: the cleaned graph. Records pass through unchanged, including
   `id` and `kgbcia_source_records`.
-- `cleaning_report.json`: counts in and out, every dropped edge and node by reason and by
-  primary knowledge source, unresolved nodes by CURIE prefix, flags on kept edges, and a few
-  examples of each.
+- `cleaning_report.json`: counts in and out; `attention`, the sources that lost at least half
+  their edges, with the CURIE prefixes that didn't resolve; every dropped edge and node by
+  reason and by primary knowledge source; unresolved nodes by prefix; flags on kept edges; and a
+  few examples of each.
+
+## Reading the result
+
+Start with `attention` (also printed as "Needs attention"). A source there almost always has an
+id problem in its metadata: a prefix NodeNorm doesn't know, native ids without a prefix, or
+versioned ids. Fix the source's semantics plan with the croissant-semantics skill and rebuild
+it. Keeping the unresolved nodes instead would add facts that can't join anything else in the
+graph, so there is deliberately no option for that.
 
 ## What it removes
 
@@ -37,17 +48,17 @@ Garbage collection (`garbage.py`), in this order. An edge is dropped when it:
 | `no_primary_knowledge_source` | no provenance, so it can't be explained |
 | `dangling` | names a node that isn't in `nodes.jsonl` |
 | `unresolved_node` | touches a node NodeNorm couldn't resolve (empty `equivalent_identifiers`) |
-| `drop_list:<file>` | listed in a `--drop-list` file |
+| `drop_list:<name>` | listed in `<output>/drop_lists/<name>.jsonl` |
 
 Then nodes are dropped when `unresolved`, or `orphan` (no kept edge touches them).
 
 Kept edges are counted, not changed, as `self_loop`, `knowledge_level_not_provided` and
 `agent_type_not_provided`: things to fix upstream in metadata, not reasons to lose a fact.
 
-A drop list is JSON lines, one edge per line, keyed by `subject`, `predicate`, `object` and
+A drop list is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by `subject`, `predicate`, `object` and
 `primary_knowledge_source`. It is not keyed by `id`, because the merge assigns new edge uuids
 every run. This is how an evidence check plugs in: a model judges each edge's supporting text
-once, writes the edges it rejects, and cleaning drops them reproducibly, in the style of the
+once, writes the edges it rejects to that folder, and every later cleaning run drops them, in the style of the
 Translator TMKP filter (NCATSTranslator/translator-ingests#560).
 
 ## Status
