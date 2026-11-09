@@ -84,8 +84,18 @@ uv run --script OUTPUT/run_orion.py OUTPUT Kgbcia_SOURCE STORAGE --source-files 
 The adapter registers the loader and its absolute source metadata in the current process and
 creates `STORAGE` and calls ORION's `IngestPipeline.run_pipeline` with lenient normalization,
 disabled conflation, and the semantic plan's declared Biolink version. Missing versions fail
-before downloading source files. `--strict` excludes unresolved nodes. `--conflation` explicitly opts into
-gene/protein and other conflations. Optional `--infores` supplies missing source identity.
+before downloading source files. Optional `--infores` supplies missing source identity.
+
+Leave `--strict` and `--conflation` off for pipeline builds:
+
+- `--strict` drops unresolved nodes during normalization, before anyone sees which ids failed.
+  Cleaning (`kgb-clean`) drops them after the merge instead and reports them by source and CURIE
+  prefix, which is what the metadata fix needs. Use `--strict` only for a one-off look at a
+  single source as cleaning will leave it.
+- `--conflation` opts into gene/protein and other NodeNorm conflations, which change node ids
+  (a protein becomes its gene). Graphs built with and without it don't join on those ids, so it
+  is a decision for the whole graph, not one source: use it only when every source is rebuilt
+  with it.
 ORION owns versioned storage, normalization artifacts, and stage success. Failed stages return
 nonzero, and the runner prints the error ORION recorded in the workspace's `.meta.json` (for
 example `fetch: <HTTPError 403 ...>`) to stderr, which `kgb-transform` copies into
@@ -156,8 +166,12 @@ ORION merges nodes on `id`, and edges on subject, predicate, object, primary kno
 qualifiers, so the same triple from two primary sources stays two edges. Lists such as
 `publications` and `kgbcia_source_records` are combined. Scalars that conflict keep the first
 value, in sorted source order, and `merge_warnings.dropped_properties` counts those lost. Unresolved
-nodes are kept, as in lenient normalization. A source with no stable graph is left out and listed
-in `sources_not_merged`.
+nodes are kept, as in lenient normalization; cleaning drops them after the merge. A source with no
+stable graph is left out and listed in `sources_not_merged`.
+
+`--sources Kgbcia_A Kgbcia_B` merges only those sources, for a quick look at how a few of them
+join without merging the whole graph. Write it to a directory other than `merged/`; the pipeline
+always merges every source.
 
 Plan for about 500 bytes per merged edge, for the output and again for temporary files, and for
 several GB of memory: the disk merger buffers 10 million edges at a time.

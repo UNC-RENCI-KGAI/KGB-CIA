@@ -54,7 +54,8 @@ The runner creates `STORAGE` and uses the Biolink version declared by the semant
 a missing version is an error. ORION's disk merger combines repeated node properties during
 parsing and normalization, including IDs that resolve to the same canonical node.
 Normalization is lenient and gene/protein conflation is disabled by default. `--strict` and
-`--conflation` explicitly change those policies. Registration happens in-process, without
+`--conflation` change those policies; leave both off for pipeline builds (the reference says
+why). Registration happens in-process, without
 editing ORION's installation. See [the workflow reference](reference/orion_workflow.md).
 
 ## Outputs and boundaries
