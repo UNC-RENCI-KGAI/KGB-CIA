@@ -65,7 +65,7 @@ def _workspace(root, source_id, nodes, edges=0, spo=(), fetch="stable"):
 
 @pytest.fixture
 def graphs(tmp_path):
-    root = tmp_path / "graphs"
+    root = tmp_path / "transformation" / "graphs"
     gene = ("biolink:Gene", "biolink:interacts_with", "biolink:Gene", 10)
     _workspace(
         root,
@@ -125,15 +125,58 @@ def test_cleaning_report_sets_totals(graphs, tmp_path):
 
 def test_main_writes_all_outputs(graphs, tmp_path):
     out = tmp_path / "out"
-    assert dg.main([str(graphs), "--user", "Kgbcia_user", "--output", str(out)]) == 0
+    assert dg.main([str(graphs.parent), "--user", "user", "--output", str(out)]) == 0
     page = (out / "overview.html").read_text()
     assert "How your data connects" in page and "<script>" in page
     assert "100% connected so far" in (out / "description.md").read_text()
 
 
-def test_unknown_user_source(graphs):
-    with pytest.raises(SystemExit, match="Kgbcia_nope"):
-        dg.describe(graphs, user=["Kgbcia_nope"])
+def test_user_by_plain_name(graphs):
+    d = dg.describe(graphs, user=["User"])
+    assert d["overlap"]["user"]["sources"] == ["Kgbcia_user"]
+
+
+def test_unknown_user_source_lists_choices(graphs):
+    with pytest.raises(SystemExit, match="matches no built source. Choose from: big, small, user"):
+        dg.describe(graphs, user=["nope"])
+
+
+def test_ambiguous_user_source(graphs):
+    with pytest.raises(SystemExit, match="matches several sources"):
+        dg.describe(graphs, user=["s"])
+
+
+def _merge_and_clean(graphs, cleaned_from):
+    merged = graphs.parent / "merged"
+    merged.mkdir()
+    (merged / "merge-metadata.json").write_text(
+        json.dumps({"final_node_count": 7, "final_edge_count": 14})
+    )
+    cleaning = graphs.parent.parent / "cleaning"
+    cleaning.mkdir()
+    (cleaning / "cleaning_report.json").write_text(
+        json.dumps(
+            {
+                "settings": {"input": str(cleaned_from or merged)},
+                "nodes": {"in": 7, "out": 6},
+                "edges": {"in": 14, "out": 12},
+            }
+        )
+    )
+    return merged, cleaning
+
+
+def test_layout_found_from_transformation_dir(graphs):
+    merged, cleaning = _merge_and_clean(graphs, None)
+    for start in (graphs.parent, graphs):
+        assert dg.find_layout(start) == (graphs, merged, cleaning)
+
+
+def test_stale_cleaning_report_ignored(graphs, tmp_path):
+    merged, _ = _merge_and_clean(graphs, tmp_path / "some_other_merge")
+    found = dg.find_layout(graphs.parent)
+    assert found == (graphs, merged, None)
+    assert dg.describe(*found)["totals"]["basis"] == "merged graph"
 
 
 def test_labels():

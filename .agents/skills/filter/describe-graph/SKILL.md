@@ -12,28 +12,26 @@ metadata, the cleaning report), so describing even a 100M-edge graph takes secon
 ## Run it
 
 ```bash
-python3 .agents/skills/filter/describe-graph/scripts/describe_graph.py data/transformation/graphs \
-    --merged data/transformation/merged --cleaned data/cleaning --output data/describe
+python3 .agents/skills/filter/describe-graph/scripts/describe_graph.py
 ```
 
-`GRAPHS` is the directory of per-source ORION workspaces (`kgb-transform`'s `OUTPUT/graphs`).
-`--merged` and `--cleaned` are optional; give whichever exist. Totals come from the most finished
-one (cleaned, then merged, then the sum over sources, which counts shared nodes twice and says
-so).
+With no arguments it describes `data/transformation` and writes to `data/describe`. It finds the
+rest itself: the merged graph in `data/transformation/merged`, and the cleaned graph in
+`data/cleaning` if that was cleaned from this merge. Totals come from the most finished of
+these, then from the sum over sources, which counts shared nodes twice and says so. Pass a
+directory only when the run lives elsewhere: `kgb-transform`'s output directory or its `graphs/`.
 
-When the user has added their own source, built through the same metadata and transformation
-steps, name it:
+Two flags, each for one situation:
 
-```bash
-python3 .agents/skills/filter/describe-graph/scripts/describe_graph.py data/transformation/graphs \
-    --user Kgbcia_<their_source> --output data/describe
-```
+| Flag | Use it when |
+|---|---|
+| `--user NAME ...` | The user has brought their own data, built through the same metadata and transformation steps. Name it as they would ("human protein atlas"); the script matches it to a source id and, if it can't, lists the sources to choose from. |
+| `--output DIR` | They want the description somewhere other than `data/describe`. |
 
-This reads each source's node ids (only the ones NodeNorm resolved) to find which sources share
-the user's nodes. `--overlap` does the same without a user source. Expect a minute or so on the
-full graph.
+`--user` adds the overlap: it reads each source's node ids (only the ones NodeNorm resolved) to
+find which sources share the user's nodes. Expect a minute or so on the full graph.
 
-Outputs in `--output`:
+Outputs in the output directory:
 
 - `description.md`: read this, then retell it.
 - `description.json`: every number, for other tools.

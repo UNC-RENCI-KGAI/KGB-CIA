@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """Describe a built knowledge graph from ORION's own metadata, and how a user's data joins it.
 
-    describe_graph.py GRAPHS [--merged DIR] [--cleaned DIR] [--user SOURCE ...] [--overlap]
-                      [--output DIR]
+    describe_graph.py [TRANSFORMATION] [--user SOURCE ...] [--output DIR]
 
-GRAPHS holds one ORION workspace per source (kgb-transform's OUTPUT/graphs). For each source this
-reads the workspace's `*.meta.json` (fetch, parse and normalization status and counts) and the
-build's QC file `<source>_<build>.json` (node types, predicates, subject-predicate-object type
-counts, edges with publications), so it never scans the graph itself. Totals come from the
-cleaning report if given, else the merge metadata, else the sum over sources.
+TRANSFORMATION is kgb-transform's output directory (default data/transformation), or its
+graphs/ directory of per-source ORION workspaces. For each source this reads the workspace's
+`*.meta.json` (fetch, parse and normalization status and counts) and the build's QC file
+`<source>_<build>.json` (node types, predicates, subject-predicate-object type counts, edges with
+publications), so it never scans the graph itself.
 
-`--user` names the user's own source(s). With it, or with `--overlap`, the script also reads each
-built source's node ids (resolved ones only) to count the nodes sources share: how much of the
-user's data is already in the graph, and which sources cover the rest.
+Totals come from the most finished stage it finds: the cleaning report in the sibling cleaning/
+directory if that report was made from this run's merged/ graph, else merged/merge-metadata.json,
+else the sum over sources.
+
+`--user` names the user's own source(s), by source id or plain name ("human protein atlas").
+With it, the script also reads each built source's node ids (resolved ones only) to count the
+nodes sources share: how much of the user's data is already in the graph, and which sources
+cover the rest.
 
 Writes description.json (everything), description.md (for an agent to read and retell) and
 overview.html (a self-contained page with charts) to --output. Standard library only.
@@ -210,7 +214,7 @@ def overlap(sources: list[dict], user: list[str]) -> dict:
     user_bits = 0
     for source_id in user:
         if source_id not in names:
-            raise SystemExit(f"--user {source_id}: no stable build of that source in GRAPHS")
+            raise SystemExit(f"--user {source_id}: its normalized_nodes.jsonl is missing")
         user_bits |= 1 << names.index(source_id)
     other_bits = ((1 << len(names)) - 1) & ~user_bits
     user_masks = {mask: n for mask, n in by_mask.items() if mask & user_bits}
@@ -253,6 +257,59 @@ def overlap(sources: list[dict], user: list[str]) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------
+# Finding things, so the caller doesn't have to
+
+
+def find_layout(path: Path) -> tuple[Path, Path | None, Path | None]:
+    """(graphs, merged, cleaned) from kgb-transform's output directory or its graphs/ directory.
+
+    merged is OUTPUT/merged when it has merge metadata. cleaned is the sibling cleaning/ directory
+    when its report says it cleaned that merged graph, so a stale cleaning run is never used.
+    """
+    output = path if (path / "graphs").is_dir() else path.parent
+    graphs = output / "graphs" if (output / "graphs").is_dir() else path
+    merged = output / "merged"
+    merged = merged if (merged / "merge-metadata.json").exists() else None
+    cleaned = output.parent / "cleaning"
+    report = cleaned / "cleaning_report.json"
+    if merged and report.exists():
+        cleaned_input = json.loads(report.read_text()).get("settings", {}).get("input", "")
+        if not cleaned_input or Path(cleaned_input).resolve() != merged.resolve():
+            cleaned = None
+    else:
+        cleaned = None
+    return graphs, merged, cleaned
+
+
+def _plain(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_").removeprefix("kgbcia_")
+
+
+def resolve_user(names: list[str], sources: list[dict]) -> list[str]:
+    """Source ids for the names a user gave: exact id, then plain name, then a unique substring.
+
+    Raises SystemExit listing the built sources when a name matches none or several.
+    """
+    built = [s["source_id"] for s in sources if s["built"]]
+    resolved = []
+    for name in names:
+        if name in built:
+            resolved.append(name)
+            continue
+        want = _plain(name)
+        exact = [b for b in built if _plain(b) == want]
+        partial = [b for b in built if want in _plain(b)]
+        matches = exact or partial
+        if len(matches) == 1:
+            resolved.append(matches[0])
+            continue
+        listing = ", ".join(source_label(b) for b in (matches or built))
+        problem = "matches several sources" if matches else "matches no built source"
+        raise SystemExit(f"--user {name!r} {problem}. Choose from: {listing}")
+    return resolved
+
+
+# ---------------------------------------------------------------------------------------------
 # Putting it together
 
 
@@ -261,10 +318,9 @@ def describe(
     merged: Path | None = None,
     cleaned: Path | None = None,
     user: list[str] | None = None,
-    with_overlap: bool = False,
 ) -> dict:
-    user = user or []
     sources = [read_source(w) for w in sorted(p for p in graphs.iterdir() if p.is_dir())]
+    user = resolve_user(user or [], sources)
     built = [s for s in sources if s["built"]]
     node_types, predicates, spo = Counter(), Counter(), Counter()
     for s in built:
@@ -288,7 +344,7 @@ def describe(
         ],
         "sources": [{k: v for k, v in s.items() if k not in ("spo",)} for s in sources],
     }
-    if user or with_overlap:
+    if user:
         description["overlap"] = overlap(sources, user)
     return description
 
@@ -713,18 +769,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("graphs", type=Path, help="directory of per-source ORION workspaces")
-    parser.add_argument("--merged", type=Path, help="merged graph directory (merge-metadata.json)")
-    parser.add_argument("--cleaned", type=Path, help="cleaned graph (cleaning_report.json)")
-    parser.add_argument("--user", nargs="+", default=[], help="the user's own source id(s)")
-    parser.add_argument("--overlap", action="store_true", help="count nodes shared by sources")
+    parser.add_argument(
+        "transformation",
+        type=Path,
+        nargs="?",
+        default=Path("data/transformation"),
+        help="kgb-transform's output directory, or its graphs/ (default: data/transformation)",
+    )
+    parser.add_argument(
+        "--user", nargs="+", default=[], help="the user's own source(s), by id or plain name"
+    )
     parser.add_argument("--output", type=Path, default=Path("data/describe"), help="output dir")
     args = parser.parse_args(argv)
-    if not args.graphs.is_dir():
-        print(f"{args.graphs} is not a directory of ORION workspaces", file=sys.stderr)
+    if not args.transformation.is_dir():
+        print(f"{args.transformation} is not a directory; run kgb-transform first", file=sys.stderr)
         return 1
 
-    d = describe(args.graphs, args.merged, args.cleaned, args.user, args.overlap)
+    graphs, merged, cleaned = find_layout(args.transformation)
+    d = describe(graphs, merged, cleaned, args.user)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "description.json").write_text(json.dumps(d, indent=2) + "\n")
     (args.output / "description.md").write_text(markdown(d))
