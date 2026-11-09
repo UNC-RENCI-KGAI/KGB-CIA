@@ -30,6 +30,19 @@ export RENCI_AZURE_API_KEY="<your-api-key>"
 
 If `~/.pi/agent/models.json` already contains custom providers, merge the `renci-azure` provider instead of overwriting the file. Persist the environment variable using your shell or secret manager; never commit the API key.
 
+## TypeSafe (Jev) for the evidence check
+
+The `evidence-check` skill asks Jev, TypeSafe's typed-decision model, whether each edge's cited
+abstracts support it. It reads the key from the environment, like the Azure key above:
+
+```bash
+export TYPESAFE_API_KEY="<your-api-key>"
+```
+
+Without the key the skill still runs: it writes the requests it would send and a cost estimate,
+and the rest of the pipeline carries on. Jev is called by the skill's scripts, not as a Pi model
+or tool, so nothing else needs configuring in Pi.
+
 ## Subagents
 
 `.pi/settings.json` declares the pinned `@tintinweb/pi-subagents` package. Pi installs it after project trust is granted. To reconcile packages manually, run:
