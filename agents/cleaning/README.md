@@ -52,8 +52,16 @@ Garbage collection (`garbage.py`), in this order. An edge is dropped when it:
 
 Then nodes are dropped when `unresolved`, or `orphan` (no kept edge touches them).
 
-Kept edges are counted, not changed, as `self_loop`, `knowledge_level_not_provided` and
-`agent_type_not_provided`: things to fix upstream in metadata, not reasons to lose a fact.
+Kept edges are counted, not changed, as flags: things to fix upstream in metadata, not reasons
+to lose a fact.
+
+| Flag | Meaning |
+|---|---|
+| `self_loop` | subject and object are the same node |
+| `knowledge_level_not_provided`, `agent_type_not_provided` | provenance slots left at `not_provided` |
+| `type_violation` | the predicate's Biolink domain or range doesn't fit the node categories (`biolink_types.py`); `type_violations_by_predicate` in the report says where. A `treats` edge whose object normalized to a procedure is wrong; a gene `participates_in` a pathway is Biolink being stricter than the graph. After one run on real data, promote the predicates that only produce wrong edges to a drop |
+| `rare_category_combination` | a (subject category, predicate, object category) triple under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each |
+| `opposing_predicate` | the pair also carries the opposite predicate (`treats` with `contraindicated_in`); the pairs are listed |
 
 A drop list is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by `subject`, `predicate`, `object` and
 `primary_knowledge_source`. It is not keyed by `id`, because the merge assigns new edge uuids

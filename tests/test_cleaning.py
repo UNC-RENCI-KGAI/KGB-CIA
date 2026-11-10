@@ -146,3 +146,113 @@ def test_cli_without_input_explains(tmp_path, capsys):
 def test_cli_runs(graph, tmp_path, capsys):
     assert main(["--input", str(graph), "--output", str(tmp_path / "clean")]) == 0
     assert "Edges: 7 in, 3 out" in capsys.readouterr().out
+
+
+def test_type_violation_flags_treats_to_procedure(tmp_path):
+    nodes = [
+        {
+            "id": "CHEBI:1",
+            "category": ["biolink:SmallMolecule", "biolink:ChemicalEntity", "biolink:NamedThing"],
+            "equivalent_identifiers": ["CHEBI:1"],
+        },
+        {
+            "id": "MONDO:1",
+            "category": [
+                "biolink:Disease",
+                "biolink:DiseaseOrPhenotypicFeature",
+                "biolink:NamedThing",
+            ],
+            "equivalent_identifiers": ["MONDO:1"],
+        },
+        {
+            "id": "UMLS:P",
+            "category": ["biolink:Procedure", "biolink:NamedThing"],
+            "equivalent_identifiers": ["UMLS:P"],
+        },
+        {
+            "id": "NCBIGene:1",
+            "category": ["biolink:Gene", "biolink:NamedThing"],
+            "equivalent_identifiers": ["NCBIGene:1"],
+        },
+        {
+            "id": "REACT:1",
+            "category": ["biolink:Pathway", "biolink:NamedThing"],
+            "equivalent_identifiers": ["REACT:1"],
+        },
+    ]
+    edges = [
+        _edge("CHEBI:1", "MONDO:1", predicate="biolink:treats"),
+        _edge("CHEBI:1", "UMLS:P", predicate="biolink:treats"),
+        _edge("CHEBI:1", "MONDO:1", predicate="biolink:contraindicated_in"),
+        _edge("NCBIGene:1", "REACT:1", predicate="biolink:participates_in"),
+        _edge("MONDO:1", "MONDO:1", predicate="biolink:subclass_of"),
+    ]
+    graph = tmp_path / "g"
+    graph.mkdir()
+    _write(graph / "nodes.jsonl", nodes)
+    _write(graph / "edges.jsonl", edges)
+    report = garbage.collect(graph, tmp_path / "out")
+    assert report.edges_out == 5, "type violations are flags, not drops"
+    assert report.flags["type_violation"] == 2
+    assert report.type_violations_by_predicate == {
+        "biolink:treats": 1,
+        "biolink:participates_in": 1,
+    }
+    written = json.loads((tmp_path / "out" / "cleaning_report.json").read_text())
+    assert written["opposing_predicates"] == [
+        {
+            "subject": "CHEBI:1",
+            "object": "MONDO:1",
+            "predicates": ["biolink:treats", "biolink:contraindicated_in"],
+        }
+    ]
+    assert written["flags"]["opposing_predicate"] == 2
+    assert written["rare_category_combinations"] == []  # too few edges per predicate
+
+
+def test_rare_category_combination(tmp_path):
+    nodes = [
+        {
+            "id": f"X:{i}",
+            "category": ["biolink:Gene", "biolink:NamedThing"],
+            "equivalent_identifiers": [f"X:{i}"],
+        }
+        for i in range(3)
+    ]
+    nodes.append(
+        {
+            "id": "T:1",
+            "category": ["biolink:Procedure", "biolink:NamedThing"],
+            "equivalent_identifiers": ["T:1"],
+        }
+    )
+    edges = [_edge("X:0", "X:1", predicate="biolink:interacts_with") for _ in range(1500)]
+    edges.append(_edge("X:2", "T:1", predicate="biolink:interacts_with"))
+    graph = tmp_path / "g"
+    graph.mkdir()
+    _write(graph / "nodes.jsonl", nodes)
+    _write(graph / "edges.jsonl", edges)
+    report = garbage.collect(graph, tmp_path / "out")
+    rare = report.rare_combinations()
+    assert [(c["subject_category"], c["object_category"], c["edges"]) for c in rare] == [
+        ("biolink:Gene", "biolink:Procedure", 1)
+    ]
+    assert rare[0]["example"] == ("X:2", "biolink:interacts_with", "T:1")
+
+
+def test_violation_rules():
+    from agents.cleaning import biolink_types as bt
+
+    disease, procedure = ["biolink:Disease", "biolink:NamedThing"], ["biolink:Procedure"]
+    chemical = ["biolink:SmallMolecule", "biolink:ChemicalEntity"]
+    assert bt.violation("biolink:treats", chemical, disease) is None
+    assert bt.violation("biolink:treats", chemical, procedure) == "range"
+    assert bt.violation("biolink:treats", disease, disease) == "domain"
+    assert bt.violation("biolink:related_to", procedure, procedure) is None  # named thing
+    # Biolink stricter than the graph: reported by predicate, never dropped
+    assert (
+        bt.violation("biolink:participates_in", ["biolink:Gene"], ["biolink:Pathway"]) == "domain"
+    )
+    assert bt.violation("biolink:subclass_of", disease, disease) is None  # ontology class
+    assert bt.violation("biolink:not_real", disease, disease) is None
+    assert bt.violation("biolink:treats", [], []) is None  # unknown categories aren't judged

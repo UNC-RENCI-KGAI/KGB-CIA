@@ -1,0 +1,86 @@
+"""Biolink's domain and range for each predicate, as sets of node categories.
+
+ORION normalizes nodes and predicates separately and never checks that a predicate fits the
+categories at its two ends. The metadata check validates the plan's declared classes, but
+NodeNorm assigns the final category later: a DrugCentral indication the plan called a Disease
+can come back a Procedure. This is where those edges are caught.
+
+A predicate's domain and range come from the Biolink model (its own, or inherited from its
+nearest ancestor that sets them). Each is expanded to every category under it, mixins
+included, so an edge fits when any of the subject's categories is in the domain set and any of
+the object's is in the range set. ORION writes a node's ancestors into `category`, so the test
+is a set intersection.
+
+A domain or range is enforced through the categories under it that are also under `named
+thing`, since those are the only ones a node can carry. `subclass_of` (domain `ontology class`)
+has none and is never enforced. `participates_in` (domain `occurrent`) is enforced, and flags
+gene-to-pathway edges: Biolink is stricter than the graph there, which is why violations are
+reported by predicate and stay flags until a predicate is known to be a source of wrong edges.
+"""
+
+from __future__ import annotations
+
+from functools import cache
+from importlib.resources import files
+
+
+@cache
+def toolkit():
+    from bmt import Toolkit
+
+    schema = files("biolink_model") / "schema" / "biolink_model.yaml"
+    # the empty predicate map stops bmt fetching one from GitHub at import time
+    return Toolkit(str(schema), predicate_map={"predicate mappings": []})
+
+
+@cache
+def categories_under(name: str) -> frozenset[str]:
+    """Every category CURIE under a Biolink class or mixin, itself included."""
+    return frozenset(toolkit().get_descendants(name, formatted=True))
+
+
+@cache
+def _named_things() -> frozenset[str]:
+    return categories_under("named thing")
+
+
+def _inherited(predicate: str, slot: str) -> str | None:
+    """The predicate's own domain/range, or the nearest ancestor's."""
+    tk = toolkit()
+    for name in tk.get_ancestors(predicate):
+        element = tk.get_element(name)
+        value = getattr(element, slot, None) if element else None
+        if value:
+            return value
+    return None
+
+
+@cache
+def constraint(predicate: str) -> tuple[frozenset[str] | None, frozenset[str] | None]:
+    """(domain categories, range categories) for a predicate; None where nothing is enforced.
+
+    Unknown predicates and domains or ranges outside `named thing` give None, as does
+    `named thing` itself, which every category satisfies.
+    """
+    tk = toolkit()
+    if not tk.is_predicate(predicate):
+        return None, None
+    sets = []
+    for slot in ("domain", "range"):
+        name = _inherited(predicate, slot)
+        if not name or name == "named thing":
+            sets.append(None)
+            continue
+        under = categories_under(name) & _named_things()
+        sets.append(under or None)
+    return sets[0], sets[1]
+
+
+def violation(predicate: str, subject_categories, object_categories) -> str | None:
+    """'domain', 'range', or None when the edge fits (or nothing is enforced)."""
+    domain, range_ = constraint(predicate)
+    if domain is not None and subject_categories and domain.isdisjoint(subject_categories):
+        return "domain"
+    if range_ is not None and object_categories and range_.isdisjoint(object_categories):
+        return "range"
+    return None
