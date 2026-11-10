@@ -25,7 +25,7 @@ time goes to the user-facing steps, the demo and the submission.
 | 2. Transformation (`agents/transformation/`) | **Working.** `kgb-transform` generates an ORION parser per source, builds each one, and merges them into one graph with ORION's merge rules. | [#42](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/42): skip unchanged builds |
 | 3. Filter (`agents/filter/`) | Stub. | [#47](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/47): describe the graph; [#50](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/50): cut the subgraph a user asks for |
 | 4. Augmentation (`agents/augmentation/`) | Stub. | [#22](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/22): PubMed evidence agent; [#52](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/52): shared PubMed search and cache |
-| 5. Cleaning (`agents/cleaning/`) | **Working.** `kgb-clean` drops edges that can't be right (no provenance, unresolved or missing nodes, drop lists) and reports what it removed. | [#49](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/49): evidence check; [#51](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/51): Biolink type flags |
+| 5. Cleaning (`agents/cleaning/`) | **Working.** `kgb-clean` drops edges that can't be right (no provenance, unresolved or missing nodes, drop lists), flags suspicious ones (Biolink type violations, rare category combinations, opposing predicates) and reports both. | [#49](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/49): evidence check |
 | 6. MCP interface (`agents/mcp_interface/`) | Stub. | A Neo4j-backed MCP server on the `mcp-interface/neo4j-server` branch, being deployed on AWS for the hosted demo |
 | Evaluation (`evaluation/`) | Not started. | [#54](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/54): link-prediction protocol |
 

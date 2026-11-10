@@ -55,8 +55,9 @@ The original reasoning is in `docs/agent_plan.md`; where this list differs, this
   edges are added beside the originals, never in place of them, with the augmentation agent as
   their primary knowledge source.
 - **cleaning**: `kgb-clean` drops edges that can't be right (no provenance, a node NodeNorm
-  couldn't resolve or that doesn't exist, or listed in a drop list) and counts suspicious ones as
-  flags without removing them. An evidence check writes drop lists; an edge isn't dropped just
+  couldn't resolve or that doesn't exist, or listed in a drop list) and flags suspicious ones
+  without removing them (Biolink type violations, rare category combinations, opposing
+  predicates), listing them in `flagged_edges.jsonl`. An evidence check writes drop lists; an edge isn't dropped just
   because no abstract supports it. See `agents/cleaning/README.md`.
 - **mcp_interface**: an MCP server modeled on the OKN MCP that lets any local agent query the
   final graph: neighbors, paths, and edge lineage from the edge's knowledge
