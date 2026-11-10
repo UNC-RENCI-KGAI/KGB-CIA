@@ -16,5 +16,6 @@ Uses the record types in `shared/schema.py`. Describe the exact files here once 
 
 ## Status
 
-See the tracking issue for this team on GitHub. Replace this section with what works, what
-doesn't, and how to try it.
+On `main`, `kgb-mcp` is a stub that prints "not implemented yet". A first MCP server backed by
+Neo4j is on the `mcp-interface/neo4j-server` branch (no PR yet), and is being deployed on AWS
+for the hosted demo.

@@ -1,8 +1,9 @@
-# Filter and integration agent
+# Filter agent
 
 **Team:** @UNC-RENCI-KGAI/filter · **Existing asset:** none
 
-Apply user choices with strong defaults (affinity cutoffs, edge types) and merge triples into one connected baseline graph.
+Turn what the user asks for into a subgraph of the merged graph, with strong defaults; with no
+request, the whole graph. Transformation already merges the sources, so this stage doesn't.
 
 ## Run it alone
 
@@ -16,5 +17,7 @@ Uses the record types in `shared/schema.py`. Describe the exact files here once 
 
 ## Status
 
-See the tracking issue for this team on GitHub. Replace this section with what works, what
-doesn't, and how to try it.
+On `main`, `kgb-filter` is a stub that prints "not implemented yet". In progress:
+[#47](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/47) (describe-graph skill: a plain-language
+overview of the graph) and [#50](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/50) (cut the
+subgraph a user asks for).

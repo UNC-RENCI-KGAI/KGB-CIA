@@ -13,26 +13,26 @@ against a Pharos baseline.
 
 Key dates: progress report **Oct 27, 2026**, final submission **Nov 17, 2026**.
 
-## Status (as of Oct 26, 2026)
+## Status (as of Nov 10, 2026)
 
-This is a progress-report checkpoint, not a finished pipeline. Where things stand:
+**The graph is frozen** at the Nov 9 transformation run. Changes we'd like to make to the graph or
+the metadata now go into a report (what, which source, why) instead of code, so the remaining
+time goes to the user-facing steps, the demo and the submission.
 
-| Stage | Status |
-| --- | --- |
-| 1. Metadata (`agents/metadata/`) | **Working, pending merge.** Builds on RoboCroissant; the `croissant-semantics` skill adds Biolink semantics on top. Reviewed and fixed; [PR #17](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/17) is open, blocked on a stale changes-requested review. |
-| 2. Transformation (`agents/transformation/`) | **In progress.** Next piece being built — turns the metadata into actual graph nodes and edges. |
-| ORION merge | Existing tool, not a new agent. Merges the per-source files Transformation produces, after NodeNorm. |
-| 3. Filter & integration (`agents/filter/`) | Planned, not started. Out of scope for this checkpoint. |
-| 4. Augmentation (`agents/augmentation/`) | Planned, not started. Out of scope for this checkpoint. |
-| 5. Cleaning (`agents/cleaning/`) | Planned, not started. Out of scope for this checkpoint. |
-| 6. MCP interface (`agents/mcp_interface/`) | Planned, not started. Out of scope for this checkpoint. |
+| Stage | On `main` | In progress |
+| --- | --- | --- |
+| 1. Metadata (`agents/metadata/`) | The `croissant-semantics` skill adds Biolink semantics to RoboCroissant's Croissant files, run per source. `kgb-metadata` is still a stub. | [#41](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/41): `kgb-metadata` |
+| 2. Transformation (`agents/transformation/`) | **Working.** `kgb-transform` generates an ORION parser per source, builds each one, and merges them into one graph with ORION's merge rules. | [#42](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/42): skip unchanged builds |
+| 3. Filter (`agents/filter/`) | Stub. | [#47](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/47): describe the graph; [#50](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/50): cut the subgraph a user asks for |
+| 4. Augmentation (`agents/augmentation/`) | Stub. | [#22](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/22): PubMed evidence agent; [#52](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/52): shared PubMed search and cache |
+| 5. Cleaning (`agents/cleaning/`) | **Working.** `kgb-clean` drops edges that can't be right (no provenance, unresolved or missing nodes, drop lists) and reports what it removed. | [#49](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/49): evidence check; [#51](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/51): Biolink type flags |
+| 6. MCP interface (`agents/mcp_interface/`) | Stub. | A Neo4j-backed MCP server on the `mcp-interface/neo4j-server` branch, being deployed on AWS for the hosted demo |
+| Evaluation (`evaluation/`) | Not started. | [#54](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/54): link-prediction protocol |
 
-Goal for this checkpoint: stages 1–2 working end to end, so a person can point the pipeline at a
-real Pharos/TCRD source and get back a graph — filtering, augmentation, and cleaning come later.
-Two design questions are still open and tracked as issues:
-[#23](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/23) (does Filter run before or after
-Transformation?) and [#24](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/24) (does Cleaning run
-before, after, or both around Augmentation?).
+The order of the stages is still being settled:
+[#23](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/23) (filter before or after
+transformation) and [#24](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/24) (cleaning before or
+after augmentation). The diagram below is the order in `STAGES` today.
 
 ## Pipeline
 
@@ -40,37 +40,36 @@ before, after, or both around Augmentation?).
 Pharos / TCRD files
         |
         v
-1. Metadata agent        agents/metadata/        Croissant metadata per file and column (RoboCroissant)
+1. Metadata agent        agents/metadata/        Croissant metadata per file (RoboCroissant), plus Biolink semantics
         |
         v
-2. Transformation agent  agents/transformation/  columns -> Biolink classes and predicates; writes and runs code
+2. Transformation agent  agents/transformation/  one ORION parser per source, built and NodeNorm'd, then merged into one graph
         |
         v
-   ORION merge           (not an agent)           merges per-source, NodeNorm'd files
+3. Filter                agents/filter/          the subgraph the user asks for; with no request, the whole graph
         |
         v
-3. Filter & integration  agents/filter/          user choices with strong defaults; one connected baseline graph
+4. Augmentation agent    agents/augmentation/    PubMed evidence for edges, and more specific edges it supports
         |
         v
-4. Augmentation agent    agents/augmentation/    extra datasets and PubMed evidence
-        |
-        v
-5. Cleaning agent        agents/cleaning/        conflict resolution, pruning, final graph
+5. Cleaning agent        agents/cleaning/        drops edges that can't be right or that an evidence check rejects
         |
         v
 6. MCP interface         agents/mcp_interface/   lets any local agent query the graph (OKN MCP pattern)
 
 Evaluation pipeline      evaluation/             GNN link prediction vs. Pharos baseline (not an agent)
-Shared code              shared/                 edge schema, NodeNorm client, Biolink helpers, I/O
+Shared code              shared/                 record schema, NodeNorm client, pipeline runner
 ```
 
-A more detailed diagram, with each stage's exact input/output files, is in
-[`docs/KG_AI_plandraft.png`](docs/KG_AI_plandraft.png) (source: [`docs/pipeline_diagram.mmd`](docs/pipeline_diagram.mmd)).
+[`docs/KG_AI_plandraft.png`](docs/KG_AI_plandraft.png) (source:
+[`docs/pipeline_diagram.mmd`](docs/pipeline_diagram.mmd)) is the Oct 26 version of this diagram,
+with each stage's planned input and output files; parts of it are out of date.
 
 Design rules agreed by the team: agents decide, code transforms (reproducible); every node goes
-through NodeNorm; Biolink is fixed, not user-selectable; strong defaults everywhere, with user
-input only at the filter step; evaluation stays outside the agent. Full plan with Chris Bizon's
-guidance: [`docs/agent_plan.md`](docs/agent_plan.md).
+through NodeNorm; Biolink is fixed, not user-selectable; strong defaults everywhere, and the
+graph's scope comes from what the user asks for, not a choice we make in advance; evaluation stays
+outside the agent. The original plan, with Chris Bizon's guidance:
+[`docs/agent_plan.md`](docs/agent_plan.md).
 
 ## Quick start
 
@@ -79,7 +78,7 @@ git clone https://github.com/UNC-RENCI-KGAI/KGB-CIA.git
 cd KGB-CIA
 make setup        # creates .venv with uv and installs the package in editable mode
 make test         # lint + unit tests
-make demo         # dry run of every stage on the toy data in tests/fixtures
+make demo         # dry run: prints what each stage does, runs nothing
 ```
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). `make setup` falls back to `pip` if
@@ -101,9 +100,7 @@ gh pr create
 One monorepo, one directory per subagent, one GitHub Team per directory. Each team owns its
 directory through `.github/CODEOWNERS` and reviews its own pull requests. Cross-directory changes
 get the `integration` label. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the branch, review, and
-GitHub Project conventions, and the
-[tracking issues](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues?q=is%3Aissue+Tracking) for
-each team's Oct 27 checklist.
+GitHub Project conventions.
 
 ## Agent skills
 

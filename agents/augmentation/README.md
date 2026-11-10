@@ -2,7 +2,9 @@
 
 **Team:** @UNC-RENCI-KGAI/augmentation · **Existing asset:** PubMed; Bagel / LitCoin for text
 
-Enrich the baseline graph with extra datasets and PubMed evidence for or against edges.
+Find PubMed evidence for edges: add the papers that support an edge to its `publications`, and
+propose more specific edges where the papers support them. Proposed edges sit beside the
+originals, never in place of them.
 
 ## Run it alone
 
@@ -16,5 +18,7 @@ Uses the record types in `shared/schema.py`. Describe the exact files here once 
 
 ## Status
 
-See the tracking issue for this team on GitHub. Replace this section with what works, what
-doesn't, and how to try it.
+On `main`, `kgb-augment` is a stub that prints "not implemented yet". In progress:
+[#22](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/22) (the pubmed-evidence skill) and
+[#52](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/52) (PubMed search, fetch and cache in
+`shared/`, shared with the cleaning stage's evidence check).

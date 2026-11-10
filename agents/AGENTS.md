@@ -36,21 +36,28 @@ alone" and "Input / output").
 
 ## What each stage does and does not do
 
-From `docs/agent_plan.md`, which has the reasoning:
+The original reasoning is in `docs/agent_plan.md`; where this list differs, this list is current.
 
 - **metadata**: Croissant metadata per source file and column, building on RoboCroissant.
   Purely descriptive; builds no graph.
 - **transformation**: decides which columns map to which Biolink class and predicate, then
   writes and runs code to do it. A *full* transform of everything it can convert; choosing a
-  subset is the filter stage's job. ORION may supply deterministic pieces, but wrapping ORION
-  as the whole stage was ruled out.
-- **filter**: the only stage that talks to the user, and every question has a default
-  (affinity cutoffs, binding-strength bins, edge types to keep). Merges triples into one
-  connected baseline graph. Keep that baseline distinguishable from anything added later.
-- **augmentation**: extra datasets (possibly sent back through metadata → filter) and PubMed
-  evidence for or against edges.
-- **cleaning**: resolves conflicts between sources and prunes to the final graph. No design yet;
-  check the team's tracking issue before building.
+  subset is the filter stage's job. It generates an ORION parser per source from the semantic
+  metadata, builds each source, and merges them into one graph with ORION's merge rules
+  (`merged/`). Wrapping ORION by hand as the whole stage was ruled out; the agent writes the
+  parsers.
+- **filter**: the only stage that talks to the user. It turns what the user asks for ("human
+  kinases and the drugs that target them", or their own dataset) into a subgraph of the merged
+  graph; with no request, the whole graph. Every question has a default. It doesn't merge:
+  transformation already did.
+- **augmentation**: PubMed evidence for edges: adds the papers that support an edge to its
+  `publications`, and proposes more specific edges where the papers support them. Proposed
+  edges are added beside the originals, never in place of them, with the augmentation agent as
+  their primary knowledge source.
+- **cleaning**: `kgb-clean` drops edges that can't be right (no provenance, a node NodeNorm
+  couldn't resolve or that doesn't exist, or listed in a drop list) and counts suspicious ones as
+  flags without removing them. An evidence check writes drop lists; an edge isn't dropped just
+  because no abstract supports it. See `agents/cleaning/README.md`.
 - **mcp_interface**: an MCP server modeled on the OKN MCP that lets any local agent query the
   final graph: neighbors, paths, and edge lineage from the edge's knowledge
   sources and publications and the `TransformReport`.

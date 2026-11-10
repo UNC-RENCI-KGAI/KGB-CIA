@@ -13,15 +13,19 @@ its README.
 
 ## Run it alone
 
-```bash
-uv run kgb-metadata --input <previous stage output> --output <path>
-```
+Run the `croissant-semantics` skill per source; its README says how. `kgb-metadata` is still a
+stub that prints "not implemented yet" ([#41](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/41)
+implements it).
 
 ## Input / output
 
-Uses the record types in `shared/schema.py`. Describe the exact files here once decided.
+**Input:** a RoboCroissant `croissant.json` per source.
+
+**Output:** per source, `croissant.semantic.json` with `semantics_plan.json` and the check
+reports, which `kgb-transform` reads (see `agents/transformation/README.md`).
 
 ## Status
 
-See the tracking issue for this team on GitHub. Replace this section with what works, what
-doesn't, and how to try it.
+The skill works and has been run on the Pharos sources. The graph is frozen at the Nov 9
+transformation run, so metadata fixes now go into a report (what, which source, why) rather than
+into new bundles.
