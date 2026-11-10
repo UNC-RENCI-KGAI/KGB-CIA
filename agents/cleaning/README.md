@@ -58,7 +58,9 @@ Kept edges are counted, not changed, as `self_loop`, `knowledge_level_not_provid
 A drop list is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by `subject`, `predicate`, `object` and
 `primary_knowledge_source`. It is not keyed by `id`, because the merge assigns new edge uuids
 every run. This is how an evidence check plugs in: a model judges each edge's supporting text
-once, writes the edges it rejects to that folder, and every later cleaning run drops them.
+once, writes the edges it rejects to that folder, and every later cleaning run drops them (the
+`evidence-check` skill in `.agents/skills/cleaning/` does this with Jev), in the style of the
+Translator TMKP filter (NCATSTranslator/translator-ingests#560).
 
 ## Status
 
