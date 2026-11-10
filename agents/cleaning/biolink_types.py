@@ -40,6 +40,13 @@ def categories_under(name: str) -> frozenset[str]:
 
 
 @cache
+def predicates_under(predicate: str) -> frozenset[str]:
+    """A predicate CURIE and every predicate under it: `biolink:treats` includes
+    `biolink:ameliorates_condition` and `biolink:preventative_for_condition`."""
+    return frozenset(toolkit().get_descendants(predicate, formatted=True)) | {predicate}
+
+
+@cache
 def _named_things() -> frozenset[str]:
     return categories_under("named thing")
 

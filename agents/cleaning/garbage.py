@@ -18,9 +18,16 @@ worth a look are counted as flags: `self_loop`, `knowledge_level_not_provided`,
 `agent_type_not_provided`, `type_violation` (the predicate's Biolink domain or range doesn't fit
 the node categories; see `biolink_types.py`), `rare_category_combination` (a subject category,
 predicate, object category triple seen in under RARE_SHARE of that predicate's edges) and
-`opposing_predicate` (the pair also carries a predicate from OPPOSING, such as `treats` against
-`contraindicated_in`). Type violations are flags, not drops, until one run on real data has
-shown by predicate which are wrong edges and which are Biolink being stricter than the graph.
+`opposing_predicate` (the pair also carries the other side of an OPPOSING pair, such as `treats`
+or a predicate under it against `contraindicated_in`). Type violations are flags, not drops:
+on DrugCentral, `treats` edges to a Procedure were wrong but `treats` edges to a Phenomenon
+(pain, skin irritation) were real indications, so a drop has to name a predicate and category,
+never a predicate alone.
+
+Every kept edge with a flag from LISTED_FLAGS is written to `flagged_edges.jsonl`, keyed like a
+drop list (subject, predicate, object, primary knowledge source) with its flags and endpoint
+categories, so the flags can be acted on: passed to an evidence check, or copied into a drop
+list. The `not_provided` flags are left out; they describe a source, not an edge.
 
 Nothing here is optional. A source that loses most of its edges to unresolved nodes is listed
 under `attention` with the CURIE prefixes responsible: the fix is in that source's metadata (an
@@ -36,6 +43,7 @@ import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 
 from agents.cleaning import biolink_types
@@ -46,7 +54,21 @@ EXAMPLES_PER_REASON = 5
 ATTENTION_SHARE = 0.5  # a source losing at least this share of its edges is listed under attention
 RARE_SHARE = 0.001  # a category combination under this share of its predicate's edges is flagged
 RARE_MIN_EDGES = 1000  # only for predicates with at least this many kept edges
-OPPOSING = {("biolink:treats", "biolink:contraindicated_in")}
+# each side matches the predicate and every predicate under it
+OPPOSING = (("biolink:treats", "biolink:contraindicated_in"),)
+# flags written per edge to flagged_edges.jsonl
+LISTED_FLAGS = ("self_loop", "type_violation", "rare_category_combination", "opposing_predicate")
+
+
+@cache
+def opposing_sides() -> tuple[tuple[frozenset[str], frozenset[str]], ...]:
+    return tuple(
+        (biolink_types.predicates_under(a), biolink_types.predicates_under(b)) for a, b in OPPOSING
+    )
+
+
+def in_opposing(predicate: str) -> bool:
+    return any(predicate in a or predicate in b for a, b in opposing_sides())
 
 
 def edge_key(edge: dict) -> EdgeKey:
@@ -127,6 +149,9 @@ class Report:
     edges_out_by_source: Counter = field(default_factory=Counter)
     examples: dict = field(default_factory=lambda: defaultdict(list))
     type_violations_by_predicate: Counter = field(default_factory=Counter)
+    # predicate -> "range: biolink:Procedure" -> edges, the level a drop has to be decided at
+    type_violations_by_category: dict = field(default_factory=lambda: defaultdict(Counter))
+    flagged_edges: int = 0
     combinations: Counter = field(default_factory=Counter)
     combination_examples: dict = field(default_factory=dict)
     opposing: dict = field(default_factory=lambda: defaultdict(set))
@@ -178,21 +203,25 @@ class Report:
         return sorted(found, key=lambda c: (c["predicate"], c["share"]))
 
     def opposing_pairs(self) -> list[dict]:
-        """Node pairs carrying both predicates of an OPPOSING pair."""
+        """Node pairs carrying predicates from both sides of an OPPOSING pair, with the
+        predicates found on each side."""
         found = []
         for (subject, obj), predicates in self.opposing.items():
-            for a, b in OPPOSING:
-                if a in predicates and b in predicates:
-                    found.append({"subject": subject, "object": obj, "predicates": [a, b]})
+            for side_a, side_b in opposing_sides():
+                hits_a, hits_b = predicates & side_a, predicates & side_b
+                if hits_a and hits_b:
+                    found.append(
+                        {
+                            "subject": subject,
+                            "object": obj,
+                            "predicates": sorted(hits_a) + sorted(hits_b),
+                        }
+                    )
         return sorted(found, key=lambda p: (p["subject"], p["object"]))
 
     def to_dict(self) -> dict:
         rare = self.rare_combinations()
         opposing = self.opposing_pairs()
-        if rare:
-            self.flags["rare_category_combination"] = sum(c["edges"] for c in rare)
-        if opposing:
-            self.flags["opposing_predicate"] = 2 * len(opposing)
         return {
             "settings": self.settings,
             "nodes": {"in": self.nodes_in, "out": self.nodes_out},
@@ -211,7 +240,12 @@ class Report:
                 for source, counts in sorted(self.flags_by_source.items())
             },
             "edges_out_by_source": dict(self.edges_out_by_source.most_common()),
+            "flagged_edges": self.flagged_edges,
             "type_violations_by_predicate": dict(self.type_violations_by_predicate.most_common()),
+            "type_violations_by_category": {
+                predicate: dict(counts.most_common())
+                for predicate, counts in sorted(self.type_violations_by_category.items())
+            },
             "rare_category_combinations": rare,
             "opposing_predicates": opposing[: EXAMPLES_PER_REASON * 10],
             "examples": dict(self.examples),
@@ -257,10 +291,11 @@ def edge_flags(edge: dict, subject_categories=(), object_categories=()) -> Itera
 def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = None) -> Report:
     """Clean input_dir's nodes.jsonl and edges.jsonl into output_dir, and return the report.
 
-    Drop lists are read from drop_lists_dir, by default `output_dir/drop_lists`. Three streaming
-    passes, so only node ids are held in memory: nodes (which ids exist and which are
-    unresolved), edges (filter, and note which nodes kept edges touch), nodes again (write the
-    ones still in use).
+    Drop lists are read from drop_lists_dir, by default `output_dir/drop_lists`. Four streaming
+    passes, so only node ids and categories are held in memory: nodes (which ids exist, which
+    are unresolved, their categories), edges (filter, and count category combinations and
+    opposing predicates), kept edges again (flag, now that rare combinations and opposing pairs
+    are known, and write flagged_edges.jsonl), nodes again (write the ones still in use).
     """
     nodes_path, edges_path = input_dir / "nodes.jsonl", input_dir / "edges.jsonl"
     for path in (nodes_path, edges_path):
@@ -315,22 +350,57 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
                 continue
             s_cats = profiles[categories_of[edge["subject"]]]
             o_cats = profiles[categories_of[edge["object"]]]
-            for flag in edge_flags(edge, s_cats, o_cats):
-                report.flags[flag] += 1
-                report.flags_by_source[source][flag] += 1
-                if flag == "type_violation":
-                    report.type_violations_by_predicate[edge["predicate"]] += 1
-                    report.example("type_violation", edge)
             combination = (specific_category(s_cats), edge["predicate"], specific_category(o_cats))
             report.combinations[combination] += 1
             report.combination_examples.setdefault(combination, edge_key(edge)[:3])
-            if any(edge["predicate"] in pair for pair in OPPOSING):
+            if in_opposing(edge["predicate"]):
                 report.opposing[(edge["subject"], edge["object"])].add(edge["predicate"])
             used.add(edge["subject"])
             used.add(edge["object"])
             report.edges_out += 1
             report.edges_out_by_source[source] += 1
             out.write(json.dumps(edge) + "\n")
+
+    rare = {
+        (c["subject_category"], c["predicate"], c["object_category"])
+        for c in report.rare_combinations()
+    }
+    opposing = {(p["subject"], p["object"]): set(p["predicates"]) for p in report.opposing_pairs()}
+    with open(output_dir / "flagged_edges.jsonl", "w") as out:
+        for edge in read_jsonl(output_dir / "edges.jsonl"):
+            source = edge["primary_knowledge_source"]
+            s_cats = profiles[categories_of[edge["subject"]]]
+            o_cats = profiles[categories_of[edge["object"]]]
+            s_cat, o_cat = specific_category(s_cats), specific_category(o_cats)
+            flags = list(edge_flags(edge, s_cats, o_cats))
+            if (s_cat, edge["predicate"], o_cat) in rare:
+                flags.append("rare_category_combination")
+            if edge["predicate"] in opposing.get((edge["subject"], edge["object"]), ()):
+                flags.append("opposing_predicate")
+            for flag in flags:
+                report.flags[flag] += 1
+                report.flags_by_source[source][flag] += 1
+            listed = [flag for flag in flags if flag in LISTED_FLAGS]
+            if not listed:
+                continue
+            line = dict(
+                zip(
+                    ("subject", "predicate", "object", "primary_knowledge_source"),
+                    edge_key(edge),
+                    strict=True,
+                )
+            )
+            line.update(flags=listed, subject_category=s_cat, object_category=o_cat)
+            if "type_violation" in listed:
+                side = biolink_types.violation(edge["predicate"], s_cats, o_cats)
+                line["violates"] = side
+                report.type_violations_by_predicate[edge["predicate"]] += 1
+                report.type_violations_by_category[edge["predicate"]][
+                    f"{side}: {s_cat if side == 'domain' else o_cat}"
+                ] += 1
+                report.example("type_violation", edge)
+            report.flagged_edges += 1
+            out.write(json.dumps(line) + "\n")
 
     with open(output_dir / "nodes.jsonl", "w") as out:
         for node in read_jsonl(nodes_path):

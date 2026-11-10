@@ -29,6 +29,8 @@ no-argument run is the real run. To drop more edges, put a drop list in `<output
   their edges, with the CURIE prefixes that didn't resolve; every dropped edge and node by
   reason and by primary knowledge source; unresolved nodes by prefix; flags on kept edges; and a
   few examples of each.
+- `flagged_edges.jsonl`: the kept edges worth a look, one per line, keyed like a drop list (see
+  below).
 
 ## Reading the result
 
@@ -59,10 +61,21 @@ to lose a fact.
 |---|---|
 | `self_loop` | subject and object are the same node |
 | `knowledge_level_not_provided`, `agent_type_not_provided` | provenance slots left at `not_provided` |
-| `type_violation` | the predicate's Biolink domain or range doesn't fit the node categories (`biolink_types.py`); `type_violations_by_predicate` in the report says where. A `treats` edge whose object normalized to a procedure is wrong; a gene `participates_in` a pathway is Biolink being stricter than the graph. After one run on real data, promote the predicates that only produce wrong edges to a drop |
+| `type_violation` | the predicate's Biolink domain or range doesn't fit the node categories (`biolink_types.py`); `type_violations_by_predicate` and `type_violations_by_category` in the report say where |
 | `rare_category_combination` | a (subject category, predicate, object category) triple under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each |
-| `opposing_predicate` | the pair also carries the opposite predicate (`treats` with `contraindicated_in`); the pairs are listed |
+| `opposing_predicate` | the pair also carries the opposite predicate (`treats` or a predicate under it, such as `ameliorates_condition`, with `contraindicated_in`); the pairs are listed |
 
+Every kept edge with a `self_loop`, `type_violation`, `rare_category_combination` or
+`opposing_predicate` flag is also written to `flagged_edges.jsonl`, keyed like a drop list,
+with its flags, the endpoints' most specific categories and, for a type violation, whether
+the domain or the range failed. To drop some of them, copy those lines into a drop list.
+
+Decide drops by predicate and category, not by predicate alone. On the Oct 30 DrugCentral
+indication graph, `treats` had 411 range violations: about 240 objects were a Procedure
+(imaging, contraception), which are wrong as `treats`, but about 100 were a Phenomenon (severe
+pain, skin irritation), which are real indications that NodeNorm categorizes as Phenomenon.
+A gene `participates_in` a pathway is a violation only because Biolink is stricter than the
+graph.
 
 A drop list is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by `subject`, `predicate`, `object` and
 `primary_knowledge_source`. It is not keyed by `id`, because the merge assigns new edge uuids

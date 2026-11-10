@@ -208,6 +208,61 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     ]
     assert written["flags"]["opposing_predicate"] == 2
     assert written["rare_category_combinations"] == []  # too few edges per predicate
+    assert written["type_violations_by_category"] == {
+        "biolink:participates_in": {"domain: biolink:Gene": 1},
+        "biolink:treats": {"range: biolink:Procedure": 1},
+    }
+
+    flagged = _read(tmp_path / "out" / "flagged_edges.jsonl")
+    assert written["flagged_edges"] == len(flagged) == 5  # 2 violations, 2 opposing, 1 self loop
+    to_procedure = next(f for f in flagged if f["object"] == "UMLS:P")
+    assert to_procedure == {
+        "subject": "CHEBI:1",
+        "predicate": "biolink:treats",
+        "object": "UMLS:P",
+        "primary_knowledge_source": "infores:test",
+        "flags": ["type_violation"],
+        "subject_category": "biolink:SmallMolecule",
+        "object_category": "biolink:Procedure",
+        "violates": "range",
+    }
+    # a flagged line is a valid drop-list line, so a reviewed subset can be promoted to a drop
+    drop = tmp_path / "promote.jsonl"
+    _write(drop, [to_procedure])
+    assert garbage.load_drop_list(drop) == {("CHEBI:1", "biolink:treats", "UMLS:P", "infores:test")}
+
+
+def test_opposing_counts_edges_and_includes_narrower_predicates(tmp_path):
+    chem = {
+        "id": "CHEBI:1",
+        "category": ["biolink:SmallMolecule", "biolink:NamedThing"],
+        "equivalent_identifiers": ["CHEBI:1"],
+    }
+    disease = {
+        "id": "MONDO:1",
+        "category": ["biolink:Disease", "biolink:NamedThing"],
+        "equivalent_identifiers": ["MONDO:1"],
+    }
+    treats = {"predicate": "biolink:treats"}
+    edges = [
+        _edge("CHEBI:1", "MONDO:1", **treats, primary_knowledge_source="infores:a"),
+        _edge("CHEBI:1", "MONDO:1", **treats, primary_knowledge_source="infores:b"),
+        _edge("CHEBI:1", "MONDO:1", predicate="biolink:ameliorates_condition"),
+        _edge("CHEBI:1", "MONDO:1", predicate="biolink:contraindicated_in"),
+    ]
+    graph = tmp_path / "g"
+    graph.mkdir()
+    _write(graph / "nodes.jsonl", [chem, disease])
+    _write(graph / "edges.jsonl", edges)
+    report = garbage.collect(graph, tmp_path / "out")
+    assert report.flags["opposing_predicate"] == 4, "every edge counted, not 2 per pair"
+    assert report.flags_by_source["infores:a"]["opposing_predicate"] == 1
+    [pair] = report.opposing_pairs()
+    assert pair["predicates"] == [
+        "biolink:ameliorates_condition",
+        "biolink:treats",
+        "biolink:contraindicated_in",
+    ]
 
 
 def test_rare_category_combination(tmp_path):
@@ -238,6 +293,10 @@ def test_rare_category_combination(tmp_path):
         ("biolink:Gene", "biolink:Procedure", 1)
     ]
     assert rare[0]["example"] == ("X:2", "biolink:interacts_with", "T:1")
+    assert report.flags["rare_category_combination"] == 1
+    assert report.flags_by_source["infores:test"]["rare_category_combination"] == 1
+    [flagged] = _read(tmp_path / "out" / "flagged_edges.jsonl")
+    assert flagged["object"] == "T:1" and flagged["flags"] == ["rare_category_combination"]
 
 
 def test_violation_rules():
