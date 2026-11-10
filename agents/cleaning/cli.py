@@ -1,23 +1,53 @@
 """Command-line entry point for the Cleaning agent.
 
-Replace the body of `main` with the real agent. Keep the signature so `shared/pipeline.py`
-and the `kgb-*` console scripts keep working.
+Thin wrapper around `garbage.collect`. Keep DESCRIPTION and main's signature so
+`shared/pipeline.py` and the `kgb-*` console scripts keep working.
 """
 
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
-DESCRIPTION = "Resolve conflicts between sources, prune, and produce the final graph."
+from agents.cleaning import garbage
+
+DESCRIPTION = (
+    "Garbage-collect the merged graph: drop dangling, unresolved, unexplained and "
+    "drop-listed edges and the nodes left orphaned, and report what was removed and why."
+)
+
+DEFAULT_INPUT = Path("data/transformation/merged")
+DEFAULT_OUTPUT = Path("data/cleaning")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=DESCRIPTION)
-    parser.add_argument("--input", help="path to the previous stage's output")
-    parser.add_argument("--output", help="where to write this stage's output")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=DEFAULT_INPUT,
+        help="directory holding nodes.jsonl and edges.jsonl (default: data/transformation/merged)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help="where to write the cleaned graph and cleaning_report.json; drop lists are read "
+        "from its drop_lists/ (default: data/cleaning)",
+    )
     args = parser.parse_args(argv)
-    print("Cleaning agent: not implemented yet")
-    print(f"  input={args.input} output={args.output}")
+
+    if args.input.resolve() == args.output.resolve():
+        print("Cleaning: --output must differ from --input")
+        return 2
+    try:
+        report = garbage.collect(args.input, args.output)
+    except FileNotFoundError as e:
+        print(f"Cleaning: {e}")
+        print("  run the transformation stage first, or pass --input")
+        return 1
+    print(garbage.summary(report))
+    print(f"Wrote {args.output}/nodes.jsonl, edges.jsonl and cleaning_report.json")
     return 0
 
 
