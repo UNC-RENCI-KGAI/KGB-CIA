@@ -63,6 +63,7 @@ to lose a fact.
 | `rare_category_combination` | a (subject category, predicate, object category) triple under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each |
 | `opposing_predicate` | the pair also carries the opposite predicate (`treats` with `contraindicated_in`); the pairs are listed |
 
+
 A drop list is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by `subject`, `predicate`, `object` and
 `primary_knowledge_source`. It is not keyed by `id`, because the merge assigns new edge uuids
 every run. This is how an evidence check plugs in: a model judges each edge's supporting text
