@@ -18,7 +18,11 @@ it touches.
   caches what it fetches in SQLite. Set `NCBI_API_KEY` (10 requests a second instead of 3) and
   `NCBI_EMAIL` (NCBI asks for one); `EUTILS_URL` points it at another server and
   `KGB_PUBMED_CACHE` at another cache file (default `data/cache/pubmed.sqlite`). Agents that
-  share the cache file share what each fetched. Keep the abstract text format (`parse_efetch`)
+  share the cache file share what each fetched. Only one process may write to a cache file at
+  a time: SQLite's locking isn't reliable on a network drive, so two people running
+  augmentation and the evidence check at once against a cache on the RENCI drive can hit lock
+  errors or corrupt it. Run them one after the other, or keep a local cache each and have one
+  person refresh the shared copy. Keep the abstract text format (`parse_efetch`)
   and the cache's table and column names as they are: quotes checked against the text, caches
   keyed by it, and the augmentation agent's existing `pubmed.sqlite` depend on them. Tests must
   not hit the network; pass `EUtils` an `httpx.Client` with `httpx.MockTransport` and NodeNorm
