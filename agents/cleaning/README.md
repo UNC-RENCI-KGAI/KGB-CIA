@@ -89,8 +89,10 @@ Translator TMKP filter (NCATSTranslator/translator-ingests#560).
 
 ## Status
 
-Garbage collection works and is tested (`tests/test_cleaning.py`). Not yet: conflicting
-predicates between the same pair of nodes, and the evidence check that writes a drop list.
+Garbage collection, the type, rare-combination and opposing-predicate flags, and
+`flagged_edges.jsonl` work and are tested (`tests/test_cleaning.py`). The `evidence-check` skill
+writes drop lists; it runs up to the Jev step without a key and needs `TYPESAFE_API_KEY` to
+finish (`tests/test_evidence_check.py`).
 
 Running it per source on the Oct 30 transformation outputs showed where the graph is weak.
 All edges were dropped for ChEMBL (CHEMBL.TARGET ids), KEGG pathways (native `ko`/`hsa`/`path`
