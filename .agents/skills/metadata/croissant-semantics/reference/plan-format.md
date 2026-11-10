@@ -211,10 +211,13 @@ Used both in `columns` and in an entity's `columns`.
 | `prefix_column` | The column that holds each row's id prefix (GAF's `DB` column for `DB Object ID`). Use with `id_form: bare` or `mixed`; the check validates each id against its own row's prefix. Every prefix that column holds must be in `prefixes`. |
 | `prefix_codes` | With `prefix_column`, when that column holds namespace keys rather than prefixes (GlyGen's `protein_xref_omim`, UniProt idmapping's `ID_type` value `MIM`): `{ "key": "PREFIX" }`. Each prefix must be in `prefixes`. The croissant gets a code table mapping each key to the prefix's namespace, and the check validates each id against its own row's prefix. Keys missing from the map are reported; map a key to `null` when its values aren't ids in any namespace (Ensembl's `EntrezGene_trans_name`), and they're skipped. |
 | `pattern_note` | Why values may legitimately not fit the registry's id pattern (e.g. "CGD ids have 10 digits; Bioregistry's pattern expects 7"). Turns pattern mismatches into warnings. Only after checking the data and the source. |
+| `drop_unmatched` | With `item_pattern`: the reason values that don't fit it are left out on purpose (rows of other species, the mirror spelling of the same facts). Those rows drop with a diagnostic at transformation, and the check doesn't report them. Use this rather than `pattern_note`, which is for id patterns the registry has wrong. |
 | `true_values` | For yes/no columns: values that mean true (`["NOT"]` in a negation column, `["Y"]`). Empty or other values mean false. Use with a boolean property such as `biolink:negated`. |
 | `optional` | The column may be missing from some matched record sets; skip it there instead of failing. Also allowed on an entity (skipped when none of its columns are present). |
 | `null_values` | Values that mean "no value" (`["N/A", "-"]`). Recorded in the croissant and ignored by the checks. Set these instead of dropping an `id_prefix` because of placeholders. |
 | `absent_values` | Values saying the row reports that the relationship was *not* found (`[0, "", "Not detected"]`), for example a gene with no expression in a tissue. Transformation skips those rows and counts them in its diagnostics, so they don't become edges. Numbers match numerically: `0` also matches `0.0`. Works on any column, typed or not. This differs from `null_values`, which blanks one field and keeps the row. |
+| `absent_below` | A number: values under it report that the relationship was not found (`1` for HPA's `nTPM >= 1` detection cutoff). Works alone or with `absent_values`; add `""` there if empty cells also mean not found. |
+| `absent_group` | A name shared by several columns that have `absent_values` or `absent_below`: the row is skipped only when all of them report absence, not when any one does (four prognostic columns, each empty unless it holds the finding). |
 | `derived` | Extra fields read from this same column, each with its own `name` (new, unique), `property` and the usual keys (`codes`, `true_values`, `null_values`, ...). For a column that says two things, like a predicate column whose `is_not_implicated_in` also means the statement is negated. A derived field inherits the column's `list_separator`, `list_format` and `null_values` unless it sets its own. |
 | `description` | A note on the column (how a list is joined, what a placeholder means); added to the field's description. |
 | `basis`, `source`, `confidence` | Why, from where, how sure (required on every top-level column spec; on entity members they're optional, the entity's apply). |
@@ -256,7 +259,7 @@ Many knowledge bases have a column naming where each row came from (`ChEMBL`, `P
 (or `biolink:aggregator_knowledge_source` when the knowledge base gathered rather than curated
 it). Look up each source with `vocab.py infores NAME` (it searches names, synonyms and URLs;
 try the full name too: CSAR is `infores:community-sar`). The check rejects ids that aren't in
-the catalog. For a source with no infores id, leave it unmapped. The check warns about it, and `notes.md` lists it as a question for the maintainers
+the catalog. For a source with no infores id, leave it unmapped: rows whose mapped source comes out empty drop with a diagnostic and build no edge, so say in `notes.md` how many rows that costs. The check warns about it, and `notes.md` lists it as a question for the maintainers
 (a new infores entry is the fix). Don't invent infores ids, and don't make local terms for
 sources unless the knowledge base documents them as its own.
 

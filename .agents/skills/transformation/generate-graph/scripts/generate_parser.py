@@ -312,7 +312,7 @@ def compile_bundle(path: Path, *, infores: str | None = None) -> dict:
         absence_fields = []
         for f in raw_fields:
             notes = [a.get("name", "") for a in f.get("annotation", [])]
-            if any(n.startswith("absent_value_") for n in notes):
+            if any(n.startswith("absent_value_") or n == "absent_below" for n in notes):
                 try:
                     absence_fields.append(column(f))
                 except ValueError as error:

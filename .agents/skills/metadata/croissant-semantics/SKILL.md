@@ -35,10 +35,10 @@ dependencies). Use `--help` on any of them.
 
 | Script | Use |
 |---|---|
-| `inventory.py CROISSANT [--layout ID] [--json F] [--common-columns]` | List layouts (distinct column sets), largest first; describe one layout's columns, record sets and files; list the columns most record sets share |
+| `inventory.py CROISSANT [--layout ID] [--json F] [--common-columns] [--siblings DIR]` | List layouts (distinct column sets), largest first; describe one layout's columns, record sets and files; list the columns most record sets share; find files other knowledge bases also read |
 | `sample.py CROISSANT --layout ID` | Read real rows from three of the layout's files; shows each column's example values and their shape (CURIEs and their prefixes, bare ids, lists, codes) |
 | `dialects.py list/show/detect/read` | Known file formats (VCF, GAF, MITAB, CTD, ...) as computable dialects; which one reads a layout's files; read records using only what a croissant says about the file |
-| `vocab.py class/slot/search/associations/prefix/identify/term/ols/infores` | Look up Biolink classes and slots (with near-miss suggestions), association classes for a subject/object pair, identifier prefixes (Biolink + Bioregistry), which prefixes fit bare ids, ontology terms by id or text, and infores ids for source names |
+| `vocab.py class/slot/search/associations/prefix/identify/term/ols/infores/names/resolve` | Look up Biolink classes and slots (with near-miss suggestions), association classes for a subject/object pair, identifier prefixes (Biolink + Bioregistry), which prefixes fit bare ids, ontology terms by id or text, infores ids for source names, ids for names (exact matches NodeNorm resolves), and whether ids resolve in NodeNorm |
 | `apply_plan.py CROISSANT PLAN OUT` | Write the plan into a new croissant |
 | `check.py CROISSANT PLAN OUT --report R --load-records` | `--plan-only` first: terms, prefixes, dialects and units in seconds. Then the full check: checks terms, prefixes, codes and dialects against Biolink and sampled data, runs the MLCommons validator, reads a few records through mlcroissant (from the first lines of each file, not whole downloads), and reports coverage |
 
@@ -47,7 +47,16 @@ dependencies). Use `--help` on any of them.
 1. **Survey.** If there's a `semantics_answers.json` next to the croissant, read it first: it
    holds the knowledge base's maintainers' answers to earlier questions (see "Maintainer
    answers" below). Don't ask those questions again; `apply_plan.py` and `check.py` apply the
-   answers to your plan automatically. Then `inventory.py CROISSANT`. Note the knowledge base (name, description, url in the
+   answers to your plan automatically.
+
+   Then run `inventory.py CROISSANT --siblings DIR`, with DIR the directory of all the
+   knowledge bases in this run. Several croissants can describe one download, and building a file
+   twice repeats its facts and leaves merged edges that disagree. The script names, the same way
+   for every agent, which record sets are this knowledge base's to plan. Put the others in
+   `skipped`, saying who reads them. When nothing is left, or the croissant has no record sets,
+   write only `notes.md`: with no semantic croissant, nothing gets built from it.
+
+   Then `inventory.py CROISSANT`. Note the knowledge base (name, description, url in the
    croissant) and how record sets spread over layouts. Large knowledge bases have hundreds of
    layouts; work from the top of the list.
 
@@ -56,7 +65,9 @@ dependencies). Use `--help` on any of them.
    these are, and graph builders cite it as the source of everything read from them: without
    it, the transformation stage won't build the knowledge base at all. When several entries
    match, pick the one for the resource that publishes these files, not a service that
-   re-serves it (`infores:reactome`, not `infores:automat-reactome`). `check.py` compares it
+   re-serves it (`infores:reactome`, not `infores:automat-reactome`), and not a deprecated entry
+   or one that describes an API rather than the data. A croissant that's a slice of a larger
+   resource takes that resource's id. `check.py` compares it
    with what the rest of your plan says: a single aggregator or provided_by constant names the
    knowledge base too (HCOP's orthologs are aggregated by `infores:hgnc`), and a mismatch is a
    warning to resolve.
@@ -77,7 +88,14 @@ dependencies). Use `--help` on any of them.
    small layouts (`inventory.py` will say so), the record sets probably share core columns: use
    `inventory.py --common-columns` and plan those columns once with `match.has_columns`.
    Everything you leave out goes in the plan's `skipped` list with a reason. Doing fewer layouts
-   well is better than many badly.
+   well is better than many badly. Compare a layout's columns with the summary tables' before
+   planning it: per-sample and per-replicate tables usually repeat the same pairs, and add rows
+   rather than facts. When a table comes in several releases, plan only the newest of each table
+   and put the older ones in `skipped`; a knowledge base with several different tables keeps the
+   newest of each. Judge releases by the dates or versions in file names and the documentation,
+   and leave out byte-identical mirrors (the same sha256). When one file states every fact twice
+   under two spellings of an id, keep one spelling (`drop_unmatched`). This graph focuses on human data: leave out other organisms' data
+   unless its ids resolve, and it connects to human genes (orthologs, model-organism phenotypes).
 
 3. **For each layout, look at the data before deciding anything.**
    - `inventory.py CROISSANT --layout ID` for columns, descriptions and file names. A column
@@ -95,8 +113,8 @@ dependencies). Use `--help` on any of them.
      particular file. If sampling fails (a huge file, an archive, a file set), say so in the
      plan's `basis` and lower confidence.
    - For code columns (types, evidence, relations, sources), a sample misses rare values.
-     `sample.py CROISSANT --record-set ID --profile COL1,COL2` reads the whole file and counts
-     every distinct value; repeat `--record-set` to add several files up. Map from the profile,
+     `sample.py CROISSANT --record-set ID --profile COL1,COL2` reads the file (up to `--max-mb`,
+     and it prints a notice when it stops early) and counts every distinct value; repeat `--record-set` to add several files up. Map from the profile,
      not the sample.
    - **Be gentle with the knowledge base's servers.** Run one sampling or check command at a time
      per knowledge base, never many in parallel: hosts block bursts with a bot challenge, and then
@@ -200,14 +218,34 @@ dependencies). Use `--help` on any of them.
      them; give the group a class; mark its id column `biolink:id` with its prefix and form.
      The ids must come out as CURIEs with a Biolink prefix, or NodeNorm can't resolve them:
      not the source's own tag (KEGG's `ko:`, `hsa:`) and not `native` when a registered
-     namespace fits (`reference/plan-format.md`).
+     namespace fits (`reference/plan-format.md`). A thing with a name but no id (a tissue, a
+     cell type) still becomes a node: profile the names, map them with `vocab.py names`, and put
+     the result in the column's `codes` with `id_form: native`. Review `unmapped` yourself with
+     `vocab.py term` and `ols`, keeping only mappings you're sure of; rows with an unmapped name
+     drop with a diagnostic and build no edge, which is better than a wrong id. An unmapped item
+     in a list cell drops alone, and when several entities fill a role the row's others still
+     build. Review what `codes` returned too, against this table's context: an exact match can
+     still be the wrong thing (`Caudate` as a lobe of the liver, `Skin` as epidermis). Try the
+     singular when a plural doesn't match. Test sampled ids with `vocab.py resolve` before
+     trusting a prefix; ids that don't resolve won't merge with other sources. See "Identifiers"
+     in `reference/vocabulary.md`.
    - *Row*: if a row relates two entities, type it as the most specific fitting Biolink
      association, give the entities their roles (`biolink:subject`, `biolink:object`), and add
      the predicate (constant, or a code column mapped with `codes`); without one the layout
      builds no edges. Check the association's
      slot usage (`vocab.py class X`): its subject and object ranges must fit your entities'
      classes. Codes that negate or infer (`is_not_…`, `…_via_orthology`) need marking, not
-     the direct predicate alone. If a row *is* a thing (a
+     the direct predicate alone. Ask what a row says when its measurement is empty, zero or
+     `Not detected`: if it reports that the relationship wasn't found, set `absent_values`, or
+     it becomes a false edge. Use the source's own detection cutoff with `absent_below` only when
+     it publishes one: a confidence scale's lowest value isn't a cutoff, so keep those rows and
+     carry the score. Use `absent_group` when absence takes several columns being empty together.
+     `absent_values` is only for rows saying the relationship wasn't found: a row that reports it
+     with low reliability (`Uncertain`) stays, and carries its reliability for the filter stage.
+     Give a layout no predicate only on purpose, with `no_predicate`
+     saying why (its entities still become nodes, so when those nodes would connect to nothing
+     and don't resolve, put the layout in `skipped` instead): its rows would overstate what's known (unfiltered candidates, scores between
+     groups rather than statements), or Biolink has nothing that fits. If a row *is* a thing (a
      variant, a gene, with a unique id per row), type the row with that thing's class, map its own columns directly, and
      link the other things it mentions as entities with roles like `biolink:has_gene`. Many
      layouts sharing columns? Define specs once in `column_library`.

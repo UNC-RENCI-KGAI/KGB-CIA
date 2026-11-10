@@ -350,6 +350,72 @@ def test_native_rows_reporting_absence_build_nothing(bundle, tmp_path, monkeypat
     assert any("level reports absence" in s.reason for s in report.skipped)
 
 
+def test_native_absence_threshold_and_group(bundle, tmp_path, monkeypatch, native_orion):
+    level = field("level", "unused")
+    level["equivalentProperty"] = "rcv:synthetic/level"
+    level["annotation"] = [
+        {"name": "absent_value_0", "value": ""},
+        {"name": "absent_below", "value": "1"},
+    ]
+    good = field("good", "unused")
+    bad = field("bad", "unused")
+    for column in (good, bad):
+        column["equivalentProperty"] = "rcv:synthetic/" + column["name"]
+        column["annotation"] = [
+            {"name": "absent_value_0", "value": ""},
+            {"name": "absent_group", "value": "prognosis"},
+        ]
+    bundle[1]["recordSet"][0]["field"] += [level, good, bad]
+    _, edges, _, counts, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "gene_id\tdisease_id\tpublications\tlevel\tgood\tbad\n"
+        "1017\t0001\t\t2.5\tyes\t\n"  # one of the group is enough to keep it
+        "1018\t0002\t\t0.9\tyes\t\n"  # under the cutoff
+        "1019\t0003\t\t\tyes\t\n"  # empty
+        "1020\t0004\t\t3\t\t\n",  # the whole group is empty
+    )
+    assert [e["subject"] for e in edges] == ["NCBIGene:1017"]
+    assert counts["diagnostic_count"] == 3
+
+
+def test_native_each_filled_entity_makes_an_edge(bundle, tmp_path, monkeypatch, native_orion):
+    second = group(
+        "second", "biolink:object", "biolink:Disease", [field("other_id", "id", prefix="MONDO")]
+    )
+    bundle[1]["recordSet"][0]["field"].append(second)
+    _, edges, _, _, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "gene_id\tdisease_id\tother_id\tpublications\n"
+        "1017\t0001\t0002\t\n"  # both columns filled
+        "1018\t\t0003\t\n"  # the alternative only
+        "1019\t\t\t\n",  # neither
+    )
+    assert sorted((e["subject"], e["object"]) for e in edges) == [
+        ("NCBIGene:1017", "MONDO:0001"),
+        ("NCBIGene:1017", "MONDO:0002"),
+        ("NCBIGene:1018", "MONDO:0003"),
+    ]
+
+
+def test_one_unknown_list_item_keeps_the_rest_of_the_cell(native_orion):
+    spec = importlib.util.spec_from_file_location("orion_runtime", SCRIPTS / "orion_runtime.py")
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    field_ = {"slot": "id", "extract": {"column": "c"}, "list_separator": ";"}
+    field_["codes"] = {"a": "GO:1", "b": "GO:2"}
+    skipped = []
+    assert runtime.values(field_, {"c": "a;zzz;b"}, {}, skipped) == ["GO:1", "GO:2"]
+    assert skipped == ["Unmapped code 'zzz'"]
+    with pytest.raises(ValueError):  # a value on its own has nothing to keep
+        runtime.values(field_, {"c": "zzz"}, {}, [])
+
+
 def test_native_diagnostics_keep_examples_then_a_count(bundle, tmp_path, monkeypatch, native_orion):
     rows = "".join(f"\t{n:04}\t\n" for n in range(250))
     _, _, _, counts, workspace = run_loader(

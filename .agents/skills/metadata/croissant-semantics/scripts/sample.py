@@ -1235,9 +1235,13 @@ def profile(
                 ] or [None]
             for item in items:
                 key = "" if item is None else str(item)
-                if key and (prefixes is True or (prefixes and c in prefixes)):
+                as_prefix = prefixes is True or (prefixes and c in prefixes)
+                as_shape = shapes is True or (shapes and c in shapes)
+                if key and as_prefix and as_shape:
+                    key = f"{_prefix_of(key)}  {_shape_of(key)}"
+                elif key and as_prefix:
                     key = _prefix_of(key)
-                elif key and (shapes is True or (shapes and c in shapes)):
+                elif key and as_shape:
                     key = _shape_of(key)
                 if by:
                     other = rec.get(by)
@@ -1271,11 +1275,15 @@ def profile(
     if skipped and len(skipped) == len(record_sets):
         sys.exit("No file could be profiled.")
     for c in columns:
+        as_prefix = prefixes is True or (prefixes and c in prefixes)
+        as_shape = shapes is True or (shapes and c in shapes)
         what = (
-            "prefixes"
-            if prefixes is True or (prefixes and c in prefixes)
+            "prefixes and shapes"
+            if as_prefix and as_shape
+            else "prefixes"
+            if as_prefix
             else "shapes"
-            if shapes is True or (shapes and c in shapes)
+            if as_shape
             else "values"
         )
         print(f"- {c}: {len(counts[c])} distinct {what}" + (f" by {by}" if by else ""))

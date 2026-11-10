@@ -67,6 +67,18 @@ the type only reaches option 3 or 4.
 - **No registered id.** A table of things whose only id is the knowledge base's own string key
   (a BRCA Exchange variant key) can still mark that column `biolink:id`, with
   `id_form: native` and the meaning in `basis`. Don't invent a prefix.
+- **Ids wrapped in something else.** Strip the wrapper with `item_pattern`: an IRI in angle
+  brackets (`<http://purl\.obolibrary\.org/obo/GO_(\d+)>`), or a taxon before the id
+  (`9606\.(ENSP\d+)`, which also keeps human rows only; the others drop with a diagnostic).
+- **One column, a different id family per file.** Profile with `--per-file --prefixes`, and when
+  species or files differ, split with `match.record_set_name`, one entry per family, rather than
+  marking the whole column `native`. Keep `native` for files whose values really are names.
+- **A tag that looks like a registered prefix.** Check that it means what the registry says
+  before using it. A cluster id written `CL:…` isn't a Cell Ontology term; such ids make false
+  nodes, so leave them out.
+- **Ids NodeNorm won't resolve.** After an honest try, leave them as they are and say so in
+  `notes.md`. Keep rows whose other end matters, and drop a layout only when neither end can
+  resolve and its rows add nothing.
 - A column spec may carry only `id_prefix` (and `list_separator`) with no `property`, for an id
   column whose role in the row you can't establish; the prefix is still useful.
 
@@ -100,7 +112,9 @@ the type only reaches option 3 or 4.
   when the id is in one of two columns (a UniProt accession under SwissProt for some rows and
   TrEMBL for others), make two entities with the same role, one per id column, rather than
   filing the second as an xref and leaving rows without an id. The check warns when more than
-  5% of sampled rows have no id.
+  5% of sampled rows have no id. Parallel columns work the same way (`Enhanced`, `Supported` and
+  `Approved` location lists, one entity each): the graph builder makes an edge for every entity
+  a row fills, and those edges share the row's other columns.
 - **Association classes constrain their subject and object.** `vocab.py class X` shows the
   slot usage: `PairwiseMolecularInteraction` wants molecular entities, so gene-typed
   interactors need `PairwiseGeneToGeneInteraction` (or protein-typed entities). Predicates
@@ -224,9 +238,9 @@ the type only reaches option 3 or 4.
 - **GEO accessions**: `GSM`/`GSE`/`GPL` ids use Bioregistry's `geo` prefix. Some sources strip the
   letters (ARCHS4's sample ids are the GSM number alone); then the column is `native`, and its
   description says to prepend `GSM`. Don't invent a prefix.
-- **Database-tagged ids** (KEGG's `path:map00010`, `ko:K00001`, `hsa:7157`): the tag is part of
-  the id KEGG writes. Keep the data's form: `id_form: native` with a description, or declare
-  the tag as a prefix with KEGG's entry URL when it isn't a Croissant term (`path` is one).
+- **Database-tagged ids** (KEGG's `path:map00010`, `ko:K00001`, `hsa:7157`): strip the tag with
+  `item_pattern` and give the id its Biolink prefix (`reference/plan-format.md`). Don't declare
+  the tag as a prefix.
 - **Species given as names** (`Homo sapiens` in a column): `biolink:in_taxon_label`, not
   `in_taxon`, which takes NCBITaxon ids.
 - **Gene type columns** (`protein-coding`, `ncRNA`, `pseudo`): map the values to Sequence Ontology

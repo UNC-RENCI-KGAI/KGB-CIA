@@ -1,5 +1,6 @@
 """Tests for sample.py parsing and check.py's offline checks. No network."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -1251,6 +1252,11 @@ def test_node_ids_nodenorm_cant_resolve_are_flagged(monkeypatch):
     # ids with no namespace at all (STRING's COGs marked native)
     (w,) = warnings(["COG0001", "COG0002"], {"id_form": "native"}, "biolink:GeneFamily")
     assert "have no namespace" in w and "may fit Biolink's COG;" in w
+    # native names that codes map to CURIEs do get a namespace (HPA's tissue names)
+    codes = {"Liver": "MONDO:0000001", "Lung": "MONDO:0000002"}
+    assert (
+        warnings(["Liver", "Lung"], {"id_form": "native", "codes": codes}, "biolink:Disease") == []
+    )
     # CURIEs with a Biolink prefix marked native, and IRIs given no form
     (w,) = warnings(["MONDO:0000001", "MONDO:0000002"], {"id_form": "native"}, "biolink:Disease")
     assert "already CURIEs (MONDO): use id_form curie" in w
@@ -1317,3 +1323,169 @@ def test_a_subject_and_object_need_a_predicate():
     # an end that can't be a node builds no edge, whatever the predicate
     assert not errs(entities=[gene, {**pair[1], "no_id": "names only"}])
     assert not errs(entities=[gene, {**pair[1], "type": "rcv:x/Cluster"}])
+
+
+def test_a_file_two_knowledge_bases_read_is_planned_once(tmp_path):
+    import inventory
+
+    def write(name, urls, extra_sets=0):
+        dists = [
+            {"@id": f"f{i}", "@type": "cr:FileObject", "contentUrl": u} for i, u in enumerate(urls)
+        ]
+        sets = [
+            {
+                "@id": f"rs{i}",
+                "name": f"set{i}",
+                "field": [{"name": "a", "source": {"fileObject": {"@id": f"f{i}"}}}],
+            }
+            for i in range(len(urls))
+        ]
+        sets += [{"@id": f"x{i}", "name": f"x{i}", "field": []} for i in range(extra_sets)]
+        path = tmp_path / name / "croissant.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"distribution": dists, "recordSet": sets}))
+        return str(path)
+
+    big = write("big", ["u1", "u2", "u3"])
+    small = write("small", ["u1", "u4"])
+    copy = write("copy", ["u1", "u2"])
+    alone = write("alone", ["u9"])
+
+    assert inventory.shared_files(big, str(tmp_path))["record_sets_to_leave_out"] == []
+    found = inventory.shared_files(small, str(tmp_path))
+    assert found["shared_with"] == {"big": 1, "copy": 1}
+    assert found["record_sets_to_leave_out"] == ["set0"]
+    assert found["record_sets_to_plan"] == ["set1"]
+    assert inventory.shared_files(copy, str(tmp_path))["record_sets_to_plan"] == []
+    assert inventory.shared_files(alone, str(tmp_path))["shared_with"] == {}
+
+
+def test_exact_names_only():
+    import vocab
+
+    hits = [
+        {"curie": "UBERON:1", "label": "right adrenal gland", "synonyms": []},
+        {"curie": "UBERON:2", "label": "adrenal gland", "synonyms": ["Adrenal"]},
+    ]
+    assert vocab.exact_match("Adrenal Gland", hits) == "UBERON:2"
+    assert vocab.exact_match("adrenal", hits) == "UBERON:2"
+    assert vocab.exact_match("gland", hits) is None
+
+
+def test_warns_about_edges_lost_or_false():
+    import check
+
+    entities = [
+        {"name": "gene", "role": "biolink:subject", "type": "biolink:Gene"},
+        {
+            "name": "site",
+            "role": "biolink:object",
+            "type": "biolink:AnatomicalEntity",
+            "no_id": "x",
+        },
+    ]
+    f = Findings()
+    check.check_predicates_present({"layouts": [{"id": "l", "entities": entities}]}, f)
+    assert any("vocab.py names" in m for level, _, m in f.items if level == "warning")
+
+    lay = {"id": "l", "entities": entities}
+    f = Findings()
+    check.check_absent_rows(lay, [{"level": "Not detected", "g": "a"}], {}, f)
+    assert any("absent_values" in m for level, _, m in f.items if level == "warning")
+    f = Findings()
+    check.check_absent_rows(lay, [{"level": "x"}], {"level": {"absent_values": ["x"]}}, f)
+    assert not f.items
+    f = Findings()
+    rows = [{"nTPM": "0.0"}, {"nTPM": "4.1"}]
+    check.check_absent_rows(lay, rows, {}, f)
+    assert any("nTPM" in where for _, where, _ in f.items)
+
+
+def test_dropped_on_purpose_stay_out_of_the_values():
+    import check
+
+    spec = {"item_pattern": r"path:(map\d+)", "drop_unmatched": "mirrors of the map rows"}
+    rows = [{"p": "path:map00010"}, {"p": "path:ko00010"}]
+    assert [v for v, _ in check._values(rows, "p", spec)] == ["map00010"]
+    spec.pop("drop_unmatched")
+    assert [v for v, _ in check._values(rows, "p", spec)] == ["map00010", "path:ko00010"]
+
+
+def test_ids_that_do_not_resolve_are_reported():
+    import check
+
+    spec = {"id_prefix": "KEGG.PATHWAY", "id_form": "bare"}
+    pairs = [("map00010", {}), ("map00020", {})]
+    f = Findings()
+    check.check_ids_resolve("l col", pairs, spec, {}, f, resolver=lambda curies: set())
+    assert any("0 of 2" in m and "KEGG.PATHWAY:map" in m for _, _, m in f.items)
+    f = Findings()
+    check.check_ids_resolve("l col", pairs, spec, {}, f, resolver=lambda curies: set(curies))
+    assert not f.items
+
+    def down(curies):
+        raise OSError("offline")
+
+    f = Findings()
+    check.check_ids_resolve("l col", pairs, spec, {}, f, resolver=down)
+    assert [level for level, _, _ in f.items] == ["note"]
+
+
+def test_mapped_names_keep_their_curie():
+    import check
+
+    spec = {"codes": {"Liver": "UBERON:0002107"}, "id_form": "native"}
+    assert check.emitted_curie("Liver", {}, spec, {}) == "UBERON:0002107"
+    assert check.emitted_curie("Other", {}, spec, {}) is None
+
+
+def test_sample_spreads_across_what_was_read():
+    import check
+
+    rows = list(range(1000))
+    picked = check.spread(rows, 10)
+    assert picked[0] == 0 and picked[-1] == 900 and len(picked) == 10
+    assert check.spread(rows[:5], 10) == rows[:5]
+
+
+def test_threshold_counts_as_handling_absence():
+    import check
+
+    lay = {
+        "id": "l",
+        "entities": [
+            {"name": "g", "role": "biolink:subject"},
+            {"name": "t", "role": "biolink:object"},
+        ],
+    }
+    f = Findings()
+    check.check_absent_rows(lay, [{"nTPM": "0.0"}], {"nTPM": {"absent_below": 1}}, f)
+    assert not f.items
+
+
+def test_layouts_without_edges_need_no_edge_provenance():
+    import check
+
+    lay = {
+        "id": "l",
+        "row": {"no_predicate": "scores between groups"},
+        "entities": [{"name": "g", "role": "biolink:subject"}],
+    }
+    f = Findings()
+    check.check_edge_provenance({"layouts": [lay]}, f, {})
+    assert not f.items
+
+
+def test_a_plans_own_proposed_id_may_appear_in_layouts():
+    import check
+
+    lay = {
+        "id": "l",
+        "constants": {
+            "s": {"property": "biolink:primary_knowledge_source", "value": "infores:new-kb"}
+        },
+    }
+    plan = {"infores": "infores:new-kb", "infores_proposed": True, "layouts": [lay]}
+    f = Findings()
+    check.check_infores(plan, f, {})
+    assert not [m for level, _, m in f.items if level == "error"]
