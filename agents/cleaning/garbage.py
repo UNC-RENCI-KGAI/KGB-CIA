@@ -16,8 +16,10 @@ An edge is dropped, checked in this order, when it:
 A node is dropped when it is `unresolved` or `orphan`: no kept edge touches it. Edges kept but
 worth a look are counted as flags: `self_loop`, `knowledge_level_not_provided`,
 `agent_type_not_provided`, `type_violation` (the predicate's Biolink domain or range doesn't fit
-the node categories; see `biolink_types.py`), `rare_category_combination` (a subject category,
-predicate, object category triple seen in under RARE_SHARE of that predicate's edges) and
+the node categories; see `biolink_types.py`), `rare_category_combination` (the subject's most
+specific categories, the predicate and the object's, seen in under RARE_SHARE of that
+predicate's edges; a node can have several most specific categories, see
+`biolink_types.most_specific`) and
 `opposing_predicate` (the pair also carries the other side of an OPPOSING pair, such as `treats`
 or a predicate under it against `contraindicated_in`). Type violations are flags, not drops:
 on DrugCentral, `treats` edges to a Procedure were wrong but `treats` edges to a Phenomenon
@@ -109,9 +111,9 @@ def load_drop_lists(directory: Path) -> dict[str, set[EdgeKey]]:
     return {path.stem: load_drop_list(path) for path in sorted(directory.glob("*.jsonl"))}
 
 
-def specific_category(categories) -> str:
-    """The most specific category; ORION writes it first, ancestors after."""
-    return categories[0] if categories else "(none)"
+def category_label(categories: tuple[str, ...]) -> str:
+    """A node's most specific categories as one key, e.g. 'biolink:Drug + biolink:SmallMolecule'."""
+    return " + ".join(categories) or "(none)"
 
 
 def is_resolved(node: dict) -> bool:
@@ -187,17 +189,17 @@ class Report:
         for (_, predicate, _), n in self.combinations.items():
             per_predicate[predicate] += n
         found = []
-        for (s_cat, predicate, o_cat), n in self.combinations.items():
+        for (s_cats, predicate, o_cats), n in self.combinations.items():
             total = per_predicate[predicate]
             if total >= RARE_MIN_EDGES and n / total < RARE_SHARE:
                 found.append(
                     {
-                        "subject_category": s_cat,
+                        "subject_categories": list(s_cats),
                         "predicate": predicate,
-                        "object_category": o_cat,
+                        "object_categories": list(o_cats),
                         "edges": n,
                         "share": round(n / total, 6),
-                        "example": self.combination_examples[(s_cat, predicate, o_cat)],
+                        "example": self.combination_examples[(s_cats, predicate, o_cats)],
                     }
                 )
         return sorted(found, key=lambda c: (c["predicate"], c["share"]))
@@ -317,6 +319,7 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
     profiles: list[tuple[str, ...]] = []
     profile_of: dict[tuple[str, ...], int] = {}
     categories_of: dict[str, int] = {}
+    specific: list[tuple[str, ...]] = []  # each profile's most specific categories
     for node in read_jsonl(nodes_path):
         report.nodes_in += 1
         node_id = node.get("id")
@@ -331,6 +334,7 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
         if profile not in profile_of:
             profile_of[profile] = len(profiles)
             profiles.append(profile)
+            specific.append(biolink_types.most_specific(profile))
         categories_of[node_id] = profile_of[profile]
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -348,9 +352,9 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
                     for end in {edge["subject"], edge["object"]} & unresolved:
                         report.unresolved_prefixes_by_source[source][prefix(end)] += 1
                 continue
-            s_cats = profiles[categories_of[edge["subject"]]]
-            o_cats = profiles[categories_of[edge["object"]]]
-            combination = (specific_category(s_cats), edge["predicate"], specific_category(o_cats))
+            s_spec = specific[categories_of[edge["subject"]]]
+            o_spec = specific[categories_of[edge["object"]]]
+            combination = (s_spec, edge["predicate"], o_spec)
             report.combinations[combination] += 1
             report.combination_examples.setdefault(combination, edge_key(edge)[:3])
             if in_opposing(edge["predicate"]):
@@ -362,18 +366,19 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
             out.write(json.dumps(edge) + "\n")
 
     rare = {
-        (c["subject_category"], c["predicate"], c["object_category"])
+        (tuple(c["subject_categories"]), c["predicate"], tuple(c["object_categories"]))
         for c in report.rare_combinations()
     }
     opposing = {(p["subject"], p["object"]): set(p["predicates"]) for p in report.opposing_pairs()}
     with open(output_dir / "flagged_edges.jsonl", "w") as out:
         for edge in read_jsonl(output_dir / "edges.jsonl"):
             source = edge["primary_knowledge_source"]
-            s_cats = profiles[categories_of[edge["subject"]]]
-            o_cats = profiles[categories_of[edge["object"]]]
-            s_cat, o_cat = specific_category(s_cats), specific_category(o_cats)
+            s_profile = categories_of[edge["subject"]]
+            o_profile = categories_of[edge["object"]]
+            s_cats, o_cats = profiles[s_profile], profiles[o_profile]
+            s_spec, o_spec = specific[s_profile], specific[o_profile]
             flags = list(edge_flags(edge, s_cats, o_cats))
-            if (s_cat, edge["predicate"], o_cat) in rare:
+            if (s_spec, edge["predicate"], o_spec) in rare:
                 flags.append("rare_category_combination")
             if edge["predicate"] in opposing.get((edge["subject"], edge["object"]), ()):
                 flags.append("opposing_predicate")
@@ -390,13 +395,15 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
                     strict=True,
                 )
             )
-            line.update(flags=listed, subject_category=s_cat, object_category=o_cat)
+            line.update(
+                flags=listed, subject_categories=list(s_spec), object_categories=list(o_spec)
+            )
             if "type_violation" in listed:
                 side = biolink_types.violation(edge["predicate"], s_cats, o_cats)
                 line["violates"] = side
                 report.type_violations_by_predicate[edge["predicate"]] += 1
                 report.type_violations_by_category[edge["predicate"]][
-                    f"{side}: {s_cat if side == 'domain' else o_cat}"
+                    f"{side}: {category_label(s_spec if side == 'domain' else o_spec)}"
                 ] += 1
                 report.example("type_violation", edge)
             report.flagged_edges += 1

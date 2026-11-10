@@ -39,6 +39,25 @@ def categories_under(name: str) -> frozenset[str]:
     return frozenset(toolkit().get_descendants(name, formatted=True))
 
 
+def _under(name: str) -> frozenset[str]:
+    try:
+        return categories_under(name)
+    except ValueError:  # not a Biolink element
+        return frozenset({name})
+
+
+@cache
+def most_specific(categories: tuple[str, ...]) -> tuple[str, ...]:
+    """The categories in a node's list that no other category in the list is under, sorted.
+
+    There can be more than one: NodeNorm gives many drugs both `Drug` and `SmallMolecule`, and
+    neither is under the other. So never take the first category as the most specific one. A
+    category Biolink doesn't know counts as specific.
+    """
+    present = set(categories)
+    return tuple(sorted(c for c in present if not (_under(c) - {c}) & present))
+
+
 @cache
 def predicates_under(predicate: str) -> frozenset[str]:
     """A predicate CURIE and every predicate under it: `biolink:treats` includes

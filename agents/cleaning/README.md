@@ -62,13 +62,16 @@ to lose a fact.
 | `self_loop` | subject and object are the same node |
 | `knowledge_level_not_provided`, `agent_type_not_provided` | provenance slots left at `not_provided` |
 | `type_violation` | the predicate's Biolink domain or range doesn't fit the node categories (`biolink_types.py`); `type_violations_by_predicate` and `type_violations_by_category` in the report say where |
-| `rare_category_combination` | a (subject category, predicate, object category) triple under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each |
+| `rare_category_combination` | a (subject categories, predicate, object categories) combination, using each node's most specific categories, under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each |
 | `opposing_predicate` | the pair also carries the opposite predicate (`treats` or a predicate under it, such as `ameliorates_condition`, with `contraindicated_in`); the pairs are listed |
 
 Every kept edge with a `self_loop`, `type_violation`, `rare_category_combination` or
 `opposing_predicate` flag is also written to `flagged_edges.jsonl`, keyed like a drop list,
 with its flags, the endpoints' most specific categories and, for a type violation, whether
-the domain or the range failed. To drop some of them, copy those lines into a drop list.
+the domain or the range failed. A node can have more than one most specific category (a drug
+that is both `Drug` and `SmallMolecule`, neither under the other), so these are lists, and the
+category combinations behind `rare_category_combination` use all of them. The order of a
+node's `category` list is never relied on. To drop some of them, copy those lines into a drop list.
 
 Decide drops by predicate and category, not by predicate alone. On the Oct 30 DrugCentral
 indication graph, `treats` had 411 range violations: about 240 objects were a Procedure

@@ -222,8 +222,8 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
         "object": "UMLS:P",
         "primary_knowledge_source": "infores:test",
         "flags": ["type_violation"],
-        "subject_category": "biolink:SmallMolecule",
-        "object_category": "biolink:Procedure",
+        "subject_categories": ["biolink:SmallMolecule"],
+        "object_categories": ["biolink:Procedure"],
         "violates": "range",
     }
     # a flagged line is a valid drop-list line, so a reviewed subset can be promoted to a drop
@@ -289,8 +289,8 @@ def test_rare_category_combination(tmp_path):
     _write(graph / "edges.jsonl", edges)
     report = garbage.collect(graph, tmp_path / "out")
     rare = report.rare_combinations()
-    assert [(c["subject_category"], c["object_category"], c["edges"]) for c in rare] == [
-        ("biolink:Gene", "biolink:Procedure", 1)
+    assert [(c["subject_categories"], c["object_categories"], c["edges"]) for c in rare] == [
+        (["biolink:Gene"], ["biolink:Procedure"], 1)
     ]
     assert rare[0]["example"] == ("X:2", "biolink:interacts_with", "T:1")
     assert report.flags["rare_category_combination"] == 1
@@ -315,3 +315,50 @@ def test_violation_rules():
     assert bt.violation("biolink:subclass_of", disease, disease) is None  # ontology class
     assert bt.violation("biolink:not_real", disease, disease) is None
     assert bt.violation("biolink:treats", [], []) is None  # unknown categories aren't judged
+
+
+def test_most_specific_can_be_more_than_one_category():
+    from agents.cleaning import biolink_types as bt
+
+    drug = (
+        "biolink:SmallMolecule",
+        "biolink:Drug",
+        "biolink:MolecularEntity",
+        "biolink:MolecularMixture",
+        "biolink:ChemicalEntity",
+        "biolink:ChemicalOrDrugOrTreatment",
+        "biolink:NamedThing",
+    )
+    assert bt.most_specific(drug) == ("biolink:Drug", "biolink:SmallMolecule")
+    # order in the list doesn't matter: the first category isn't assumed to be the most specific
+    assert bt.most_specific(tuple(reversed(drug))) == ("biolink:Drug", "biolink:SmallMolecule")
+    assert bt.most_specific(("biolink:Disease", "biolink:NamedThing")) == ("biolink:Disease",)
+    assert bt.most_specific(("biolink:NotACategory",)) == ("biolink:NotACategory",)
+    assert bt.most_specific(()) == ()
+
+
+def test_combinations_key_on_every_most_specific_category(tmp_path):
+    both = ["biolink:NamedThing", "biolink:SmallMolecule", "biolink:Drug", "biolink:ChemicalEntity"]
+    nodes = [
+        {"id": "CHEBI:1", "category": both, "equivalent_identifiers": ["CHEBI:1"]},
+        {
+            "id": "UMLS:P",
+            "category": ["biolink:NamedThing", "biolink:Procedure"],
+            "equivalent_identifiers": ["UMLS:P"],
+        },
+    ]
+    graph = tmp_path / "g"
+    graph.mkdir()
+    _write(graph / "nodes.jsonl", nodes)
+    _write(graph / "edges.jsonl", [_edge("CHEBI:1", "UMLS:P", predicate="biolink:treats")])
+    report = garbage.collect(graph, tmp_path / "out")
+    assert report.combinations == {
+        (("biolink:Drug", "biolink:SmallMolecule"), "biolink:treats", ("biolink:Procedure",)): 1
+    }
+    [flagged] = _read(tmp_path / "out" / "flagged_edges.jsonl")
+    assert flagged["subject_categories"] == ["biolink:Drug", "biolink:SmallMolecule"]
+    assert flagged["object_categories"] == ["biolink:Procedure"]
+    written = json.loads((tmp_path / "out" / "cleaning_report.json").read_text())
+    assert written["type_violations_by_category"] == {
+        "biolink:treats": {"range: biolink:Procedure": 1}
+    }
