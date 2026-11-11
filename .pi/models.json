@@ -3,7 +3,7 @@
     "renci-azure": {
       "baseUrl": "https://renci-analytics.openai.azure.com/openai/v1",
       "api": "azure-openai-responses",
-      "apiKey": "$RENCI_AZURE_API_KEY",
+      "apiKey": "$AZURE_OPENAI_API_KEY",
       "models": [
         {
           "id": "gpt-6.1-sol",
