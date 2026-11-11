@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Describe a built knowledge graph from ORION's own metadata, and how a user's data joins it.
 
-    describe_graph.py [TRANSFORMATION] [--user SOURCE ...] [--output DIR]
+    describe_graph.py [TRANSFORMATION] [--user SOURCE ...] [--croissants [CATALOG]]
+                      [--croissant-pages URL] [--output DIR]
 
 TRANSFORMATION is kgb-transform's output directory (default data/transformation), or its
 graphs/ directory of per-source ORION workspaces. For each source this reads the workspace's
@@ -21,6 +22,12 @@ With it, the script also reads each built source's node ids (resolved ones only)
 nodes sources share: how much of the user's data is already in the graph, and which sources
 cover the rest.
 
+`--croissants` adds the sources that have a croissant but were never tried for this graph: it
+reads a Boulangerie catalog (`catalog.json`: a list of `{"name", "slug", ...}`, from a file or
+URL), leaves out every source this run already lists, and links each of the rest to its
+Boulangerie page (`<site>/kb/<slug>/`). This is the only step that may use the network, and only
+when the catalog is a URL.
+
 Writes description.json (everything), description.md (for an agent to read and retell) and
 overview.html (a self-contained page with charts) to --output. Standard library only; the
 repository's Biolink helper (agents/cleaning/biolink_types.py) is used for most specific
@@ -35,6 +42,7 @@ import json
 import math
 import re
 import sys
+import urllib.request
 from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
@@ -42,6 +50,14 @@ from pathlib import Path
 TOP_CATEGORIES = 12
 MAX_RECOMMENDED = 5
 MIN_GAIN = 0.01  # stop recommending when a source adds under 1% of the user's nodes
+
+# The Boulangerie site: one page per knowledge base at <site>/kb/<slug>/, and the list of them at
+# <site>/catalog.json. This is the preview site; the real one
+# (https://roboboulangerie.github.io/Boulangerie/) was not published as of Nov 11, 2026. When it
+# is, change this one value, or pass --croissants and --croissant-pages.
+BOULANGERIE_SITE = "https://roboboulangerie.github.io/boulangerie-sandbox/"
+CATALOG_NAME = "catalog.json"
+CATALOG_TIMEOUT = 20  # seconds
 
 
 # ---------------------------------------------------------------------------------------------
@@ -422,6 +438,64 @@ def resolve_user(names: list[str], sources: list[dict]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------------------------
+# Sources with a croissant that this graph never tried
+
+
+def read_catalog(location: str) -> list[dict]:
+    """A Boulangerie catalog, from a file or an http(s) URL: a list of {"name", "slug", ...}.
+
+    Raises SystemExit with a plain message when it can't be read or isn't a catalog.
+    """
+    try:
+        if re.match(r"https?://", location):
+            request = urllib.request.Request(location, headers={"User-Agent": "kgb-cia"})
+            with urllib.request.urlopen(request, timeout=CATALOG_TIMEOUT) as response:
+                text = response.read().decode("utf-8")
+        else:
+            text = Path(location).read_text()
+        catalog = json.loads(text)
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"--croissants: could not read {location}: {error}") from error
+    if not isinstance(catalog, list) or not all(
+        isinstance(entry, dict) and entry.get("slug") for entry in catalog
+    ):
+        raise SystemExit(f'--croissants: {location} is not a list of {{"name", "slug"}} entries')
+    return catalog
+
+
+def pages_base(catalog_location: str, pages: str | None) -> str:
+    """Where the knowledge-base pages live: --croissant-pages, else next to a catalog URL, else
+    the Boulangerie site."""
+    if pages:
+        base = pages
+    elif re.match(r"https?://", catalog_location):
+        base = catalog_location.rsplit("/", 1)[0]
+    else:
+        base = BOULANGERIE_SITE
+    return base.rstrip("/") + "/"
+
+
+def additional_croissants(catalog: list[dict], sources: list[dict], base: str) -> list[dict]:
+    """Catalog entries that aren't a source of this run, each with its Boulangerie page.
+
+    A catalog entry is one of this run's sources when its slug or its name, written plainly,
+    equals a source id written plainly ("gene-ontology" and "Kgbcia_gene_ontology").
+    """
+    tried = {_plain(s["source_id"]) for s in sources}
+    extra = []
+    for entry in catalog:
+        slug = str(entry["slug"])
+        name = str(entry.get("name") or slug)
+        if _plain(slug) in tried or _plain(name) in tried:
+            continue
+        record = {"name": name, "slug": slug, "page": f"{base}kb/{slug}/"}
+        if entry.get("status"):
+            record["status"] = entry["status"]
+        extra.append(record)
+    return sorted(extra, key=lambda r: r["name"].lower())
+
+
+# ---------------------------------------------------------------------------------------------
 # Putting it together
 
 
@@ -430,6 +504,8 @@ def describe(
     merged: Path | None = None,
     cleaned: Path | None = None,
     user: list[str] | None = None,
+    croissants: str | None = None,
+    croissant_pages: str | None = None,
 ) -> dict:
     sources = [read_source(w) for w in sorted(p for p in graphs.iterdir() if p.is_dir())]
     user = resolve_user(user or [], sources)
@@ -470,6 +546,12 @@ def describe(
     }
     if user:
         description["overlap"] = overlap(sources, user)
+    if croissants:
+        base = pages_base(croissants, croissant_pages)
+        description["croissant_catalog"] = {"catalog": croissants, "pages": base}
+        description["additional_croissants"] = additional_croissants(
+            read_catalog(croissants), sources, base
+        )
     return description
 
 
@@ -543,6 +625,18 @@ def markdown(d: dict) -> str:
             f"| {source_label(s['source_id'])} | {why_not(s['problem'])} | {s['problem']} |"
             for s in not_built
         ]
+    extra = d.get("additional_croissants")
+    if extra:
+        lines += ["", "## Additional sources with available croissants", ""]
+        lines += [
+            "These have a croissant (a metadata file describing their data) but weren't tried "
+            "for this graph. Each could be added through the same metadata and transformation "
+            "steps.",
+            "",
+            "| Source | Its croissant |",
+            "|---|---|",
+        ]
+        lines += [f"| {r['name']} | {r['page']} |" for r in extra]
     user = d.get("overlap", {}).get("user")
     if user:
         lines += [
@@ -860,6 +954,21 @@ def overview_html(d: dict) -> str:
             f"{rows}</table>"
         )
 
+    extra = d.get("additional_croissants")
+    if extra:
+        rows = "".join(
+            f'<tr><td>{_esc(r["name"])}</td><td><a href="{_esc(r["page"])}">'
+            f"{_esc(r['page'])}</a></td></tr>"
+            for r in extra
+        )
+        sections.append(
+            "<h2>Additional sources with available croissants</h2>"
+            '<p class="note">These have a croissant (a small file describing their data) but '
+            "weren't tried for this graph. Any of them could be added the same way the "
+            "sources above were.</p>"
+            f"<table><tr><th>Source</th><th>Its croissant</th></tr>{rows}</table>"
+        )
+
     def table(head: list[str], rows: list[list]) -> str:
         h = "".join(f"<th>{_esc(c)}</th>" for c in head)
         body = "".join(
@@ -923,6 +1032,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--user", nargs="+", default=[], help="the user's own source(s), by id or plain name"
     )
+    parser.add_argument(
+        "--croissants",
+        nargs="?",
+        const=BOULANGERIE_SITE + CATALOG_NAME,
+        metavar="CATALOG",
+        help="also list sources that have a croissant but aren't in this run: a Boulangerie "
+        "catalog.json file or URL (with no value: the Boulangerie site's catalog)",
+    )
+    parser.add_argument(
+        "--croissant-pages",
+        metavar="URL",
+        help="site whose kb/<slug>/ pages the list links to (default: where the catalog URL is, "
+        "else the Boulangerie site)",
+    )
     parser.add_argument("--output", type=Path, default=Path("data/describe"), help="output dir")
     args = parser.parse_args(argv)
     if not args.transformation.is_dir():
@@ -930,7 +1053,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     graphs, merged, cleaned = find_layout(args.transformation)
-    d = describe(graphs, merged, cleaned, args.user)
+    d = describe(graphs, merged, cleaned, args.user, args.croissants, args.croissant_pages)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "description.json").write_text(json.dumps(d, indent=2) + "\n")
     (args.output / "description.md").write_text(markdown(d))
