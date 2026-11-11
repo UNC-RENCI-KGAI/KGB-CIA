@@ -16,7 +16,7 @@ PATTERN = re.compile(
 SKIP_DIRS = {".venv", ".git", "node_modules", "data", "__pycache__", ".pytest_cache", ".ruff_cache"}
 SUFFIXES = {".py", ".md", ".json", ".toml", ".yml", ".yaml", ".sh"}
 # names that aren't ours: a harness's own, or an example placeholder in a vendored doc
-NOT_OURS = {"ANTHROPIC_IDENTITY_TOKEN", "GITHUB_TOKEN", "ASHE_TOKEN"}
+NOT_OURS = {"ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_AUTH_TOKEN", "GITHUB_TOKEN", "ASHE_TOKEN"}
 
 
 def example_names() -> set[str]:

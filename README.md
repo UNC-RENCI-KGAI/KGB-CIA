@@ -87,13 +87,19 @@ uv is not installed.
 
 ## API keys
 
-Nothing in the repository needs a key to build, clean, or filter the graph, or to serve it over
-MCP. Keys are needed only for the paid steps: the RENCI Azure models for augmentation, TypeSafe
-for the evidence check, an Anthropic key if your agent harness is Claude, and optionally an NCBI
-key for faster PubMed searches. [`.env.example`](.env.example) lists each variable and the step
-that reads it. Copy it to `.env` (gitignored), fill in what you have, and run with
-`uv run --env-file .env <command>`. Scripts read environment variables only, so a keychain
-lookup in the shell works the same. See [`.pi/README.md`](.pi/README.md) for the Pi model setup.
+You need no key to build, clean or filter the graph, or to serve it over MCP. Keys are only for
+the two steps that call a paid model:
+
+- **Augmentation** needs a language model: an Anthropic key for Claude models, or an Azure
+  OpenAI key and endpoint.
+- **The evidence check** needs a TypeSafe AI key for its Jev model.
+- **PubMed** works without a key; a free NCBI key makes searches faster (10 requests a second
+  instead of 3).
+
+[`.env.example`](.env.example) lists every variable and the step that reads it. Copy it to `.env`
+(gitignored), fill in what you have, and run with `uv run --env-file .env <command>`. The scripts
+only read environment variables, so exporting them from your shell or a secrets manager works
+too. To use the models from the Pi agent harness, see [`.pi/README.md`](.pi/README.md).
 
 ## Working on the repo
 
