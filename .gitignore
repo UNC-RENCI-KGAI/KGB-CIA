@@ -27,6 +27,7 @@ runs/
 # Secrets and local config
 .env
 .env.*
+!.env.example
 *.key
 .claude/settings.local.json
 
