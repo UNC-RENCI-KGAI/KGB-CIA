@@ -31,14 +31,25 @@ no-argument run is the real run. To drop more edges, put a drop list in `<output
   few examples of each.
 - `flagged_edges.jsonl`: the kept edges worth a look, one per line, keyed like a drop list (see
   below).
+- `unresolved_nodes.tsv`: every node NodeNorm couldn't resolve, with its prefix, name, the
+  edges it took down, the edges kept with an `unresolved_node` flag, and the sources and
+  predicates of the dropped edges, most costly first. This is what a metadata fix needs: the
+  identifiers, not just the prefix. Written on every run.
 
 ## Reading the result
 
 Start with `attention` (also printed as "Needs attention"). A source there almost always has an
 id problem in its metadata: a prefix NodeNorm doesn't know, native ids without a prefix, or
 versioned ids. Fix the source's semantics plan with the croissant-semantics skill and rebuild
-it. Keeping the unresolved nodes instead would add facts that can't join anything else in the
-graph, so there is deliberately no option for that.
+it.
+
+Unresolved nodes are kept where they still connect to the graph. An edge with one unresolved
+end (a resolved gene and a dbSNP variant, a resolved protein and a Reactome reaction, a
+resolved protein and an obsolete GO term) is a real fact about the resolved end, so it is kept
+and flagged `unresolved_node`. An edge with both ends unresolved can't join anything else, so
+it is dropped, as is an edge touching an id that is wrong rather than unknown to NodeNorm
+(`BROKEN_ID_PREFIXES`). On the Nov 9 graph, 1.96M of the 2.21M edges with an unresolved end
+had the other end resolved.
 
 ## What it removes
 
@@ -49,24 +60,36 @@ Garbage collection (`garbage.py`), in this order. An edge is dropped when it:
 | `malformed` | no subject, predicate or object |
 | `no_primary_knowledge_source` | no provenance, so it can't be explained |
 | `dangling` | names a node that isn't in `nodes.jsonl` |
-| `unresolved_node` | touches a node NodeNorm couldn't resolve (empty `equivalent_identifiers`) |
+| `broken_id` | touches an unresolved id that is wrong, not just unknown to NodeNorm (`BROKEN_ID_PREFIXES`): `OBA:VT...` trait ids written with the wrong prefix (TIGA, GWAS Catalog), and `phenopacket.store:` patients from case reports. Dropped even when the other end resolves |
+| `unresolved_both_ends` | both its nodes are ones NodeNorm couldn't resolve (empty `equivalent_identifiers`), so it can't join the rest of the graph |
 | `drop_list:<name>` | listed in `<output>/drop_lists/<name>.jsonl` |
+| `type_violation:<predicate>-><category>` | a type violation promoted to a drop in `DROP_TYPE_VIOLATIONS`: today, `treats` whose object is a Procedure, ClinicalIntervention, BiologicalProcess, ChemicalEntity, OrganismTaxon, Protein or Drug |
 
-Then nodes are dropped when `unresolved`, or `orphan` (no kept edge touches them).
+Then nodes are dropped when no kept edge touches them: `unresolved` when NodeNorm couldn't
+resolve them either, else `orphan`. An unresolved node with a kept edge stays.
+
+The promoted type violations are the drops a reviewer made by hand on the Nov 9 graph, so an
+unattended run reaches the same result in one pass: DrugCentral `treats` edges to "General
+Anesthesia" (Procedure), "Asthma management" (ClinicalIntervention), "relaxation of muscle"
+(BiologicalProcess), "Diagnostic agents" (ChemicalEntity), "Vancomycin-Resistant Enterococci"
+(OrganismTaxon) or the drug's own synonym (Protein, Drug). `treats` to a Phenomenon stays a
+flag on purpose ("severe pain" is a real indication). To promote another pair, add it to the
+table with the names that justify it; every other violation stays a flag.
 
 Kept edges are counted, not changed, as flags: things to fix upstream in metadata, not reasons
 to lose a fact.
 
 | Flag | Meaning |
 |---|---|
+| `unresolved_node` | one end is a node NodeNorm couldn't resolve; the other end resolved |
 | `self_loop` | subject and object are the same node |
 | `knowledge_level_not_provided`, `agent_type_not_provided` | provenance slots left at `not_provided` |
 | `type_violation` | the predicate's Biolink domain or range doesn't fit the node categories (`biolink_types.py`); `type_violations_by_predicate` and `type_violations_by_category` in the report say where |
 | `rare_category_combination` | a (subject categories, predicate, object categories) combination, using each node's most specific categories, under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each |
 | `opposing_predicate` | the pair also carries the opposite predicate (`treats` or a predicate under it, such as `ameliorates_condition`, with `contraindicated_in`); the pairs are listed |
 
-Every kept edge with a `self_loop`, `type_violation`, `rare_category_combination` or
-`opposing_predicate` flag is also written to `flagged_edges.jsonl`, keyed like a drop list,
+Every kept edge with an `unresolved_node`, `self_loop`, `type_violation`,
+`rare_category_combination` or `opposing_predicate` flag is also written to `flagged_edges.jsonl`, keyed like a drop list,
 with its flags, the endpoints' most specific categories and, for a type violation, whether
 the domain or the range failed. A node can have more than one most specific category (a drug
 that is both `Drug` and `SmallMolecule`, neither under the other), so these are lists, and the
