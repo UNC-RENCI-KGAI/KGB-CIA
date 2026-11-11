@@ -8,13 +8,13 @@ https://github.com/orgs/UNC-RENCI-KGAI/projects/1
 
 | Team | Directory | Members (GitHub) |
 | --- | --- | --- |
-| Metadata :file_cabinet: | `agents/metadata/` | Olawumi Olasunkanmi (wumirose), Jason Reilly (jdr0887), Chris Bizon (cbizon), Kathleen Carter (eKathleenCarter) |
+| Metadata :file_cabinet: | `agents/metadata/` | Olawumi Olasunkanmi (wumirose), Jason Reilly (jdr0887), Chris Bizon (cbizon), Kathleen Carter (eKathleenCarter), Swaroopa Dola (swa112003) |
 | Transformation :phoenix: | `agents/transformation/` | Swaroopa Dola (swa112003), Suparna Goswami (GitHub account TBD), Yaphet Kebede (YaphetKG), Ashok Krishnamurthy (ashokohio) |
 | Filter and integration :scissors: | `agents/filter/` | Matt Satusky (satusky), James McManus (jmpmcmanus), Yogesh Kale (yskale), Kathleen Carter (eKathleenCarter), Hina Shah (hina-shah) |
 | Augmentation :open_hands: | `agents/augmentation/` | Hong Yi (hyi), Matt Satusky (satusky), Olawumi Olasunkanmi (wumirose), Gaurav Vaidya (gaurav), Sahil Kapadia (sahilk873) |
-| Cleaning :broom: | `agents/cleaning/` | Cheng-Han Chung (chjchung), Kathleen Carter (eKathleenCarter), Hina Shah (hina-shah), James McManus (jmpmcmanus), Marcello DeLuca (marcello-deluca) |
+| Cleaning :broom: | `agents/cleaning/` | Cheng-Han Chung (chjchung), Kathleen Carter (eKathleenCarter), Hina Shah (hina-shah), James McManus (jmpmcmanus) |
 | MCP interface :electric_plug: | `agents/mcp_interface/` | Hong Yi (hyi), Chris Bizon (cbizon), Yaphet Kebede (YaphetKG), Yogesh Kale (yskale), Ashok Krishnamurthy (ashokohio) |
-| Evaluation :bar_chart: | `evaluation/` | Kushal Koirala (kushal2051), Cheng-Han Chung (chjchung), Hina Shah (hina-shah), Marcello DeLuca (marcello-deluca), Sahil Kapadia (sahilk873) |
+| Evaluation :bar_chart: | `evaluation/` | Kushal Koirala (kushal2051), Cheng-Han Chung (chjchung), Hina Shah (hina-shah), Sahil Kapadia (sahilk873) |
 | Leads | `shared/`, `.github/`, root | Cheng-Han Chung (chjchung), Chris Bizon (cbizon), Hong Yi (hyi), Matt Satusky (satusky), Gaurav Vaidya (gaurav), Kathleen Carter (eKathleenCarter), Yaphet Kebede (YaphetKG), Kushal Koirala (kushal2051), Jason Reilly (jdr0887) |
 
 Cheng-Han Chung (chjchung) is also on every other team's GitHub Team, so he can review across the repo.
