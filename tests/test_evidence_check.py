@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from shared.pubmed import parse_efetch
+
 SCRIPTS = Path(__file__).parents[1] / ".agents/skills/cleaning/evidence-check/scripts"
 
 
@@ -79,21 +81,14 @@ def workspace(tmp_path, monkeypatch):
     qpath = tmp_path / "question.json"
     qpath.write_text(json.dumps(QUESTION))
 
-    class Response:
-        def __init__(self, body):
-            self.body = body
+    articles = {a.pmid: a for a in parse_efetch(PUBMED_XML)}
+    asked = []
 
-        def read(self):
-            return self.body.encode()
+    def fake_fetch(pmids):
+        asked.append(list(pmids))
+        return {p: articles[p] for p in pmids if p in articles}
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    monkeypatch.setattr(gather.urllib.request, "urlopen", lambda *a, **k: Response(PUBMED_XML))
-    monkeypatch.setattr(gather, "PAUSE", 0)
+    monkeypatch.setattr(gather, "fetch_abstracts", fake_fetch)
     return graph, qpath
 
 
@@ -129,7 +124,7 @@ def test_pmids_from_curies_and_urls():
         "publications": ["PMID:5", "DOI:x"],
         "supporting_documents": "https://pubmed.ncbi.nlm.nih.gov/7/",
     }
-    assert gather.pmids(edge) == ["5", "7"]
+    assert gather.cited_pmids(edge) == ["5", "7"]
 
 
 def test_gather_dedupes_edges_and_skips_missing_abstracts(workspace):

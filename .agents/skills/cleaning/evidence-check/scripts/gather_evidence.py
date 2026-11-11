@@ -6,12 +6,13 @@
 GRAPH is a directory with nodes.jsonl and edges.jsonl (default data/transformation/merged), or a
 source's ORION normalized_nodes.jsonl / normalized_edges.jsonl. An edge is selected when it
 matches the question's `select` and cites at least one PubMed article, in `publications` (PMID:
-CURIEs) or as a PubMed URL in any of its fields. Abstracts come from NCBI E-utilities and are
-cached in the work directory, so a rerun fetches only what's new.
+CURIEs) or as a PubMed URL in any of its fields. Abstracts come from NCBI E-utilities through
+`shared.pubmed`, whose cache the augmentation agent shares (KGB_PUBMED_CACHE, default
+data/cache/pubmed.sqlite), so only what neither has fetched goes over the network.
 
 Writes data/cleaning/evidence/<name>/evidence.jsonl: one line per (edge, article) with the edge's
 key, its subject and object names, the claim in words, and the article's title and abstract.
-Standard library only.
+Run it from the repository root with `uv run python`.
 """
 
 from __future__ import annotations
@@ -20,22 +21,14 @@ import argparse
 import hashlib
 import heapq
 import json
-import re
 import sys
-import time
-import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(1, str(Path(__file__).resolve().parents[5]))  # the repo root, for shared/
 import question  # noqa: E402
 
-EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-BATCH = 200  # ids per E-utilities request
-PAUSE = 0.4  # seconds between requests; NCBI allows 3 a second without an API key
-PUBMED_URL = re.compile(r"(?:ncbi\.nlm\.nih\.gov/pubmed/|pubmed\.ncbi\.nlm\.nih\.gov/)(\d+)")
-PMID_CURIE = re.compile(r"^PMID:(\d+)$")
+from shared.pubmed import cited_pmids, fetch_abstracts  # noqa: E402
 
 
 def graph_files(graph: Path) -> tuple[Path, Path]:
@@ -46,18 +39,6 @@ def graph_files(graph: Path) -> tuple[Path, Path]:
         if (graph / nodes).exists() and (graph / edges).exists():
             return graph / nodes, graph / edges
     raise SystemExit(f"{graph}: no nodes.jsonl and edges.jsonl (or ORION's normalized_*) here")
-
-
-def pmids(edge: dict) -> list[str]:
-    """PubMed ids an edge cites, from PMID CURIEs or PubMed URLs in any field."""
-    found = []
-    for value in edge.values():
-        for item in value if isinstance(value, list) else [value]:
-            if not isinstance(item, str):
-                continue
-            match = PMID_CURIE.match(item)
-            found += [match.group(1)] if match else PUBMED_URL.findall(item)
-    return sorted(set(found))
 
 
 def claim(edge: dict, names: dict[str, str]) -> str:
@@ -85,7 +66,7 @@ def candidate_edges(q: dict, edges_path: Path):
             edge = json.loads(line)
             if not question.selects(q, edge):
                 continue
-            ids = pmids(edge)
+            ids = cited_pmids(edge)
             if ids:
                 key = (
                     edge["subject"],
@@ -124,53 +105,6 @@ def node_names(nodes_path: Path, wanted: set[str]) -> dict[str, str]:
     return names
 
 
-def parse_pubmed(xml_text: str) -> dict[str, dict]:
-    """PMID -> {title, abstract} from an efetch XML response."""
-    articles = {}
-    for article in ET.fromstring(xml_text).iter("PubmedArticle"):
-        pmid = article.findtext(".//MedlineCitation/PMID")
-        title = (
-            "".join(article.find(".//ArticleTitle").itertext())
-            if article.find(".//ArticleTitle") is not None
-            else ""
-        )
-        parts = []
-        for section in article.iter("AbstractText"):
-            text = "".join(section.itertext()).strip()
-            label = section.get("Label")
-            parts.append(f"{label}: {text}" if label else text)
-        if pmid:
-            articles[pmid] = {"title": title.strip(), "abstract": " ".join(parts)}
-    return articles
-
-
-def fetch_abstracts(ids: list[str], cache_path: Path) -> dict[str, dict]:
-    """Abstracts for ids, from the cache where possible; new ones are appended to the cache."""
-    cache = {}
-    if cache_path.exists():
-        with open(cache_path) as f:
-            for line in f:
-                record = json.loads(line)
-                cache[record["pmid"]] = record
-    todo = [i for i in ids if i not in cache]
-    with open(cache_path, "a") as out:
-        for start in range(0, len(todo), BATCH):
-            batch = todo[start : start + BATCH]
-            query = urllib.parse.urlencode(
-                {"db": "pubmed", "id": ",".join(batch), "retmode": "xml", "tool": "kgbcia"}
-            )
-            request = urllib.request.Request(f"{EUTILS}?{query}", headers={"User-Agent": "kgbcia"})
-            with urllib.request.urlopen(request, timeout=60) as response:
-                articles = parse_pubmed(response.read().decode())
-            for pmid in batch:  # cache misses too, so a withdrawn id isn't fetched every run
-                record = {"pmid": pmid, **articles.get(pmid, {"title": "", "abstract": ""})}
-                cache[pmid] = record
-                out.write(json.dumps(record) + "\n")
-            print(f"fetched {min(start + BATCH, len(todo))} of {len(todo)} articles", flush=True)
-            time.sleep(PAUSE)
-    return cache
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -192,17 +126,15 @@ def main(argv: list[str] | None = None) -> int:
     names = node_names(nodes_path, {e for r in records for e in (r["key"][0], r["key"][2])})
     work = question.work_dir(q)
     work.mkdir(parents=True, exist_ok=True)
-    articles = fetch_abstracts(
-        sorted({p for r in records for p in r["pmids"]}), work / "pubmed.jsonl"
-    )
+    articles = fetch_abstracts(sorted({p for r in records for p in r["pmids"]}, key=int))
 
     written = no_abstract = 0
     with open(work / "evidence.jsonl", "w") as out:
         for r in records:
             edge = r["edge"]
             for pmid in r["pmids"]:
-                article = articles.get(pmid, {})
-                if not article.get("abstract"):
+                article = articles.get(pmid)
+                if article is None or not article.has_text:
                     no_abstract += 1
                     continue
                 out.write(
@@ -214,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
                             "subject": f"{names.get(edge['subject'], '')} [{edge['subject']}]",
                             "object": f"{names.get(edge['object'], '')} [{edge['object']}]",
                             "claim": claim(edge, names),
-                            "text": f"{article['title']}\n\n{article['abstract']}",
+                            "text": f"{article.title}\n\n{article.abstract}",
                         }
                     )
                     + "\n"

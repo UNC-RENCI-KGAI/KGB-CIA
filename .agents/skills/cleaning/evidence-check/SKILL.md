@@ -49,9 +49,9 @@ and one or two short examples in your own words.
 
 ```bash
 S=.agents/skills/cleaning/evidence-check/scripts
-python3 $S/gather_evidence.py QUESTION --limit 50   # a trial on 50 edges first
+uv run python $S/gather_evidence.py QUESTION --limit 50   # a trial on 50 edges first
 uv run --script $S/judge_evidence.py QUESTION
-python3 $S/build_drop_list.py QUESTION
+uv run python $S/build_drop_list.py QUESTION
 ```
 
 - `gather_evidence.py QUESTION [GRAPH]` reads the merged graph (default

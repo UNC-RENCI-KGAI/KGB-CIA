@@ -32,7 +32,7 @@ import question  # noqa: E402
 KEY_VARIABLE = "TYPESAFE_API_KEY"
 CONCURRENCY = 16
 PRICE_PER_MILLION_INPUT_TOKENS = 0.042  # USD, jev-1.13.0; output tokens are free
-CHARS_PER_TOKEN = 4  # for the estimate written without a key
+CHARS_PER_TOKEN_ESTIMATE = 4  # for the estimate written without a key
 
 
 def state(evidence: dict) -> dict:
@@ -95,7 +95,7 @@ def write_requests(q: dict, todo: list[dict], work: Path) -> None:
             body = request_body(q, evidence)
             chars += len(json.dumps(body))
             out.write(json.dumps(body) + "\n")
-    tokens = chars / CHARS_PER_TOKEN
+    tokens = chars / CHARS_PER_TOKEN_ESTIMATE
     print(
         f"No {KEY_VARIABLE} set, so nothing was sent. Wrote the {len(todo):,} requests to {path} "
         f"(about {tokens / 1e6:.2f}M input tokens, roughly "
