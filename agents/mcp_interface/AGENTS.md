@@ -20,6 +20,11 @@ places:
    reached through the edge's `kgbcia_source_records`: which Croissant file, record set and
    columns produced the edge, and from which source record. Report content never goes into
    Neo4j.
+3. **Quality flags from the cleaning stage, on the edge:** `kgbcia_flags` and
+   `kgbcia_flag_reasons`, two string lists that line up one-to-one (a flag such as
+   `wrong_mechanism`, and one plain sentence explaining it, often citing a PMID). Cleaning keeps
+   flagged edges rather than dropping them, so an answer that relies on a flagged edge must say
+   so. See `agents/cleaning/README.md` for the flag vocabulary and issue #63.
 
 This stage does **not** build the database. ORION's `orion-neo4j-dump` does that (see
 "Preparing the dump"). This stage owns the server, the lineage resolution, the extra indexes,
@@ -128,7 +133,10 @@ with `nodes.jsonl`, `edges.jsonl` and ORION's Neo4j dump. Use it whole. Run
 - synthesize one `TransformReport` per `primary_knowledge_source` found in the sample, with one
   `Mapping` per `(predicate, subject category, object category)` combination;
 - write a copy of the edges that adds `kgbcia_source_records` pointing at those mappings
-  (including some edges with several entries), and an `id` wherever one is missing.
+  (including some edges with several entries), and an `id` wherever one is missing;
+- add synthetic `kgbcia_flags` / `kgbcia_flag_reasons` to a few edges (one flag, two flags, and
+  one edge with deliberately mismatched list lengths), so flag handling can be tested before a
+  cleaned graph exists.
 
 Mark everything it produces as synthetic (`source_version: "synthetic"`), and keep it out of the
 real pipeline's output directories. Use the sample for `check`, `prepare_dump.sh`, the chart and
@@ -200,8 +208,8 @@ chart:
   probes on `/health`, and `mcp.enableCypher`. Add a Service and an optional Ingress for it.
 - `values.yaml` holds safe defaults, with environment files `values-dev.yaml` and
   `values-aws.yaml`. Keep secrets out of all of them.
-- **Resources are values,** not constants. The merged graph is large (on the order of 30M edges
-  before deduplication), so the heap, page cache and volume size come from the values file of
+- **Resources are values,** not constants. The graph is large (about 30M edges before merging;
+  the Nov 9 cleaned graph kept 11.7M), so the heap, page cache and volume size come from the values file of
   each environment.
 - Validate it with `helm lint` and `helm template`. These need no cluster, so they can run in CI.
 
@@ -373,21 +381,26 @@ and `truncated` (see "Implementation approach" for docstrings and hints).
   instead of guessing.
 - Every node in a response includes `id`, `name` and `categories`.
 - Every edge in a response includes `edge_id`, `predicate`, `primary_knowledge_source`, the
-  publication count and any qualifiers. The agent never needs a second call just to label a
-  result or to know which `edge_id` to explain.
+  publication count, any qualifiers and its **`flags`**. The agent never needs a second call just
+  to label a result, to know which `edge_id` to explain, or to learn that an edge is in question.
+- **Flags** are returned as a list of `{"flag": ..., "reason": ...}` pairs built from
+  `kgbcia_flags` and `kgbcia_flag_reasons`, so the agent never has to line up two lists itself.
+  An edge without flags gets `flags: []`. If the two lists differ in length, pair what lines up,
+  give the rest `"reason": null`, and log a warning. This applies to every tool that returns
+  edges, paths included: a path through a flagged edge must show the flag on that hop.
 
 | Tool | Purpose |
 |---|---|
 | `get_graph_info()` | counts, categories, predicates, knowledge sources, ORION build and release version; plus a `build` section from `description.json` when present: sources built vs. failed (and where each stopped), unresolved-node counts, and the share of edges citing a publication. Headline counts always come from Neo4j; build numbers are labeled as build statistics, since filtering may change them |
-| `get_schema()` | meta-graph `(subject_category, predicate, object_category, count)`, plus property names per category with example values (for example the Pharos target development level) |
+| `get_schema()` | meta-graph `(subject_category, predicate, object_category, count)`, plus property names per category with example values (for example the Pharos target development level); lists `kgbcia_flags` and `kgbcia_flag_reasons` as edge properties, with the flag values present in the graph, for agents writing Cypher |
 | `search_nodes(query, category?, limit)` | by CURIE, equivalent identifier, name or synonym |
 | `get_node(node_id)` | full node record |
 | `summarize_node_edges(node_id)` | counts of edges by `(direction, predicate, neighbor_category)`: the cheap first look at an unfamiliar node, especially a hub |
-| `get_node_edges(node_id, direction="both", predicate?, neighbor_category?, neighbor_where?, limit, offset)` | neighbors with edge summaries; `neighbor_where` is `{property: value}` equality on neighbor properties |
+| `get_node_edges(node_id, direction="both", predicate?, neighbor_category?, neighbor_where?, exclude_flags?, limit, offset)` | neighbors with edge summaries; `neighbor_where` is `{property: value}` equality on neighbor properties; `exclude_flags` skips edges carrying any of the listed flags |
 | `get_edges_between(source_id, target_id, include_lineage=false)` | every direct edge between the two nodes, both directions; with `include_lineage`, each edge carries its `explain_edge` result: the one-call answer to "why does A connect to B?" |
-| `find_paths(source_id, target_id, max_hops=3, predicates?, limit=10)` | bounded paths between two known nodes, shortest first; reject `max_hops > 4` |
-| `find_connected_nodes(source_id, target_category, max_hops=2, predicates?, target_where?, limit)` | nodes of a category reachable from a node, with the connecting path, for example "drugs reaching disease X via a target"; reject `max_hops > 3` |
-| `explain_edge(edge_id)` | the "why": Biolink provenance plus each source record (`kgbcia_source_records` → Mapping: file, record set, columns, constants; report: source, version, Croissant) |
+| `find_paths(source_id, target_id, max_hops=3, predicates?, exclude_flags?, limit=10)` | bounded paths between two known nodes, shortest first; reject `max_hops > 4` |
+| `find_connected_nodes(source_id, target_category, max_hops=2, predicates?, target_where?, exclude_flags?, limit)` | nodes of a category reachable from a node, with the connecting path, for example "drugs reaching disease X via a target"; reject `max_hops > 3` |
+| `explain_edge(edge_id)` | the "why": Biolink provenance, the edge's flags with their reasons, plus each source record (`kgbcia_source_records` → Mapping: file, record set, columns, constants; report: source, version, Croissant) |
 | `query_cypher(cypher, parameters?, limit=100)` | raw Cypher for counts, rankings and patterns the other tools can't express; read-only (see "Read-only enforcement"), row-capped, with a timeout. The docstring states the labels-as-categories convention and the property names, and gives two example queries |
 
 `query_cypher` is behind `--enable-cypher` (or `KGB_MCP_ENABLE_CYPHER=1`). The configuration we
@@ -408,7 +421,13 @@ show to the model:
    `explain_edge`, citing sources verbatim;
 5. fall back to `query_cypher` only for aggregates;
 6. when no connection is found, check `get_graph_info`'s `build` section and mention failed or
-   missing sources that could have supplied it, before concluding there's no evidence.
+   missing sources that could have supplied it, before concluding there's no evidence;
+7. whenever an answer uses an edge that has flags, say in that same answer that it's flagged and
+   give each flag's reason verbatim (including any PMID).
+
+The descriptions of `get_node_edges`, `get_edges_between`, `explain_edge`, `find_paths` and
+`find_connected_nodes` repeat rule 7 in their *Presentation Guidelines*, since some clients
+don't show server instructions to the model.
 
 ## Build order
 
@@ -433,10 +452,20 @@ The real graph depends on earlier stages, so build against the toy fixture first
    `.pi/mcp.json` entry to `uvx kgbcia-mcp serve`, and point a real agent at it with a few "why
    does A connect to B?" questions.
 
-**Follow-up, independent of the steps above: build description.** Once the `describe-graph`
-skill (PR #47) is merged: the `prepare_dump.sh` step, the `build` section in `get_graph_info`,
-the sixth server-instruction rule, and tests for path stripping and for a missing
-`description.json`.
+**Follow-ups, independent of the steps above (both unblocked):**
+
+- **Build description** (the `describe-graph` skill, merged in #47): the `prepare_dump.sh` step,
+  the `build` section in `get_graph_info`, server-instruction rule 6, and tests for path
+  stripping and for a missing `description.json`.
+- **Quality flags** (issue #63): flags in every edge summary as `{flag, reason}` pairs, rule 7
+  in the server instructions and tool descriptions, flags in `explain_edge` and `get_schema`,
+  `exclude_flags` filters, and the synthetic flags in `make_dev_artifacts.py`. Also add flag
+  counts by value to `get_graph_info`: `prepare_dump.sh` computes them with one Cypher query on
+  the temporary database and writes them into `graph_metadata.json`, so the server never scans
+  all edges at startup. Tests: unflagged edges, one and several flags, mismatched list lengths,
+  a flagged hop inside a path, and `exclude_flags`. **Done when** asking "why does olodaterol
+  connect to ADRB2?" against a graph cleaned with #62 and #49 reports the `wrong_mechanism` flag
+  and its PMID.
 
 ## Testing
 
