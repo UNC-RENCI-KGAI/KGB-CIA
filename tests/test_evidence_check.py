@@ -154,7 +154,7 @@ def test_without_a_key_requests_are_written_not_sent(workspace, monkeypatch, cap
     gather.main([str(qpath), str(graph)])
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     assert judge.main([str(qpath)]) == 0
-    assert "export TYPESAFE_API_KEY" in capsys.readouterr().out
+    assert "TYPESAFE_API_KEY=<key" in capsys.readouterr().out
     requests = [
         json.loads(line) for line in open("data/cleaning/evidence/drug_target/requests.jsonl")
     ]

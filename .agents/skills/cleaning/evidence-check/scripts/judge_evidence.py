@@ -100,8 +100,9 @@ def write_requests(q: dict, todo: list[dict], work: Path) -> None:
         f"No {KEY_VARIABLE} set, so nothing was sent. Wrote the {len(todo):,} requests to {path} "
         f"(about {tokens / 1e6:.2f}M input tokens, roughly "
         f"${tokens / 1e6 * PRICE_PER_MILLION_INPUT_TOKENS:.2f}).\n"
-        f"To run them: export {KEY_VARIABLE}=<key from https://typesafe.ai> (keep it in your shell "
-        "profile or secret manager, never in the repo), then run this command again."
+        f"To run them: set {KEY_VARIABLE}=<key from https://typesafe.ai> in .env (gitignored; see "
+        ".env.example) and run this command again as `uv run --env-file .env --script ...`, or "
+        "export it from your shell or a secret manager."
     )
 
 

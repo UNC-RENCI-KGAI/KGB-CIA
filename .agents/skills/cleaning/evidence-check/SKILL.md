@@ -50,7 +50,7 @@ and one or two short examples in your own words.
 ```bash
 S=.agents/skills/cleaning/evidence-check/scripts
 uv run python $S/gather_evidence.py QUESTION --limit 50   # a trial on 50 edges first
-uv run --script $S/judge_evidence.py QUESTION
+uv run --env-file .env --script $S/judge_evidence.py QUESTION   # .env holds TYPESAFE_API_KEY
 uv run python $S/build_drop_list.py QUESTION
 ```
 
@@ -61,7 +61,7 @@ uv run python $S/build_drop_list.py QUESTION
 - `--limit N` checks a fixed, spread-out sample of N edges. Always start with one: read about
   ten answers in `verdicts.jsonl` against the abstracts, fix the question if Jev misreads it, and
   only then run without `--limit`.
-- `judge_evidence.py` needs `TYPESAFE_API_KEY` in the environment. Without it, it sends nothing:
+- `judge_evidence.py` needs `TYPESAFE_API_KEY`, from `.env` or the environment. Without it, it sends nothing:
   it writes the exact requests to `requests.jsonl`, estimates the cost, and says where the key
   goes. Tell the user that, and carry on with the rest of the pipeline; the check is optional.
   It is resumable, and a failed call is retried on the next run.
