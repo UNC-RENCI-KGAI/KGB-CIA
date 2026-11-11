@@ -19,6 +19,6 @@ Uses the record types in `shared/schema.py`. Describe the exact files here once 
 ## Status
 
 On `main`, `kgb-augment` is a stub that prints "not implemented yet". In progress:
-[#22](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/22) (the pubmed-evidence skill) and
-[#52](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/52) (PubMed search, fetch and cache in
-`shared/`, shared with the cleaning stage's evidence check).
+[#22](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/22) (the pubmed-evidence skill). PubMed
+search, fetch and cache are already on `main` in `shared/pubmed/`, shared with the cleaning
+stage's evidence check.
