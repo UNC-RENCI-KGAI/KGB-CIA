@@ -97,7 +97,7 @@ them on the edge, so the MCP interface can tell a user the edge is in question a
 
 ```json
 "kgbcia_flags": ["type_violation"],
-"kgbcia_flag_reasons": ["Biolink expects the subject of participates_in to be an occurrent, but it is Gene"]
+"kgbcia_flag_reasons": ["Biolink expects the subject of enables to be a physical entity, but it is Gene"]
 ```
 
 The two lists line up, one plain sentence per flag. They are lists of strings so Neo4j stores
@@ -126,8 +126,11 @@ Decide drops by predicate and category, not by predicate alone. On the Oct 30 Dr
 indication graph, `treats` had 411 range violations: about 240 objects were a Procedure
 (imaging, contraception), which are wrong as `treats`, but about 100 were a Phenomenon (severe
 pain, skin irritation), which are real indications that NodeNorm categorizes as Phenomenon.
-A gene `participates_in` a pathway is a violation only because Biolink is stricter than the
-graph.
+Some violations are Biolink's, not the graph's: the participation predicates (`has_participant`,
+`participates_in`, `catalyzes`, `has_catalyst`) put `occurrent` on the participant's side, so
+every gene or protein in a Reactome pathway or reaction would be flagged (262K edges on the
+Nov 9 graph). `biolink_types.NOT_ENFORCED` turns off that side for them; the process side is
+still checked.
 
 A drop list is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by `subject`, `predicate`, `object` and
 `primary_knowledge_source`. It is not keyed by `id`, because the merge assigns new edge uuids

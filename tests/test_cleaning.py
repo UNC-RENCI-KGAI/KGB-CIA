@@ -267,7 +267,7 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
         _edge("CHEBI:1", "MONDO:1", predicate="biolink:treats"),
         _edge("CHEBI:1", "UMLS:P", predicate="biolink:treats"),
         _edge("CHEBI:1", "MONDO:1", predicate="biolink:contraindicated_in"),
-        _edge("NCBIGene:1", "REACT:1", predicate="biolink:participates_in"),
+        _edge("NCBIGene:1", "REACT:1", predicate="biolink:enables"),
         _edge("MONDO:1", "MONDO:1", predicate="biolink:subclass_of"),
     ]
     graph = tmp_path / "g"
@@ -275,12 +275,12 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     _write(graph / "nodes.jsonl", nodes)
     _write(graph / "edges.jsonl", edges)
     report = garbage.collect(graph, tmp_path / "out")
-    # treats -> Procedure is a promoted drop; participates_in's violation stays a flag
+    # treats -> Procedure is a promoted drop; a gene that enables a pathway stays a flag
     assert report.edges_out == 4
     assert report.dropped_edges == {"type_violation:biolink:treats->biolink:Procedure": 1}
     assert report.flags["type_violation"] == 1
     assert report.type_violations_by_predicate == {
-        "biolink:participates_in": 1,
+        "biolink:enables": 1,
     }
     written = json.loads((tmp_path / "out" / "cleaning_report.json").read_text())
     assert written["opposing_predicates"] == [
@@ -293,7 +293,7 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     assert written["flags"]["opposing_predicate"] == 2
     assert written["rare_category_combinations"] == []  # too few edges per predicate
     assert written["type_violations_by_category"] == {
-        "biolink:participates_in": {"domain: biolink:Gene": 1},
+        "biolink:enables": {"domain: biolink:Gene": 1},
     }
     assert written["dropped_edges"] == {"type_violation:biolink:treats->biolink:Procedure": 1}
 
@@ -303,7 +303,7 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     violation = next(f for f in flagged if "type_violation" in f["flags"])
     assert violation == {
         "subject": "NCBIGene:1",
-        "predicate": "biolink:participates_in",
+        "predicate": "biolink:enables",
         "object": "REACT:1",
         "primary_knowledge_source": "infores:test",
         "flags": ["type_violation"],
@@ -312,9 +312,8 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
         "violates": "domain",
     }
     by_predicate = {e["predicate"]: e for e in _read(tmp_path / "out" / "edges.jsonl")}
-    expected = garbage.biolink_types.expected("biolink:participates_in", "domain")
-    assert by_predicate["biolink:participates_in"]["kgbcia_flag_reasons"] == [
-        f"Biolink expects the subject of participates_in to be an {expected}, but it is Gene"
+    assert by_predicate["biolink:enables"]["kgbcia_flag_reasons"] == [
+        "Biolink expects the subject of enables to be a physical entity, but it is Gene"
     ]
     assert by_predicate["biolink:contraindicated_in"]["kgbcia_flag_reasons"] == [
         "the same pair is also connected by treats"
@@ -323,7 +322,7 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     drop = tmp_path / "promote.jsonl"
     _write(drop, [violation])
     assert garbage.load_drop_list(drop) == {
-        ("NCBIGene:1", "biolink:participates_in", "REACT:1", "infores:test")
+        ("NCBIGene:1", "biolink:enables", "REACT:1", "infores:test")
     }
 
 
@@ -403,10 +402,16 @@ def test_violation_rules():
     assert bt.violation("biolink:treats", chemical, procedure) == "range"
     assert bt.violation("biolink:treats", disease, disease) == "domain"
     assert bt.violation("biolink:related_to", procedure, procedure) is None  # named thing
-    # Biolink stricter than the graph: reported by predicate, never dropped
-    assert (
-        bt.violation("biolink:participates_in", ["biolink:Gene"], ["biolink:Pathway"]) == "domain"
-    )
+    # Biolink puts `occurrent` on the participant's side; that side isn't enforced (NOT_ENFORCED),
+    # in either direction, but the process side still is
+    gene, pathway = ["biolink:Gene"], ["biolink:Pathway"]
+    protein, reaction = ["biolink:Protein"], ["biolink:MolecularActivity"]
+    assert bt.violation("biolink:participates_in", gene, pathway) is None
+    assert bt.violation("biolink:has_participant", pathway, gene) is None
+    assert bt.violation("biolink:catalyzes", protein, reaction) is None
+    assert bt.violation("biolink:has_catalyst", reaction, protein) is None
+    assert bt.violation("biolink:participates_in", gene, disease) == "range"
+    assert bt.violation("biolink:has_participant", disease, gene) == "domain"
     assert bt.violation("biolink:subclass_of", disease, disease) is None  # ontology class
     assert bt.violation("biolink:not_real", disease, disease) is None
     assert bt.violation("biolink:treats", [], []) is None  # unknown categories aren't judged

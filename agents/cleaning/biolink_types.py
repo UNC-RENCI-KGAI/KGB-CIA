@@ -13,9 +13,13 @@ is a set intersection.
 
 A domain or range is enforced through the categories under it that are also under `named
 thing`, since those are the only ones a node can carry. `subclass_of` (domain `ontology class`)
-has none and is never enforced. `participates_in` (domain `occurrent`) is enforced, and flags
-gene-to-pathway edges: Biolink is stricter than the graph there, which is why violations are
-reported by predicate and stay flags until a predicate is known to be a source of wrong edges.
+has none and is never enforced. Violations are reported by predicate and stay flags until a
+predicate is known to be a source of wrong edges.
+
+`NOT_ENFORCED` lists the sides Biolink gets wrong for this graph. The participation predicates
+put `occurrent` on the participant's side, so every gene, protein, complex or chemical that takes
+part in a Reactome pathway or catalyzes a reaction would be flagged: 262K edges on the Nov 9
+graph, none of them wrong. The process side is still enforced.
 """
 
 from __future__ import annotations
@@ -81,12 +85,22 @@ def _inherited(predicate: str, slot: str) -> str | None:
     return None
 
 
+# Predicate -> the side not enforced, with why. Inverses are listed too, so a source that writes
+# the other direction isn't flagged either.
+NOT_ENFORCED: dict[str, str] = {
+    "biolink:has_participant": "range",  # pathway has_participant gene: range is `occurrent`
+    "biolink:participates_in": "domain",  # gene participates_in pathway: domain is `occurrent`
+    "biolink:has_catalyst": "range",  # reaction has_catalyst protein: range is `occurrent`
+    "biolink:catalyzes": "domain",  # protein catalyzes reaction: domain is `occurrent`
+}
+
+
 @cache
 def constraint(predicate: str) -> tuple[frozenset[str] | None, frozenset[str] | None]:
     """(domain categories, range categories) for a predicate; None where nothing is enforced.
 
     Unknown predicates and domains or ranges outside `named thing` give None, as does
-    `named thing` itself, which every category satisfies.
+    `named thing` itself, which every category satisfies, and the sides in `NOT_ENFORCED`.
     """
     tk = toolkit()
     if not tk.is_predicate(predicate):
@@ -94,7 +108,7 @@ def constraint(predicate: str) -> tuple[frozenset[str] | None, frozenset[str] | 
     sets = []
     for slot in ("domain", "range"):
         name = _inherited(predicate, slot)
-        if not name or name == "named thing":
+        if not name or name == "named thing" or NOT_ENFORCED.get(predicate) == slot:
             sets.append(None)
             continue
         under = categories_under(name) & _named_things()
