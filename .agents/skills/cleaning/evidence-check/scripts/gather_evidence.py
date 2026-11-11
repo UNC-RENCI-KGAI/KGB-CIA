@@ -11,7 +11,10 @@ CURIEs) or as a PubMed URL in any of its fields. Abstracts come from NCBI E-util
 data/cache/pubmed.sqlite), so only what neither has fetched goes over the network.
 
 Writes data/cleaning/evidence/<name>/evidence.jsonl: one line per (edge, article) with the edge's
-key, its subject and object names, the claim in words, and the article's title and abstract.
+key, its subject and object (name, other names, identifier), the claim in words, and the
+article's title and abstract. The other names come from NodeNorm (cached with the abstracts):
+papers often name a drug by its development code ("FYX-051" for topiroxostat) or a protein by its
+gene symbol, and without them the judge can't tell the paper is about this edge.
 Run it from the repository root with `uv run python`.
 """
 
@@ -21,6 +24,7 @@ import argparse
 import hashlib
 import heapq
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -28,7 +32,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(1, str(Path(__file__).resolve().parents[5]))  # the repo root, for shared/
 import question  # noqa: E402
 
-from shared.pubmed import cited_pmids, fetch_abstracts  # noqa: E402
+from shared.pubmed import (  # noqa: E402
+    PubMedCache,
+    cited_pmids,
+    entity_terms,
+    fetch_abstracts,
+    load_nodenorm,
+)
+from shared.pubmed.records import Entity  # noqa: E402
+
+OTHER_NAMES = 5  # other names shown per node
+# Babel names UniProtKB entries "ABL1_HUMAN Tyrosine-protein kinase ABL1 (sprot)".
+UNIPROT_LABEL = re.compile(r"^[A-Z0-9]+_[A-Z0-9]+\s+(.+?)(?:\s*\((?:sprot|trembl)\))?$")
 
 
 def graph_files(graph: Path) -> tuple[Path, Path]:
@@ -95,14 +110,46 @@ def select_edges(q: dict, edges_path: Path, limit: int | None) -> list[dict]:
     return heapq.nsmallest(limit, by_key.values(), key=lambda r: spread(r["key"]))
 
 
+def tidy(name: str) -> str:
+    """A node name as a paper would write it: UniProt's "XDH_HUMAN Xanthine ... (sprot)" -> the
+    protein name."""
+    match = UNIPROT_LABEL.match(name)
+    return match.group(1) if match else name
+
+
 def node_names(nodes_path: Path, wanted: set[str]) -> dict[str, str]:
     names = {}
     with open(nodes_path) as f:
         for line in f:
             node = json.loads(line)
             if node.get("id") in wanted and node.get("name"):
-                names[node["id"]] = node["name"]
+                names[node["id"]] = tidy(node["name"])
     return names
+
+
+def other_names(names: dict[str, str], ids: set[str]) -> dict[str, list[str]]:
+    """Up to OTHER_NAMES names for each node besides its own, from NodeNorm's labels for its
+    equivalent identifiers (gene symbols, development codes, brand names). If NodeNorm can't be
+    reached, nodes get none and the run goes on."""
+    with PubMedCache() as cache:
+        entries = load_nodenorm(sorted(ids), cache)
+    found = {}
+    for curie in ids:
+        name = names.get(curie, "")
+        terms, _ = entity_terms(Entity(id=curie, name=name or None), entries)
+        seen = {name.lower()}
+        found[curie] = []
+        for term in map(tidy, terms):
+            if term.lower() not in seen and len(found[curie]) < OTHER_NAMES:
+                seen.add(term.lower())
+                found[curie].append(term)
+    return found
+
+
+def describe(curie: str, names: dict[str, str], others: dict[str, list[str]]) -> str:
+    """'Topiroxostat (also: FYX-051) [CHEBI:42614]'."""
+    also = f" (also: {'; '.join(others[curie])})" if others.get(curie) else ""
+    return f"{names.get(curie, '')}{also} [{curie}]"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,7 +170,9 @@ def main(argv: list[str] | None = None) -> int:
     if not records:
         print("No selected edge cites a PubMed article; nothing to check.")
         return 0
-    names = node_names(nodes_path, {e for r in records for e in (r["key"][0], r["key"][2])})
+    ids = {e for r in records for e in (r["key"][0], r["key"][2])}
+    names = node_names(nodes_path, ids)
+    others = other_names(names, ids)
     work = question.work_dir(q)
     work.mkdir(parents=True, exist_ok=True)
     articles = fetch_abstracts(sorted({p for r in records for p in r["pmids"]}, key=int))
@@ -143,8 +192,8 @@ def main(argv: list[str] | None = None) -> int:
                             "key": r["key"],
                             "pmid": pmid,
                             "based_on_text": question.text_based(edge),
-                            "subject": f"{names.get(edge['subject'], '')} [{edge['subject']}]",
-                            "object": f"{names.get(edge['object'], '')} [{edge['object']}]",
+                            "subject": describe(edge["subject"], names, others),
+                            "object": describe(edge["object"], names, others),
                             "claim": claim(edge, names),
                             "text": f"{article.title}\n\n{article.abstract}",
                         }

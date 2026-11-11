@@ -36,7 +36,7 @@ on the target in that way.
     "predicate": "biolink:interacts_with",
     "primary_knowledge_source": ["infores:drugcentral", "infores:gtopdb", "infores:chembl"]
   },
-  "instructions": "Does `text` report that `subject` acts on `object` the way `claim` says? `subject` and `object` give each entity's name and identifier. Judge only what `text` says, not what is generally known.",
+  "instructions": "Does `text` report that `subject` acts on `object` the way `claim` says? `subject` and `object` give each entity's name, the other names it goes by (a development code, a gene symbol), and its identifier. Judge only what `text` says, not what is generally known.",
   "options": [
     {
       "name": "different_action",

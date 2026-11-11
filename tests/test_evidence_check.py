@@ -89,6 +89,7 @@ def workspace(tmp_path, monkeypatch):
         return {p: articles[p] for p in pmids if p in articles}
 
     monkeypatch.setattr(gather, "fetch_abstracts", fake_fetch)
+    monkeypatch.setattr(gather, "other_names", lambda names, ids: {"C:A": ["DA-1"]})
     return graph, qpath
 
 
@@ -127,6 +128,29 @@ def test_pmids_from_curies_and_urls():
     assert gather.cited_pmids(edge) == ["5", "7"]
 
 
+def test_other_names_from_nodenorm(tmp_path, monkeypatch):
+    monkeypatch.setenv("KGB_PUBMED_CACHE", str(tmp_path / "cache.sqlite"))
+    labels = {
+        "CHEBI:1": ["Topiroxostat", "FYX-051", "TOPIROXOSTAT"],
+        "UniProtKB:P1": ["XDH_HUMAN Xanthine dehydrogenase/oxidase (sprot)", "XDH", "XDH gene"],
+    }
+    entries = {
+        c: {
+            "id": {"identifier": c, "label": ls[0]},
+            "equivalent_identifiers": [
+                {"identifier": f"{c}#{i}", "label": x} for i, x in enumerate(ls)
+            ],
+        }
+        for c, ls in labels.items()
+    }
+    monkeypatch.setattr(gather, "load_nodenorm", lambda ids, cache: entries)
+    names = {"CHEBI:1": "Topiroxostat", "UniProtKB:P1": gather.tidy(labels["UniProtKB:P1"][0])}
+    others = gather.other_names(names, set(names))
+    assert names["UniProtKB:P1"] == "Xanthine dehydrogenase/oxidase"
+    assert others == {"CHEBI:1": ["FYX-051"], "UniProtKB:P1": ["XDH"]}
+    assert gather.describe("CHEBI:1", names, others) == "Topiroxostat (also: FYX-051) [CHEBI:1]"
+
+
 def test_gather_dedupes_edges_and_skips_missing_abstracts(workspace):
     graph, qpath = workspace
     assert gather.main([str(qpath), str(graph)]) == 0
@@ -137,7 +161,7 @@ def test_gather_dedupes_edges_and_skips_missing_abstracts(workspace):
     ]  # the repeated A-P1 edge is one; PMID 333 has no abstract; related_to isn't selected
     a_p1 = next(r for r in rows if r["key"][2] == "P:1")
     assert a_p1["claim"] == "drug A interacts with (inhibition) P1"
-    assert a_p1["subject"] == "drug A [C:A]"
+    assert a_p1["subject"] == "drug A (also: DA-1) [C:A]"
     assert "RESULTS: A inhibited P1" in a_p1["text"]
 
 
