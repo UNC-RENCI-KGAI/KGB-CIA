@@ -107,8 +107,9 @@ tests/test_mcp_interface.py   # repo tests live in the root tests/ dir
   package's `requires-python` (≥ 3.12) to the root project's.
 
 **Side artifacts** are one tarball, published next to the dump (the same file server or bucket):
-the `TransformReport` JSONs, ORION's graph metadata (graph ID, build and release version), and
-the hub list for path search. `KGB_MCP_ARTIFACTS` is a local directory or an `http(s)` URL to the
+the `TransformReport` JSONs, ORION's graph metadata (graph ID, build and release version), the
+hub list for path search, and the build description (`description.json` from the filter stage's
+`describe-graph` skill, if present). `KGB_MCP_ARTIFACTS` is a local directory or an `http(s)` URL to the
 tarball; URLs are downloaded with the standard library, cached per checksum, and loaded once at
 startup. The URL must be **public and long-lived**, because every user's server fetches it with
 no credentials. Use a GitHub Release asset on this repo (free, no AWS setup), or an S3 object
@@ -242,8 +243,14 @@ release, on a workstation with Docker:
 4. Run `kgbcia-mcp hubs` against the container, writing the hub list into the artifacts
    directory.
 5. Stop the container and run `neo4j-admin database dump`: this is the **kgb dump**.
-6. Pack the artifacts (`TransformReport`s, ORION graph metadata, hub list) into a tarball.
-7. Print the SHA-256 of the dump and the tarball, for the chart values and
+6. If the `describe-graph` skill exists (`.agents/skills/filter/describe-graph/`), run its
+   `describe_graph.py` against the transformation output, and add its `description.json` to the
+   artifacts **with local file paths removed** (its top-level `graphs` and each source's
+   `normalized_dir`). It's built on the builder's machine, which has the ORION workspaces that
+   MCP users don't. If the skill is absent or fails, warn and continue without it.
+7. Pack the artifacts (`TransformReport`s, ORION graph metadata, hub list, build description)
+   into a tarball.
+8. Print the SHA-256 of the dump and the tarball, for the chart values and
    `KGB_MCP_ARTIFACTS_SHA256`.
 
 Publishing the files (to the HTTP file server for k8s, to S3 for AWS) and updating the values are
@@ -371,7 +378,7 @@ and `truncated` (see "Implementation approach" for docstrings and hints).
 
 | Tool | Purpose |
 |---|---|
-| `get_graph_info()` | counts, categories, predicates, knowledge sources, ORION build and release version |
+| `get_graph_info()` | counts, categories, predicates, knowledge sources, ORION build and release version; plus a `build` section from `description.json` when present: sources built vs. failed (and where each stopped), unresolved-node counts, and the share of edges citing a publication. Headline counts always come from Neo4j; build numbers are labeled as build statistics, since filtering may change them |
 | `get_schema()` | meta-graph `(subject_category, predicate, object_category, count)`, plus property names per category with example values (for example the Pharos target development level) |
 | `search_nodes(query, category?, limit)` | by CURIE, equivalent identifier, name or synonym |
 | `get_node(node_id)` | full node record |
@@ -399,7 +406,9 @@ show to the model:
 3. explore with `get_node_edges`, `find_paths` or `find_connected_nodes`;
 4. justify every claimed connection with `get_edges_between(include_lineage=true)` or
    `explain_edge`, citing sources verbatim;
-5. fall back to `query_cypher` only for aggregates.
+5. fall back to `query_cypher` only for aggregates;
+6. when no connection is found, check `get_graph_info`'s `build` section and mention failed or
+   missing sources that could have supplied it, before concluding there's no evidence.
 
 ## Build order
 
@@ -415,9 +424,19 @@ The real graph depends on earlier stages, so build against the toy fixture first
    `make_dev_artifacts.py`), settle the "confirm" items, and `helm install` on the local k8s cluster. Run the
    integration tests, then hand it to the team: `uvx --from <wheel or path> kgbcia-mcp serve`
    against the k8s Neo4j.
-4. **Publish and AWS.** Only after the team signs off: the maintainer publishes to PyPI, then
-   follows `deploy/aws/` with the same dump, artifacts and chart. Then point a real agent at it
-   with a few "why does A connect to B?" questions.
+4. **AWS.** Only after the team signs off: follow `deploy/aws/` with the same chart, and first
+   test it with the development sample's dump and artifacts. Verify from a laptop with
+   `uv run kgbcia-mcp serve` pointed at the instance's Bolt port. Then deploy the real graph the
+   same way.
+5. **Publish to PyPI,** after the AWS deployment works, and before judging if judges will run
+   the server outside this repo (otherwise optional). The maintainer publishes; then switch the
+   `.pi/mcp.json` entry to `uvx kgbcia-mcp serve`, and point a real agent at it with a few "why
+   does A connect to B?" questions.
+
+**Follow-up, independent of the steps above: build description.** Once the `describe-graph`
+skill (PR #47) is merged: the `prepare_dump.sh` step, the `build` section in `get_graph_info`,
+the sixth server-instruction rule, and tests for path stripping and for a missing
+`description.json`.
 
 ## Testing
 
