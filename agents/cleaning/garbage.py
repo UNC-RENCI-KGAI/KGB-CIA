@@ -9,7 +9,11 @@ An edge is dropped, checked in this order, when it:
 - `malformed`: lacks a subject, predicate or object.
 - `no_primary_knowledge_source`: has no provenance, so the MCP interface can't explain it.
 - `dangling`: names a node that isn't in nodes.jsonl.
-- `unresolved_node`: touches a node NodeNorm couldn't resolve (no equivalent identifiers).
+- `broken_id`: touches an unresolved node whose id is wrong, not just unknown to NodeNorm: a
+  prefix in BROKEN_ID_PREFIXES (`OBA:VT...` trait ids written with the wrong prefix; patients
+  from case reports as `phenopacket.store:` nodes).
+- `unresolved_both_ends`: both its nodes are ones NodeNorm couldn't resolve (no equivalent
+  identifiers), so it can't connect to anything else in the graph.
 - `drop_list:<name>`: is listed in `<name>.jsonl` in the drop-lists directory, such as an
   evidence check's output.
 - `type_violation:<predicate>-><category>`: a type violation promoted to a drop in
@@ -17,8 +21,12 @@ An edge is dropped, checked in this order, when it:
   (`treats` whose object is a Procedure). Promotions are decided from names on real data,
   never from a predicate alone, so an unattended run makes the same decision a reviewer did.
 
-A node is dropped when it is `unresolved` or `orphan`: no kept edge touches it. Edges kept but
-worth a look are counted as flags: `self_loop`, `knowledge_level_not_provided`,
+An edge with one unresolved end is kept and flagged `unresolved_node`: the other end is a
+resolved gene, protein or disease, and the fact (a gene's variant, a protein's pathway) is real
+even though NodeNorm doesn't carry the other id. A node is dropped when it is `orphan`: no kept
+edge touches it (`unresolved` in the report when NodeNorm couldn't resolve it either). Edges
+kept but worth a look are counted as flags: `unresolved_node`, `self_loop`,
+`knowledge_level_not_provided`,
 `agent_type_not_provided`, `type_violation` (the predicate's Biolink domain or range doesn't fit
 the node categories; see `biolink_types.py`), `rare_category_combination` (the subject's most
 specific categories, the predicate and the object's, seen in under RARE_SHARE of that
@@ -37,9 +45,9 @@ list. The `not_provided` flags are left out; they describe a source, not an edge
 
 Nothing here is optional. A source that loses most of its edges to unresolved nodes is listed
 under `attention` with the CURIE prefixes responsible: the fix is in that source's metadata (an
-id pattern or prefix), not in keeping ids nothing else can join. `unresolved_nodes.tsv` lists
-every unresolved node with its name, the edges it took down and the sources and predicates of
-those edges, most costly first: the identifiers a plan fix needs, not just the prefix.
+id pattern or prefix). `unresolved_nodes.tsv` lists every unresolved node with its name, the
+edges it took down and the edges kept with a flag, and the sources and predicates of those
+edges, most costly first: the identifiers a plan fix needs, not just the prefix.
 
 Drop lists key edges by subject, predicate, object and primary knowledge source, not by edge
 id: the merge assigns new uuids on every run, so ids wouldn't match the next build.
@@ -65,7 +73,18 @@ RARE_MIN_EDGES = 1000  # only for predicates with at least this many kept edges
 # each side matches the predicate and every predicate under it
 OPPOSING = (("biolink:treats", "biolink:contraindicated_in"),)
 # flags written per edge to flagged_edges.jsonl
-LISTED_FLAGS = ("self_loop", "type_violation", "rare_category_combination", "opposing_predicate")
+LISTED_FLAGS = (
+    "unresolved_node",
+    "self_loop",
+    "type_violation",
+    "rare_category_combination",
+    "opposing_predicate",
+)
+# Unresolved ids that are wrong rather than missing from NodeNorm: an edge touching one is
+# dropped even when its other end resolves. From the Nov 9 graph: TIGA and GWAS Catalog write
+# Vertebrate Trait ids as `OBA:VT0001253` (it should be `VT:0001253`), an id in no ontology; the
+# phenopacket-store plan makes a node per patient ("individual II-3"), not a biological concept.
+BROKEN_ID_PREFIXES = ("OBA:VT", "phenopacket.store:")
 # Type violations promoted to drops: (predicate, side that fails) -> the most specific categories
 # of that end that make the edge wrong. Decided from names on the Nov 9 graph: DrugCentral
 # `treats` edges to "General Anesthesia" (Procedure), "Asthma management" (ClinicalIntervention),
@@ -287,13 +306,22 @@ class Report:
         }
 
 
+def is_broken_id(curie: str) -> bool:
+    """Whether an unresolved id is wrong, not just unknown to NodeNorm (BROKEN_ID_PREFIXES)."""
+    return curie.startswith(BROKEN_ID_PREFIXES)
+
+
 def edge_drop_reason(
     edge: dict,
     known: set[str],
     unresolved: set[str],
     drop_lists: dict[str, set[EdgeKey]],
 ) -> str | None:
-    """Why this edge is dropped, or None to keep it."""
+    """Why this edge is dropped, or None to keep it.
+
+    One unresolved end keeps the edge (it is flagged `unresolved_node` later); both ends, or an
+    end with a broken id, drop it.
+    """
     subject, predicate, obj = edge.get("subject"), edge.get("predicate"), edge.get("object")
     if not (subject and predicate and obj):
         return "malformed"
@@ -301,8 +329,11 @@ def edge_drop_reason(
         return "no_primary_knowledge_source"
     if subject not in known or obj not in known:
         return "dangling"
-    if subject in unresolved or obj in unresolved:
-        return "unresolved_node"
+    ends = [end for end in (subject, obj) if end in unresolved]
+    if any(is_broken_id(end) for end in ends):
+        return "broken_id"
+    if subject in unresolved and obj in unresolved:
+        return "unresolved_both_ends"
     if drop_lists:
         key = edge_key(edge)
         for name, keys in drop_lists.items():
@@ -334,8 +365,12 @@ def promoted_type_violation(
     return f"type_violation:{predicate}->{hits[0]}" if hits else None
 
 
-def edge_flags(edge: dict, subject_categories=(), object_categories=()) -> Iterable[str]:
+def edge_flags(
+    edge: dict, subject_categories=(), object_categories=(), unresolved: set[str] = frozenset()
+) -> Iterable[str]:
     """Things worth a look on an edge that is kept."""
+    if edge["subject"] in unresolved or edge["object"] in unresolved:
+        yield "unresolved_node"
     if edge["subject"] == edge["object"]:
         yield "self_loop"
     if edge.get("knowledge_level", "not_provided") == "not_provided":
@@ -387,7 +422,6 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
         if not is_resolved(node):
             unresolved[node_id] = str(node.get("name") or "")
             report.unresolved_nodes_by_prefix[prefix(node_id)] += 1
-            continue
         profile = tuple(node.get("category") or [])
         if profile not in profile_of:
             profile_of[profile] = len(profiles)
@@ -398,8 +432,10 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
     output_dir.mkdir(parents=True, exist_ok=True)
     used: set[str] = set()
     unresolved_ids = set(unresolved)
-    # what each unresolved node cost: edges lost, and the (source, predicate) pairs of those edges
+    # what each unresolved node cost: edges lost, edges kept with a flag, and the (source,
+    # predicate) pairs of the edges it lost
     lost: Counter = Counter()
+    kept: Counter = Counter()
     lost_from: dict[str, set[tuple[str, str]]] = defaultdict(set)
     with open(output_dir / "edges.jsonl", "w") as out:
         for edge in read_jsonl(edges_path):
@@ -416,13 +452,15 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
                 report.dropped_edges[reason] += 1
                 report.dropped_edges_by_source[source][reason] += 1
                 report.example(reason, edge)
-                if reason == "unresolved_node":
+                if reason in ("unresolved_both_ends", "broken_id"):
                     for end in {edge["subject"], edge["object"]} & unresolved_ids:
                         report.unresolved_prefixes_by_source[source][prefix(end)] += 1
                         report.dropped_edges_by_source_prefix[(source, prefix(end))] += 1
                         lost[end] += 1
                         lost_from[end].add((source, edge["predicate"]))
                 continue
+            for end in {edge["subject"], edge["object"]} & unresolved_ids:
+                kept[end] += 1
             combination = (s_spec, edge["predicate"], o_spec)
             report.combinations[combination] += 1
             report.combination_examples.setdefault(combination, edge_key(edge)[:3])
@@ -435,13 +473,14 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
             out.write(json.dumps(edge) + "\n")
 
     with open(output_dir / "unresolved_nodes.tsv", "w") as out:
-        out.write("node\tprefix\tname\tdropped_edges\tsources\tpredicates\n")
+        out.write("node\tprefix\tname\tdropped_edges\tkept_edges\tsources\tpredicates\n")
         for node_id in sorted(unresolved, key=lambda n: (-lost[n], n)):
             sources = ";".join(sorted({s for s, _ in lost_from.get(node_id, ())}))
             predicates = ";".join(sorted({p for _, p in lost_from.get(node_id, ())}))
             name = unresolved[node_id].replace("\t", " ").replace("\n", " ")
             out.write(
-                f"{node_id}\t{prefix(node_id)}\t{name}\t{lost[node_id]}\t{sources}\t{predicates}\n"
+                f"{node_id}\t{prefix(node_id)}\t{name}\t{lost[node_id]}\t{kept[node_id]}\t"
+                f"{sources}\t{predicates}\n"
             )
     del lost_from
 
@@ -457,7 +496,7 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
             o_profile = categories_of[edge["object"]]
             s_cats, o_cats = profiles[s_profile], profiles[o_profile]
             s_spec, o_spec = specific[s_profile], specific[o_profile]
-            flags = list(edge_flags(edge, s_cats, o_cats))
+            flags = list(edge_flags(edge, s_cats, o_cats, unresolved_ids))
             if (s_spec, edge["predicate"], o_spec) in rare:
                 flags.append("rare_category_combination")
             if edge["predicate"] in opposing.get((edge["subject"], edge["object"]), ()):
@@ -494,10 +533,8 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
             node_id = node.get("id")
             if not node_id:
                 reason = "malformed"
-            elif node_id in unresolved:
-                reason = "unresolved"
             elif node_id not in used:
-                reason = "orphan"
+                reason = "unresolved" if node_id in unresolved else "orphan"
             else:
                 reason = None
             if reason:

@@ -49,6 +49,8 @@ def graph(tmp_path):
             _node("UniProtKB:B"),
             _node("UniProtKB:C"),
             _node("CHEMBL.TARGET:X", resolved=False),
+            _node("CHEMBL.TARGET:Y", resolved=False),
+            _node("OBA:VT0001253", resolved=False),
             _node("UniProtKB:ORPHAN"),
         ],
     )
@@ -59,7 +61,9 @@ def graph(tmp_path):
             _edge("UniProtKB:B", "UniProtKB:C", knowledge_level="not_provided"),
             _edge("UniProtKB:A", "UniProtKB:A"),
             _edge("UniProtKB:A", "UniProtKB:MISSING"),
-            _edge("CHEMBL.TARGET:X", "UniProtKB:A"),
+            _edge("CHEMBL.TARGET:X", "UniProtKB:A"),  # one unresolved end: kept, flagged
+            _edge("CHEMBL.TARGET:X", "CHEMBL.TARGET:Y"),  # both ends unresolved: dropped
+            _edge("UniProtKB:A", "OBA:VT0001253"),  # a broken id: dropped though A resolves
             _edge("UniProtKB:A", "UniProtKB:C", primary_knowledge_source=""),
             {"subject": "UniProtKB:A", "object": "UniProtKB:B"},
         ],
@@ -71,38 +75,51 @@ def test_collect_drops_and_flags(graph, tmp_path):
     out = tmp_path / "clean"
     report = garbage.collect(graph, out)
 
-    assert report.edges_in == 7 and report.edges_out == 3
+    assert report.edges_in == 9 and report.edges_out == 4
     assert report.dropped_edges == {
         "malformed": 1,
         "no_primary_knowledge_source": 1,
         "dangling": 1,
-        "unresolved_node": 1,
+        "unresolved_both_ends": 1,
+        "broken_id": 1,
     }
-    assert report.flags == {"self_loop": 1, "knowledge_level_not_provided": 1}
-    assert report.dropped_nodes == {"unresolved": 1, "orphan": 1}
-    assert report.unresolved_nodes_by_prefix == {"CHEMBL.TARGET": 1}
+    assert report.flags == {
+        "unresolved_node": 1,
+        "self_loop": 1,
+        "knowledge_level_not_provided": 1,
+    }
+    # Y and the OBA trait lost every edge; X keeps its edge to A, so it stays
+    assert report.dropped_nodes == {"unresolved": 2, "orphan": 1}
+    assert report.unresolved_nodes_by_prefix == {"CHEMBL.TARGET": 2, "OBA": 1}
 
     kept_nodes = {n["id"] for n in _read(out / "nodes.jsonl")}
-    assert kept_nodes == {"UniProtKB:A", "UniProtKB:B", "UniProtKB:C"}
+    assert kept_nodes == {"UniProtKB:A", "UniProtKB:B", "UniProtKB:C", "CHEMBL.TARGET:X"}
+    flagged = _read(out / "flagged_edges.jsonl")
+    assert [f["flags"] for f in flagged if f["subject"] == "CHEMBL.TARGET:X"] == [
+        ["unresolved_node"]
+    ]
     edges = _read(out / "edges.jsonl")
     assert all(e["kgbcia_source_records"] == ["m#1"] for e in edges)
 
     written = json.loads((out / "cleaning_report.json").read_text())
-    assert written["edges"] == {"in": 7, "out": 3}
+    assert written["edges"] == {"in": 9, "out": 4}
     assert written["dropped_edges_by_source"]["infores:test"]["dangling"] == 1
 
 
 def test_attention_names_sources_losing_most_edges(tmp_path):
     src = tmp_path / "merged"
     src.mkdir()
-    _write(src / "nodes.jsonl", [_node("UniProtKB:A"), _node("ko:K1", resolved=False)])
+    _write(
+        src / "nodes.jsonl",
+        [_node("UniProtKB:A"), _node("ko:K1", resolved=False), _node("ko:K2", resolved=False)],
+    )
     _write(
         src / "edges.jsonl",
         [
-            _edge("ko:K1", "UniProtKB:A", primary_knowledge_source="infores:kegg"),
+            _edge("ko:K1", "ko:K2", primary_knowledge_source="infores:kegg"),
             _edge(
                 "ko:K1",
-                "UniProtKB:A",
+                "ko:K2",
                 primary_knowledge_source="infores:kegg",
                 predicate="biolink:related_to",
             ),
@@ -112,7 +129,7 @@ def test_attention_names_sources_losing_most_edges(tmp_path):
     report = garbage.collect(src, tmp_path / "clean")
     [kegg] = report.attention()
     assert kegg["source"] == "infores:kegg" and kegg["share_dropped"] == 1.0
-    assert kegg["unresolved_prefixes"] == {"ko": 2}
+    assert kegg["unresolved_prefixes"] == {"ko": 4}  # two unresolved ends per edge
     assert "infores:kegg: 100% of 2 edges dropped; unresolved prefixes: ko" in garbage.summary(
         report
     )
@@ -127,7 +144,7 @@ def test_drop_lists_folder_matches_on_edge_key_not_id(graph, tmp_path):
     )
     report = garbage.collect(graph, out)
     assert report.dropped_edges["drop_list:evidence_check"] == 1
-    assert report.edges_out == 2
+    assert report.edges_out == 3
     assert report.settings["drop_lists"] == {"evidence_check": 1}
 
 
@@ -145,7 +162,7 @@ def test_cli_without_input_explains(tmp_path, capsys):
 
 def test_cli_runs(graph, tmp_path, capsys):
     assert main(["--input", str(graph), "--output", str(tmp_path / "clean")]) == 0
-    assert "Edges: 7 in, 3 out" in capsys.readouterr().out
+    assert "Edges: 9 in, 4 out" in capsys.readouterr().out
 
 
 def test_type_violation_flags_treats_to_procedure(tmp_path):
@@ -433,10 +450,22 @@ def test_promoted_type_violation_matches_any_most_specific_category():
 def test_unresolved_nodes_tsv(graph, tmp_path):
     report = garbage.collect(graph, tmp_path / "out")
     rows = (tmp_path / "out" / "unresolved_nodes.tsv").read_text().splitlines()
-    assert rows[0] == "node\tprefix\tname\tdropped_edges\tsources\tpredicates"
-    assert rows[1:] == ["CHEMBL.TARGET:X\tCHEMBL.TARGET\t\t1\tinfores:test\tbiolink:interacts_with"]
+    assert rows[0] == "node\tprefix\tname\tdropped_edges\tkept_edges\tsources\tpredicates"
+    assert rows[1:] == [
+        "CHEMBL.TARGET:X\tCHEMBL.TARGET\t\t1\t1\tinfores:test\tbiolink:interacts_with",
+        "CHEMBL.TARGET:Y\tCHEMBL.TARGET\t\t1\t0\tinfores:test\tbiolink:interacts_with",
+        "OBA:VT0001253\tOBA\t\t1\t0\tinfores:test\tbiolink:interacts_with",
+    ]
     written = json.loads((tmp_path / "out" / "cleaning_report.json").read_text())
     assert written["dropped_edges_by_source_prefix"] == [
-        {"source": "infores:test", "prefix": "CHEMBL.TARGET", "edges": 1}
+        {"source": "infores:test", "prefix": "CHEMBL.TARGET", "edges": 2},
+        {"source": "infores:test", "prefix": "OBA", "edges": 1},
     ]
-    assert report.dropped_edges_by_source_prefix[("infores:test", "CHEMBL.TARGET")] == 1
+    assert report.dropped_edges_by_source_prefix[("infores:test", "CHEMBL.TARGET")] == 2
+
+
+def test_broken_ids():
+    assert garbage.is_broken_id("OBA:VT0001253")
+    assert garbage.is_broken_id("phenopacket.store:PMID_1_individual_II-3")
+    assert not garbage.is_broken_id("OBA:0000001")  # a real OBA id is only unknown
+    assert not garbage.is_broken_id("REACT:R-HSA-1")
