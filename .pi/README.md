@@ -25,10 +25,24 @@ Pi does not load `models.json` from a project `.pi/` directory. Copy or merge th
 
 ```bash
 cp .pi/models.json ~/.pi/agent/models.json
-export RENCI_AZURE_API_KEY="<your-api-key>"
+export AZURE_OPENAI_API_KEY="<the RENCI analytics key>"
 ```
 
-If `~/.pi/agent/models.json` already contains custom providers, merge the `renci-azure` provider instead of overwriting the file. Persist the environment variable using your shell or secret manager; never commit the API key.
+If `~/.pi/agent/models.json` already contains custom providers, merge the `renci-azure` provider instead of overwriting the file.
+
+The variable names are Pi's own for Azure (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`), so
+the [Pi provider docs](https://pi.dev/docs/latest/providers) apply to where the key goes. Two
+things differ from Pi's built-in `azure` provider: the models are RENCI's deployments, listed in
+this repository's `renci-azure` provider block, and that block carries the endpoint URL itself
+(a custom provider needs a literal `baseUrl`). The pipeline's own scripts read
+`AZURE_OPENAI_BASE_URL` with the same RENCI endpoint as the default. If you already use
+`AZURE_OPENAI_API_KEY` for another Azure account, set it per project rather than globally.
+
+Every key the pipeline can use, and which step needs it, is listed in [`.env.example`](../.env.example)
+at the repository root. Copy it to `.env` (gitignored), fill in what you have, and run with
+`uv run --env-file .env ...`; a keychain lookup in the shell works just as well, since the
+scripts only ever read environment variables. On the AWS server the same names come from SSM
+Parameter Store, never from a file. Never commit a key.
 
 ## Subagents
 
