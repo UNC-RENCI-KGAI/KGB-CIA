@@ -35,13 +35,21 @@ def main(argv: list[str] | None = None) -> int:
         help="where to write the cleaned graph and cleaning_report.json; drop lists are read "
         "from its drop_lists/ (default: data/cleaning)",
     )
+    parser.add_argument(
+        "--drop-lists",
+        type=Path,
+        default=None,
+        help="read drop lists from this directory instead of <output>/drop_lists; use it when "
+        "they were written for another cleaning pass, as the pipeline's final pass reads "
+        "data/cleaning/drop_lists",
+    )
     args = parser.parse_args(argv)
 
     if args.input.resolve() == args.output.resolve():
         print("Cleaning: --output must differ from --input")
         return 2
     try:
-        report = garbage.collect(args.input, args.output)
+        report = garbage.collect(args.input, args.output, args.drop_lists)
     except FileNotFoundError as e:
         print(f"Cleaning: {e}")
         print("  run the transformation stage first, or pass --input")

@@ -148,6 +148,17 @@ def test_cli_runs(graph, tmp_path, capsys):
     assert "Edges: 7 in, 3 out" in capsys.readouterr().out
 
 
+def test_cli_drop_lists_from_another_pass(graph, tmp_path):
+    # the final pass reads the drop lists the evidence check wrote for the first pass
+    lists = tmp_path / "first_pass" / "drop_lists"
+    lists.mkdir(parents=True)
+    _write(lists / "evidence_check.jsonl", [_edge("UniProtKB:A", "UniProtKB:B")])
+    out = tmp_path / "final"
+    assert main(["--input", str(graph), "--output", str(out), "--drop-lists", str(lists)]) == 0
+    report = json.loads((out / "cleaning_report.json").read_text())
+    assert report["dropped_edges"]["drop_list:evidence_check"] == 1
+
+
 def test_type_violation_flags_treats_to_procedure(tmp_path):
     nodes = [
         {
