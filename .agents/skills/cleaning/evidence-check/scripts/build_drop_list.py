@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Step 3: turn Jev's answers into a verdict per edge, and write the drop list cleaning reads.
+"""Step 3: turn Jev's answers into a verdict per edge, and write the drop and flag lists
+cleaning reads.
 
     build_drop_list.py QUESTION
 
 Reads evidence.jsonl and answers.jsonl in data/cleaning/evidence/<name>/ and writes:
 
-- verdicts.jsonl there: one line per edge with its verdict (keep, drop, unconfirmed), the role
-  probabilities for each article, and the claim, so a person can read why;
-- data/cleaning/drop_lists/<name>.jsonl: the dropped edges, which kgb-clean then removes.
+- verdicts.jsonl there: one line per edge with its verdict (keep, drop, flag, unconfirmed), its
+  flag, the role probabilities for each article, and the claim, so a person can read why;
+- data/cleaning/drop_lists/<name>.jsonl: the dropped edges, which kgb-clean then removes;
+- data/cleaning/flag_lists/<name>.jsonl: the flagged edges, each with its flag and a reason
+  naming the articles, which kgb-clean writes onto the edge for the MCP interface to show.
 
 The verdict rules are in question.edge_verdict. Rerun with another threshold in the question file
 to try it without asking Jev again. Standard library only.
@@ -65,41 +68,54 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     verdicts = Counter()
-    drop_path = question.drop_list_path(q)
+    flagged = Counter()
+    reasons = question.flag_reasons(q)
+    drop_path, flag_path = question.drop_list_path(q), question.flag_list_path(q)
     drop_path.parent.mkdir(parents=True, exist_ok=True)
+    flag_path.parent.mkdir(parents=True, exist_ok=True)
     choices = defaultdict(Counter)
-    with open(work / "verdicts.jsonl", "w") as out, open(drop_path, "w") as drops:
+    with (
+        open(work / "verdicts.jsonl", "w") as out,
+        open(drop_path, "w") as drops,
+        open(flag_path, "w") as flags,
+    ):
         for record in edges.values():
-            verdict = question.edge_verdict(q, record["based_on_text"], record["articles"])
-            record["verdict"] = verdict
+            verdict, flag = question.edge_verdict(q, record["based_on_text"], record["articles"])
+            record["verdict"], record["flag"] = verdict, flag
             verdicts[verdict] += 1
             for a in record["articles"]:
                 choices[verdict][a["choice"]] += 1
             out.write(json.dumps(record) + "\n")
+            subject, predicate, obj, source = record["key"]
+            key = {
+                "subject": subject,
+                "predicate": predicate,
+                "object": obj,
+                "primary_knowledge_source": source,
+            }
+            pmids = [a["pmid"] for a in record["articles"]]
             if verdict == "drop":
-                subject, predicate, obj, source = record["key"]
-                drops.write(
-                    json.dumps(
-                        {
-                            "subject": subject,
-                            "predicate": predicate,
-                            "object": obj,
-                            "primary_knowledge_source": source,
-                            "reason": f"evidence check {q['name']}",
-                            "pmids": [a["pmid"] for a in record["articles"]],
-                        }
-                    )
-                    + "\n"
-                )
+                line = {**key, "reason": f"evidence check {q['name']}", "pmids": pmids}
+                drops.write(json.dumps(line) + "\n")
+            elif verdict == "flag":
+                flagged[flag] += 1
+                cited = ", ".join(f"PMID:{p}" for p in pmids)
+                line = {**key, "flag": flag, "reason": f"{reasons[flag]} ({cited})"}
+                flags.write(json.dumps(line) + "\n")
 
     total = sum(verdicts.values())
     print(f"{total:,} edges judged at threshold {q['threshold']}:")
-    for verdict in ("keep", "unconfirmed", "drop"):
+    for verdict in ("keep", "unconfirmed", "flag", "drop"):
         top = ", ".join(f"{c} {n}" for c, n in choices[verdict].most_common(4))
         print(f"  {verdict}: {verdicts[verdict]:,}" + (f"  (answers: {top})" if top else ""))
     if unanswered:
         print(f"{unanswered:,} articles not answered yet; run judge_evidence.py again.")
-    print(f"Wrote {work / 'verdicts.jsonl'} and {drop_path} ({verdicts['drop']:,} edges)")
+    if flagged:
+        print("  flags: " + ", ".join(f"{f} {n:,}" for f, n in flagged.most_common()))
+    print(
+        f"Wrote {work / 'verdicts.jsonl'}, {drop_path} ({verdicts['drop']:,} edges) and "
+        f"{flag_path} ({verdicts['flag']:,} edges)"
+    )
     return 0
 
 

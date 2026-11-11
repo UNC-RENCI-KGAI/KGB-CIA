@@ -103,21 +103,49 @@ def test_question_problems_are_all_reported(tmp_path):
         assert problem in message
 
 
+WRONG = {"wrong_mechanism": 0.8}
+
+
 @pytest.mark.parametrize(
     "based_on_text,articles,verdict",
     [
-        (False, [{"supports": 0.9, "contradicts": 0.0}], "keep"),
-        (False, [{"supports": 0.1, "contradicts": 0.8}], "drop"),
-        (False, [{"supports": 0.1, "contradicts": 0.1}], "unconfirmed"),
+        (False, [{"supports": 0.9, "contradicts": 0.0}], ("keep", None)),
+        (False, [{"supports": 0.1, "contradicts": 0.8}], ("drop", None)),
+        (False, [{"supports": 0.1, "contradicts": 0.1}], ("unconfirmed", None)),
         (False, [{"supports": 0.8, "contradicts": 0.0}, {"supports": 0.0, "contradicts": 0.9}],
-         "keep"),
-        (True, [{"supports": 0.1, "contradicts": 0.1}], "drop"),
-        (True, [{"supports": 0.5, "contradicts": 0.1}], "unconfirmed"),
+         ("keep", None)),
+        # a paper showing the drug acting differently flags the edge instead of dropping it
+        (False, [{"supports": 0.1, "contradicts": 0.0, "flags": WRONG}],
+         ("flag", "wrong_mechanism")),
+        (False, [{"supports": 0.0, "contradicts": 0.4, "flags": {"wrong_mechanism": 0.5}}],
+         ("flag", "wrong_mechanism")),
+        (False, [{"supports": 0.0, "contradicts": 0.5, "flags": {"wrong_mechanism": 0.4}}],
+         ("drop", None)),
+        (False, [{"supports": 0.8, "contradicts": 0.0}, {"supports": 0.0, "contradicts": 0.0,
+                                                          "flags": WRONG}], ("keep", None)),
+        # text-mined and unsupported: "not stated in what we read" is flagged, not dropped
+        (True, [{"supports": 0.1, "contradicts": 0.1}], ("flag", "unsupported_by_abstract")),
+        (True, [{"supports": 0.1, "contradicts": 0.8}], ("drop", None)),
+        (True, [{"supports": 0.5, "contradicts": 0.1}], ("unconfirmed", None)),
     ],
 )  # fmt: skip
 def test_edge_verdict(based_on_text, articles, verdict):
     q = {"threshold": 0.7}
     assert question.edge_verdict(q, based_on_text, articles) == verdict
+
+
+def test_only_a_contradicting_option_can_flag_and_it_needs_a_reason(tmp_path):
+    path = tmp_path / "q.json"
+    options = [
+        {"name": "fine", "role": "supports", "what": "x", "flag": "odd"},
+        {"name": "wrong", "role": "contradicts", "what": "y", "flag": "Wrong Mechanism"},
+    ]
+    path.write_text(json.dumps({**QUESTION, "options": options}))
+    with pytest.raises(question.QuestionError) as e:
+        question.load(path)
+    message = str(e.value)
+    for problem in ("only a contradicts option can flag", "flag: lowercase", "flag_reason"):
+        assert problem in message
 
 
 def test_pmids_from_curies_and_urls():
@@ -253,3 +281,41 @@ def test_judge_then_build_writes_the_drop_list_cleaning_reads(workspace, fake_sd
 
     keys = garbage.load_drop_list(Path("data/cleaning/drop_lists/drug_target.jsonl"))
     assert keys == {("C:B", "biolink:interacts_with", "P:2", "infores:dc")}
+
+
+def test_build_writes_the_flag_list_cleaning_reads(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    q = {
+        **QUESTION,
+        "options": [
+            {"name": "different_action", "role": "contradicts", "what": "acts another way",
+             "flag": "wrong_mechanism",
+             "flag_reason": "a cited paper reports a different action than the edge's"},
+            *QUESTION["options"],
+        ],
+    }  # fmt: skip
+    qpath = tmp_path / "q.json"
+    qpath.write_text(json.dumps(q))
+    work = tmp_path / "data/cleaning/evidence/drug_target"
+    work.mkdir(parents=True)
+    key = ["C:A", "biolink:interacts_with", "P:1", "infores:dc"]
+    (work / "evidence.jsonl").write_text(
+        json.dumps({"key": key, "pmid": "111", "based_on_text": False, "claim": "A inhibits P1"})
+        + "\n"
+    )
+    probabilities = {"different_action": 0.9, "not_reported": 0.1}
+    (work / "answers.jsonl").write_text(
+        json.dumps({"key": key, "pmid": "111", "choice": "different_action",
+                    "probabilities": probabilities}) + "\n"
+    )  # fmt: skip
+    assert build.main([str(qpath)]) == 0
+    [line] = [json.loads(x) for x in open("data/cleaning/flag_lists/drug_target.jsonl")]
+    assert line == {
+        "subject": "C:A",
+        "predicate": "biolink:interacts_with",
+        "object": "P:1",
+        "primary_knowledge_source": "infores:dc",
+        "flag": "wrong_mechanism",
+        "reason": "a cited paper reports a different action than the edge's (PMID:111)",
+    }
+    assert open("data/cleaning/drop_lists/drug_target.jsonl").read() == ""

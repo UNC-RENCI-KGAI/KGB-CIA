@@ -1,13 +1,15 @@
 ---
 name: evidence-check
-description: Check graph edges against the literature they cite. Write one multiple-choice question for a kind of edge, gather the PubMed abstracts each edge cites, have Jev (TypeSafe's typed-decision model) answer it for every abstract, and turn the answers into a drop list that the cleaning stage applies. Use after merging, for any predicate whose edges cite publications.
+description: Check graph edges against the literature they cite. Write one multiple-choice question for a kind of edge, gather the PubMed abstracts each edge cites, have Jev (TypeSafe's typed-decision model) answer it for every abstract, and turn the answers into drop and flag lists that the cleaning stage applies. Use after merging, for any predicate whose edges cite publications.
 ---
 
 # Evidence check
 
 An edge that cites a paper is only as good as that paper. This skill asks, for each edge and
 each abstract it cites, whether the abstract supports, contradicts or says nothing about the
-edge. Edges the literature rejects go on a drop list that `kgb-clean` removes on every later run.
+edge. Edges the literature rejects go on a drop list that `kgb-clean` removes on every later run;
+edges it shows are real but wrong in a detail go on a flag list, and `kgb-clean` writes the flag
+and its reason onto the edge, where the MCP interface shows them to the user.
 It works for any predicate: you write the question, and the scripts do the rest the same way
 each time.
 
@@ -35,10 +37,14 @@ Write a question file in `data/cleaning/evidence/` (format and a worked example:
 
 - `select`: which edges to check.
 - `instructions`: what to judge, using the four things Jev sees: `text` (title and abstract),
-  `subject` and `object` (name and identifier), and `claim` (the edge in words).
+  `subject` and `object` (name, other names from NodeNorm, and identifier), and `claim` (the
+  edge in words).
 - `options`: the possible answers, each with a `role`. An option that means the edge is right
   `supports` it, one that means it's wrong `contradicts` it, and "the text doesn't say" is
-  `silent`.
+  `silent`. When the text shows the edge is real but a detail is wrong (the drug acts on the
+  target, but as an agonist where the edge says antagonism), give that `contradicts` option a
+  `flag` and a `flag_reason`: the edge is kept and flagged instead of dropped, so the graph
+  doesn't lose a real link over a wrong qualifier.
 
 Order the options with `contradicts` and `silent` first, because Jev leans toward earlier
 options. Always include a `silent` option: most abstracts don't mention every target a paper
@@ -66,7 +72,8 @@ uv run python $S/build_drop_list.py QUESTION
   goes. Tell the user that, and carry on with the rest of the pipeline; the check is optional.
   It is resumable, and a failed call is retried on the next run.
 - `build_drop_list.py` writes `verdicts.jsonl` (every edge, its verdict, and the answer for each
-  article) and `data/cleaning/drop_lists/<name>.jsonl`, which `kgb-clean` applies.
+  article), `data/cleaning/drop_lists/<name>.jsonl` and `data/cleaning/flag_lists/<name>.jsonl`,
+  which `kgb-clean` applies.
 
 Jev costs $0.042 per million input tokens: 1,257 DrugCentral drug-target abstracts come to about
 a million tokens, or 4 cents.
@@ -74,22 +81,26 @@ a million tokens, or 4 cents.
 ## How verdicts are reached
 
 Each article's answer is summed by role. An article supports or contradicts the edge when that
-role's probability reaches `threshold` (default 0.7).
+role's probability reaches `threshold` (default 0.7); flagging options count toward
+contradicting.
 
-- **Curated edges** (anything not text-mined): dropped only when an article contradicts the edge
-  and none supports it. When every article is silent, the edge is kept as `unconfirmed`.
-- **Text-mined edges** (`agent_type` text_mining_agent, or `knowledge_level`
-  text_co_occurrence): the text is the edge's only basis, so an edge no article supports is
-  dropped. This matches the TMKP filter.
+- **Any article supports it:** kept (`keep`).
+- **An article contradicts it and none supports it:** dropped, or flagged with the option's flag
+  when the flagging options carry more of the probability than the dropping ones.
+- **Every article is silent:** a curated edge is kept as `unconfirmed`. A text-mined edge
+  (`agent_type` text_mining_agent, or `knowledge_level` text_co_occurrence) is flagged
+  `unsupported_by_abstract`: its text is its only basis, but "not stated in the abstracts we
+  read" is not "wrong", so it is kept for the user to weigh rather than dropped as the TMKP
+  filter does.
 
-Report the counts of keep, unconfirmed and drop to the user with two or three dropped edges and
-the abstract sentences that sank them, so they can judge the call. To try another threshold,
+Report the counts of keep, unconfirmed, flag and drop to the user with two or three dropped or
+flagged edges and the abstract sentences behind them, so they can judge the call. To try another threshold,
 change it in the question file and rerun `build_drop_list.py`; Jev isn't asked again.
 
 ## Limits
 
 - Only the abstract is read, not the full paper. Results in tables or figures look `silent`.
-- Names come from the graph. Papers that use a code name (FYX-051 for topiroxostat) can look
-  silent; Jev sees the identifier too, but not synonyms.
+- Other names come from NodeNorm. A code name NodeNorm doesn't know (SAR 1118 for lifitegrast)
+  still makes a paper look silent.
 - There is no labeled sample for these questions yet, so precision is unmeasured. For a result
   you report, label about 50 articles by hand and compare.

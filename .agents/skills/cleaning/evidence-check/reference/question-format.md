@@ -8,7 +8,7 @@ names every problem it finds.
 | `name` | yes | Lowercase letters, digits and `_`. Names the work directory (`data/cleaning/evidence/<name>/`) and the drop list (`data/cleaning/drop_lists/<name>.jsonl`). |
 | `select` | yes | Which edges to check: edge fields and the values allowed for each, usually `predicate` and `primary_knowledge_source`. A value can be a string or a list. Every key must match. |
 | `instructions` | yes | The question, in terms of what Jev sees: `text` (title and abstract), `subject` and `object` (name and identifier, as `name [CURIE]`) and `claim` (the edge in words, qualifiers in brackets: `imatinib interacts with (inhibition) ABL1`). End with "Judge only what `text` says." |
-| `options` | yes | The answers, in order, each with `name`, `role` (`supports`, `contradicts` or `silent`), `what` (when to choose it) and optionally `examples`. At least one must support, and at least one must contradict or be silent. |
+| `options` | yes | The answers, in order, each with `name`, `role` (`supports`, `contradicts` or `silent`), `what` (when to choose it) and optionally `examples`. At least one must support, and at least one must contradict or be silent. A `contradicts` option may add `flag` (lowercase, digits, `_`) and `flag_reason` (one plain sentence a user reads on the edge): the edge is then kept and flagged instead of dropped. |
 | `threshold` | no | Probability a role must reach for an article to count as supporting or contradicting. Default 0.7. |
 | `model` | no | Jev version. Default `jev-1.13.0`. |
 
@@ -42,7 +42,9 @@ on the target in that way.
       "name": "different_action",
       "role": "contradicts",
       "what": "`text` reports `subject` acting on `object`, but in a different way from `claim`: an agonist where the claim says inhibition or antagonism, an activator where it says inhibitor, or the reverse.",
-      "examples": ["X acted as a partial agonist at the receptor (claim: antagonism)"]
+      "examples": ["X acted as a partial agonist at the receptor (claim: antagonism)"],
+      "flag": "wrong_mechanism",
+      "flag_reason": "A cited paper reports the drug acting on this target, but not in the way this edge says"
     },
     {
       "name": "no_activity",
@@ -66,5 +68,9 @@ on the target in that way.
 }
 ```
 
-On 40 DrugCentral drug-target edges this gathered 41 edge-abstract pairs from 22 papers; the
-whole set is 1,248 edges and 1,257 pairs.
+On the Nov 9 cleaned graph this question selected 867 edges that cite PubMed (853 edge-abstract
+pairs; Jev's answers cost $0.04). 341 were kept as supported, 507 unconfirmed (the abstract
+doesn't mention the target), 3 flagged `wrong_mechanism` (olodaterol is a beta-2 agonist, not
+an antagonist; flibanserin a weak partial agonist at D4, not an antagonist; voxelotor raises
+hemoglobin's oxygen affinity rather than inhibiting it) and 1 dropped (pralsetinib, whose paper
+says it works "without inhibiting VEGFR2").
