@@ -1,5 +1,6 @@
 import importlib.util
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -146,7 +147,7 @@ def test_ambiguous_user_source(graphs):
         dg.describe(graphs, user=["s"])
 
 
-def _merge_and_clean(graphs, cleaned_from):
+def _merge_and_clean(graphs, cleaned_from, cleaned_counts=(7, 14)):
     merged = graphs.parent / "merged"
     merged.mkdir()
     (merged / "merge-metadata.json").write_text(
@@ -158,8 +159,8 @@ def _merge_and_clean(graphs, cleaned_from):
         json.dumps(
             {
                 "settings": {"input": str(cleaned_from or merged)},
-                "nodes": {"in": 7, "out": 6},
-                "edges": {"in": 14, "out": 12},
+                "nodes": {"in": cleaned_counts[0], "out": 6},
+                "edges": {"in": cleaned_counts[1], "out": 12},
             }
         )
     )
@@ -172,8 +173,14 @@ def test_layout_found_from_transformation_dir(graphs):
         assert dg.find_layout(start) == (graphs, merged, cleaning)
 
 
+def test_copied_graph_matched_by_counts(graphs, tmp_path):
+    # cleaned on the cluster, downloaded here: the report's input path is the cluster's
+    merged, cleaning = _merge_and_clean(graphs, "/projects/cluster/merged")
+    assert dg.find_layout(graphs.parent) == (graphs, merged, cleaning)
+
+
 def test_stale_cleaning_report_ignored(graphs, tmp_path):
-    merged, _ = _merge_and_clean(graphs, tmp_path / "some_other_merge")
+    merged, _ = _merge_and_clean(graphs, tmp_path / "some_other_merge", cleaned_counts=(8, 20))
     found = dg.find_layout(graphs.parent)
     assert found == (graphs, merged, None)
     assert dg.describe(*found)["totals"]["basis"] == "merged graph"
@@ -183,3 +190,93 @@ def test_labels():
     assert dg.label("biolink:SequenceVariant") == "Sequence variant"
     assert dg.label("biolink:genetically_associated_with") == "genetically associated with"
     assert dg.short(12_841_209) == "12.8M"
+
+
+def test_orion_error_repeat_dropped():
+    meta = {
+        "fetch_status": "failed",
+        "fetch_error": "<HTTPError 404: 'Not Found'>-HTTP Error 404: Not Found",
+    }
+    assert dg._failure(meta) == "download failed: HTTP Error 404: Not Found"
+    meta = {
+        "fetch_status": "failed",
+        "fetch_error": "ValueError('Checksum mismatch')-Checksum mismatch",
+    }
+    assert dg._failure(meta) == "download failed: Checksum mismatch"
+    assert dg._once("plain error-with-dash") == "plain error-with-dash"
+
+
+PROTEIN = [
+    "biolink:BiologicalEntity",
+    "biolink:GeneOrGeneProduct",
+    "biolink:NamedThing",
+    "biolink:Polypeptide",
+    "biolink:Protein",
+]
+DRUG = [
+    "biolink:ChemicalEntity",
+    "biolink:Drug",
+    "biolink:MolecularEntity",
+    "biolink:NamedThing",
+    "biolink:SmallMolecule",
+]
+CHEMICAL = [
+    "biolink:ChemicalEntity",
+    "biolink:MolecularEntity",
+    "biolink:NamedThing",
+    "biolink:SmallMolecule",
+]
+
+
+def _nodes(directory, categories):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "nodes.jsonl").write_text(
+        "".join(
+            json.dumps({"id": f"X:{i}", "category": c}) + "\n" for i, c in enumerate(categories)
+        )
+    )
+
+
+def test_categories_counted_from_cleaned_graph(graphs):
+    # the merge sorts each node's categories, so a protein lists BiologicalEntity first
+    merged, cleaning = _merge_and_clean(graphs, None)
+    _nodes(cleaning, [PROTEIN, PROTEIN, DRUG, CHEMICAL])
+    d = dg.describe(*dg.find_layout(graphs.parent))
+    assert d["categories_basis"] == "cleaned graph"
+    assert d["categories"] == {
+        "biolink:Protein": 2,
+        "biolink:Drug + biolink:SmallMolecule": 1,
+        "biolink:SmallMolecule": 1,
+    }
+    assert dg.label("biolink:Drug + biolink:SmallMolecule") == "Drug + Small molecule"
+    assert "## Node categories (cleaned graph)" in dg.markdown(d)
+
+
+def test_categories_fall_back_to_sources_without_a_graph(graphs):
+    d = dg.describe(graphs)
+    assert d["categories_basis"] == "sources, before merging"
+    assert d["categories"] == d["node_types"]
+
+
+def test_inferred_most_specific_without_biolink():
+    # categories are told apart only where some node carries one without the other
+    chemical_entity = ("biolink:ChemicalEntity", "biolink:NamedThing")
+    molecular_entity = ("biolink:ChemicalEntity", "biolink:MolecularEntity", "biolink:NamedThing")
+    profiles = Counter({tuple(PROTEIN): 2, tuple(CHEMICAL): 1, tuple(DRUG): 1})
+    profiles.update([chemical_entity, molecular_entity])
+    most_specific = dg._inferred_most_specific(profiles)
+    assert most_specific(tuple(CHEMICAL)) == ("biolink:SmallMolecule",)
+    assert most_specific(tuple(DRUG)) == ("biolink:Drug",)
+    assert "biolink:NamedThing" not in most_specific(tuple(PROTEIN))
+
+
+def test_sources_not_in_graph_get_a_plain_reason():
+    assert dg.why_not("download failed: Checksum mismatch for file_x").startswith(
+        "Its files changed"
+    )
+    assert (
+        dg.why_not("download failed: HTTP Error 403: Forbidden")
+        == "Its website refused the download"
+    )
+    assert dg.why_not("parsing failed: Extra data") == "Its files downloaded but couldn't be read"
+    assert dg.why_not("something new") == "Its build didn't finish"
