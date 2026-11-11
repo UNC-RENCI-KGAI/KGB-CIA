@@ -24,7 +24,8 @@ no-argument run is the real run. To drop more edges, put a drop list in `<output
 **Output**, in `--output`:
 
 - `nodes.jsonl`, `edges.jsonl`: the cleaned graph. Records pass through unchanged, including
-  `id` and `kgbcia_source_records`.
+  `id` and `kgbcia_source_records`, except that a flagged edge gains two lists (see "Flags on
+  the edges" below).
 - `cleaning_report.json`: counts in and out; `attention`, the sources that lost at least half
   their edges, with the CURIE prefixes that didn't resolve; every dropped edge and node by
   reason and by primary knowledge source; unresolved nodes by prefix; flags on kept edges; and a
@@ -88,8 +89,33 @@ to lose a fact.
 | `rare_category_combination` | a (subject categories, predicate, object categories) combination, using each node's most specific categories, under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each |
 | `opposing_predicate` | the pair also carries the opposite predicate (`treats` or a predicate under it, such as `ameliorates_condition`, with `contraindicated_in`); the pairs are listed |
 
+### Flags on the edges
+
 Every kept edge with an `unresolved_node`, `self_loop`, `type_violation`,
-`rare_category_combination` or `opposing_predicate` flag is also written to `flagged_edges.jsonl`, keyed like a drop list,
+`rare_category_combination` or `opposing_predicate` flag, or a flag from a flag list, carries
+them on the edge, so the MCP interface can tell a user the edge is in question and why:
+
+```json
+"kgbcia_flags": ["type_violation"],
+"kgbcia_flag_reasons": ["Biolink expects the subject of participates_in to be an occurrent, but it is Gene"]
+```
+
+The two lists line up, one plain sentence per flag. They are lists of strings so Neo4j stores
+them as they are. A cleaning pass replaces any flags its input already had, so the final pass
+after augmentation doesn't stack them.
+
+A flag list is how a check outside `kgb-clean` marks edges without dropping them: a `.jsonl`
+file in `flag_lists/`, beside `drop_lists/` (`<output>/flag_lists/` by default), one edge per
+line, keyed like a drop list, with a `flag` and a `reason`:
+
+```json
+{"subject": "CHEBI:82700", "predicate": "biolink:interacts_with", "object": "UniProtKB:P07550", "primary_knowledge_source": "infores:drugcentral", "flag": "wrong_mechanism", "reason": "PMID:20371707 reports a different action than antagonism"}
+```
+
+The evidence check writes one for edges whose paper shows the drug acting on the target, but
+not the way the edge's qualifier says.
+
+The same edges are also written to `flagged_edges.jsonl`, keyed like a drop list,
 with its flags, the endpoints' most specific categories and, for a type violation, whether
 the domain or the range failed. A node can have more than one most specific category (a drug
 that is both `Drug` and `SmallMolecule`, neither under the other), so these are lists, and the

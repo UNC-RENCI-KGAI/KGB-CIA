@@ -148,6 +148,72 @@ def test_drop_lists_folder_matches_on_edge_key_not_id(graph, tmp_path):
     assert report.settings["drop_lists"] == {"evidence_check": 1}
 
 
+def test_flags_are_written_on_the_edges_for_the_mcp(graph, tmp_path):
+    out = tmp_path / "clean"
+    garbage.collect(graph, out)
+    by_pair = {(e["subject"], e["object"]): e for e in _read(out / "edges.jsonl")}
+    unresolved = by_pair[("CHEMBL.TARGET:X", "UniProtKB:A")]
+    assert unresolved["kgbcia_flags"] == ["unresolved_node"]
+    [reason] = unresolved["kgbcia_flag_reasons"]
+    assert "NodeNorm could not resolve CHEMBL.TARGET:X" in reason
+    assert by_pair[("UniProtKB:A", "UniProtKB:A")]["kgbcia_flags"] == ["self_loop"]
+    # not_provided describes the source, not the edge, so it stays off the edge
+    assert "kgbcia_flags" not in by_pair[("UniProtKB:B", "UniProtKB:C")]
+    assert "kgbcia_flags" not in by_pair[("UniProtKB:A", "UniProtKB:B")]
+    assert not (out / "edges.unflagged.tmp").exists()
+
+
+def test_flag_lists_add_their_flag_and_reason(graph, tmp_path):
+    out = tmp_path / "clean"
+    (out / "flag_lists").mkdir(parents=True)
+    reason = "PMID:1 reports agonism, not antagonism"
+    _write(
+        out / "flag_lists" / "evidence_check.jsonl",
+        [
+            {**_edge("UniProtKB:A", "UniProtKB:B"), "flag": "wrong_mechanism", "reason": reason},
+            {**_edge("UniProtKB:A", "UniProtKB:A"), "flag": "wrong_mechanism", "reason": reason},
+        ],
+    )
+    report = garbage.collect(graph, out)
+    assert report.settings["flag_lists"] == {"evidence_check": 2}
+    assert report.flags["wrong_mechanism"] == 2
+    by_pair = {(e["subject"], e["object"]): e for e in _read(out / "edges.jsonl")}
+    assert by_pair[("UniProtKB:A", "UniProtKB:B")]["kgbcia_flags"] == ["wrong_mechanism"]
+    assert by_pair[("UniProtKB:A", "UniProtKB:B")]["kgbcia_flag_reasons"] == [reason]
+    loop = by_pair[("UniProtKB:A", "UniProtKB:A")]
+    assert loop["kgbcia_flags"] == ["self_loop", "wrong_mechanism"]
+    assert loop["kgbcia_flag_reasons"][1] == reason
+    flagged = _read(out / "flagged_edges.jsonl")
+    assert ["wrong_mechanism"] in [f["flags"] for f in flagged]
+
+
+def test_flag_lists_sit_beside_the_drop_lists(graph, tmp_path):
+    lists = tmp_path / "earlier_pass"
+    (lists / "flag_lists").mkdir(parents=True)
+    _write(
+        lists / "flag_lists" / "check.jsonl",
+        [{**_edge("UniProtKB:A", "UniProtKB:B"), "flag": "wrong_mechanism", "reason": "r"}],
+    )
+    report = garbage.collect(graph, tmp_path / "final", lists / "drop_lists")
+    assert report.settings["flag_lists"] == {"check": 1}
+
+
+def test_a_second_pass_replaces_flags_instead_of_stacking_them(graph, tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    garbage.collect(graph, first)
+    garbage.collect(first, second)
+    loop = next(e for e in _read(second / "edges.jsonl") if e["subject"] == e["object"])
+    assert loop["kgbcia_flags"] == ["self_loop"]
+    assert len(loop["kgbcia_flag_reasons"]) == 1
+
+
+def test_flag_list_line_needs_flag_and_reason(tmp_path):
+    path = tmp_path / "bad.jsonl"
+    _write(path, [_edge("UniProtKB:A", "UniProtKB:B")])
+    with pytest.raises(ValueError, match="bad.jsonl:1.*flag and reason"):
+        garbage.load_flag_list(path)
+
+
 def test_drop_list_line_needs_full_key(tmp_path):
     drop = tmp_path / "bad.jsonl"
     _write(drop, [{"subject": "UniProtKB:A", "object": "UniProtKB:B"}])
@@ -245,6 +311,14 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
         "object_categories": ["biolink:Pathway"],
         "violates": "domain",
     }
+    by_predicate = {e["predicate"]: e for e in _read(tmp_path / "out" / "edges.jsonl")}
+    expected = garbage.biolink_types.expected("biolink:participates_in", "domain")
+    assert by_predicate["biolink:participates_in"]["kgbcia_flag_reasons"] == [
+        f"Biolink expects the subject of participates_in to be an {expected}, but it is Gene"
+    ]
+    assert by_predicate["biolink:contraindicated_in"]["kgbcia_flag_reasons"] == [
+        "the same pair is also connected by treats"
+    ]
     # a flagged line is a valid drop-list line, so a reviewed subset can be promoted to a drop
     drop = tmp_path / "promote.jsonl"
     _write(drop, [violation])

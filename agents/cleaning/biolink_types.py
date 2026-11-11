@@ -102,6 +102,14 @@ def constraint(predicate: str) -> tuple[frozenset[str] | None, frozenset[str] | 
     return sets[0], sets[1]
 
 
+def expected(predicate: str, side: str) -> str | None:
+    """The Biolink class a predicate's domain or range names ('disease or phenotypic feature'),
+    its own or the nearest ancestor's; `side` is 'domain' or 'range'."""
+    if not toolkit().is_predicate(predicate):
+        return None
+    return _inherited(predicate, side)
+
+
 def violation(predicate: str, subject_categories, object_categories) -> str | None:
     """'domain', 'range', or None when the edge fits (or nothing is enforced)."""
     domain, range_ = constraint(predicate)
