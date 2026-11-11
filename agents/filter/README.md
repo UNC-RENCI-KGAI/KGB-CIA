@@ -17,7 +17,9 @@ Uses the record types in `shared/schema.py`. Describe the exact files here once 
 
 ## Status
 
-On `main`, `kgb-filter` is a stub that prints "not implemented yet". In progress:
-[#47](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/47) (describe-graph skill: a plain-language
-overview of the graph) and [#50](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/50) (cut the
-subgraph a user asks for).
+The `kgb-filter` command is still a stub that prints "not implemented yet". The
+`describe-graph` skill (`.agents/skills/filter/describe-graph/`) does the first half of the
+filter's job: given the user's own source, it measures how much of it the pre-built sources
+already share and recommends which sources to focus on, with that list as the default. In
+progress: [#50](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/50) (cut the subgraph a user asks
+for).
