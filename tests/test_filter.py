@@ -297,3 +297,25 @@ def test_seeds_without_edges_are_kept(graph, tmp_path):
     focus = subgraph.load_focus(_focus(tmp_path, seeds=[{"ids": ["G:2"]}], hops=0))
     subgraph.extract(focus, graph, tmp_path / "out")
     assert _ids(tmp_path / "out") == {"G:2"}  # its only edge goes to D:3, which is not a seed
+
+
+def test_find_nodes_counts_by_most_specific_category(tmp_path, capsys):
+    # the merge sorts category lists, so a protein's first entry is BiologicalEntity
+    d = _small_graph(
+        tmp_path,
+        {
+            "U:1": {
+                "name": "ABL1 kinase",
+                "category": ["biolink:BiologicalEntity", "biolink:NamedThing", "biolink:Protein"],
+            },
+            "U:2": {
+                "name": "kinase pathway",
+                "category": ["biolink:NamedThing", "biolink:Pathway"],
+            },
+        },
+        [],
+    )
+    find_nodes.main(["kinase", str(d)])
+    out = capsys.readouterr().out
+    assert "biolink:Protein: 1" in out and "biolink:Pathway: 1" in out
+    assert "BiologicalEntity: " not in out

@@ -10,7 +10,9 @@ one node, counted by predicate, direction and source, with examples, to find the
 links a family, pathway or disease to its members (for a `linked_to` rule).
 
 GRAPH is a directory with nodes.jsonl and edges.jsonl (default: data/cleaning, else
-data/transformation/merged). Standard library only.
+data/transformation/merged). Run with `uv run python` so the most specific category can be
+shown (it needs the project's environment); otherwise it falls back to the first listed
+category and says so.
 """
 
 from __future__ import annotations
@@ -22,7 +24,36 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+try:  # needs the project environment: run with `uv run python`
+    from agents.cleaning.biolink_types import most_specific
+except ImportError:
+    most_specific = None
+
 DEFAULT_GRAPHS = (Path("data/cleaning"), Path("data/transformation/merged"))
+_warned = False
+
+
+def kind_of(categories) -> str:
+    """A node's type: its most specific Biolink categories, joined with " + ".
+
+    The merge sorts each category list alphabetically, so the first entry is not the type
+    (a protein's list starts with BiologicalEntity). To keep only nodes of a class, test
+    membership instead: `"biolink:Protein" in categories`, which is what --category does.
+    """
+    global _warned
+    categories = tuple(categories or ())
+    if not categories:
+        return "(none)"
+    if most_specific is None:
+        if not _warned:
+            print(
+                "note: not run with `uv run python`, so categories below are the first listed, "
+                "not the most specific",
+                file=sys.stderr,
+            )
+            _warned = True
+        return categories[0]
+    return " + ".join(most_specific(categories)) or "(none)"
 
 
 def find_graph(given: Path | None) -> Path:
@@ -48,7 +79,7 @@ def search(graph: Path, text: str, category: str | None, limit: int) -> None:
         if category and category not in categories:
             continue
         if pattern.search(node.get("name") or ""):
-            by_category[categories[0] if categories else "(none)"] += 1
+            by_category[kind_of(categories)] += 1
             if len(hits) < limit:
                 hits.append(node)
     total = sum(by_category.values())
@@ -57,7 +88,7 @@ def search(graph: Path, text: str, category: str | None, limit: int) -> None:
         print(f"  {cat}: {n:,}")
     for node in hits:
         taxon = node.get("taxon") or node.get("in_taxon") or ""
-        category = (node.get("category") or ["?"])[0]
+        category = kind_of(node.get("category"))
         kind = f"{category}, {taxon}" if taxon else category
         print(f"  {node['id']}  {node.get('name', '')}  ({kind})")
     if total > len(hits):
@@ -69,7 +100,7 @@ def around(graph: Path, curie: str) -> None:
     for node in read_jsonl(graph / "nodes.jsonl"):
         if node.get("id") == curie:
             names[curie] = node.get("name", "")
-            print(f"{curie}  {node.get('name', '')}  {node.get('category', [])[:2]}")
+            print(f"{curie}  {node.get('name', '')}  ({kind_of(node.get('category'))})")
             break
     else:
         raise SystemExit(f"{curie} is not a node in {graph}")

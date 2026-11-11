@@ -20,8 +20,8 @@ drug, a pathway, or the user's own dataset. Find each in the graph with `find_no
 
 ```bash
 S=.agents/skills/filter/focus-subgraph/scripts
-python3 $S/find_nodes.py "kinase" --category biolink:Protein
-python3 $S/find_nodes.py --around MONDO:0004975
+uv run python $S/find_nodes.py "kinase" --category biolink:Protein
+uv run python $S/find_nodes.py --around MONDO:0004975
 ```
 
 - `find_nodes.py TEXT` lists nodes with a word in their name that starts with TEXT, counted by
@@ -29,9 +29,9 @@ python3 $S/find_nodes.py --around MONDO:0004975
   `name` rule makes, so what it finds is what the rule will seed. Use `--category` when the word
   names more than one kind of thing ("kinase" names proteins, genes and pathways): it keeps nodes
   that have that Biolink class anywhere in their category list, so `biolink:Protein` selects
-  proteins. The counts per category show each node's first listed category, and the lists are
-  alphabetical, so proteins appear as `biolink:BiologicalEntity` there; that is not their type.
-  To keep only human nodes use `taxon`. `--limit` shows more than 25 examples.
+  proteins. The counts show each node's most specific category (a drug can have two, shown
+  joined with " + "). To keep only human nodes use `taxon`. `--limit` shows more than 25
+  examples. Run it with `uv run python`, so the project environment is available.
 - `find_nodes.py --around CURIE` shows the edges touching one node by predicate, direction and
   source. Use it to find how a family, pathway or disease links to its members or subclasses,
   for a `linked_to` rule.
