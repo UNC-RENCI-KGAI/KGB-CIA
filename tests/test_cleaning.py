@@ -192,10 +192,11 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     _write(graph / "nodes.jsonl", nodes)
     _write(graph / "edges.jsonl", edges)
     report = garbage.collect(graph, tmp_path / "out")
-    assert report.edges_out == 5, "type violations are flags, not drops"
-    assert report.flags["type_violation"] == 2
+    # treats -> Procedure is a promoted drop; participates_in's violation stays a flag
+    assert report.edges_out == 4
+    assert report.dropped_edges == {"type_violation:biolink:treats->biolink:Procedure": 1}
+    assert report.flags["type_violation"] == 1
     assert report.type_violations_by_predicate == {
-        "biolink:treats": 1,
         "biolink:participates_in": 1,
     }
     written = json.loads((tmp_path / "out" / "cleaning_report.json").read_text())
@@ -210,26 +211,29 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     assert written["rare_category_combinations"] == []  # too few edges per predicate
     assert written["type_violations_by_category"] == {
         "biolink:participates_in": {"domain: biolink:Gene": 1},
-        "biolink:treats": {"range: biolink:Procedure": 1},
     }
+    assert written["dropped_edges"] == {"type_violation:biolink:treats->biolink:Procedure": 1}
 
     flagged = _read(tmp_path / "out" / "flagged_edges.jsonl")
-    assert written["flagged_edges"] == len(flagged) == 5  # 2 violations, 2 opposing, 1 self loop
-    to_procedure = next(f for f in flagged if f["object"] == "UMLS:P")
-    assert to_procedure == {
-        "subject": "CHEBI:1",
-        "predicate": "biolink:treats",
-        "object": "UMLS:P",
+    assert written["flagged_edges"] == len(flagged) == 4  # 1 violation, 2 opposing, 1 self loop
+    assert not any(f["object"] == "UMLS:P" for f in flagged), "a dropped edge is not flagged"
+    violation = next(f for f in flagged if "type_violation" in f["flags"])
+    assert violation == {
+        "subject": "NCBIGene:1",
+        "predicate": "biolink:participates_in",
+        "object": "REACT:1",
         "primary_knowledge_source": "infores:test",
         "flags": ["type_violation"],
-        "subject_categories": ["biolink:SmallMolecule"],
-        "object_categories": ["biolink:Procedure"],
-        "violates": "range",
+        "subject_categories": ["biolink:Gene"],
+        "object_categories": ["biolink:Pathway"],
+        "violates": "domain",
     }
     # a flagged line is a valid drop-list line, so a reviewed subset can be promoted to a drop
     drop = tmp_path / "promote.jsonl"
-    _write(drop, [to_procedure])
-    assert garbage.load_drop_list(drop) == {("CHEBI:1", "biolink:treats", "UMLS:P", "infores:test")}
+    _write(drop, [violation])
+    assert garbage.load_drop_list(drop) == {
+        ("NCBIGene:1", "biolink:participates_in", "REACT:1", "infores:test")
+    }
 
 
 def test_opposing_counts_edges_and_includes_narrower_predicates(tmp_path):
@@ -342,23 +346,97 @@ def test_combinations_key_on_every_most_specific_category(tmp_path):
     nodes = [
         {"id": "CHEBI:1", "category": both, "equivalent_identifiers": ["CHEBI:1"]},
         {
-            "id": "UMLS:P",
-            "category": ["biolink:NamedThing", "biolink:Procedure"],
-            "equivalent_identifiers": ["UMLS:P"],
+            "id": "UMLS:Ph",
+            "category": ["biolink:NamedThing", "biolink:Phenomenon"],
+            "equivalent_identifiers": ["UMLS:Ph"],
         },
     ]
     graph = tmp_path / "g"
     graph.mkdir()
     _write(graph / "nodes.jsonl", nodes)
-    _write(graph / "edges.jsonl", [_edge("CHEBI:1", "UMLS:P", predicate="biolink:treats")])
+    _write(graph / "edges.jsonl", [_edge("CHEBI:1", "UMLS:Ph", predicate="biolink:treats")])
     report = garbage.collect(graph, tmp_path / "out")
     assert report.combinations == {
-        (("biolink:Drug", "biolink:SmallMolecule"), "biolink:treats", ("biolink:Procedure",)): 1
+        (("biolink:Drug", "biolink:SmallMolecule"), "biolink:treats", ("biolink:Phenomenon",)): 1
     }
     [flagged] = _read(tmp_path / "out" / "flagged_edges.jsonl")
     assert flagged["subject_categories"] == ["biolink:Drug", "biolink:SmallMolecule"]
-    assert flagged["object_categories"] == ["biolink:Procedure"]
+    assert flagged["object_categories"] == ["biolink:Phenomenon"]
     written = json.loads((tmp_path / "out" / "cleaning_report.json").read_text())
     assert written["type_violations_by_category"] == {
-        "biolink:treats": {"range: biolink:Procedure": 1}
+        "biolink:treats": {"range: biolink:Phenomenon": 1}
     }
+
+
+def _typed(node_id, *categories):
+    return {
+        "id": node_id,
+        "category": list(categories) + ["biolink:NamedThing"],
+        "equivalent_identifiers": [node_id],
+    }
+
+
+def test_promoted_type_violation_drops_treats_to_procedure(tmp_path):
+    nodes = [
+        _typed("CHEBI:1", "biolink:SmallMolecule", "biolink:ChemicalEntity"),
+        _typed("MONDO:1", "biolink:Disease", "biolink:DiseaseOrPhenotypicFeature"),
+        _typed("UMLS:P", "biolink:Procedure"),
+        _typed("UMLS:Ph", "biolink:Phenomenon"),
+        _typed("UMLS:D", "biolink:Drug", "biolink:SmallMolecule", "biolink:ChemicalEntity"),
+    ]
+    edges = [
+        _edge("CHEBI:1", "MONDO:1", predicate="biolink:treats"),  # fits
+        _edge("CHEBI:1", "UMLS:P", predicate="biolink:treats"),  # promoted drop
+        _edge("CHEBI:1", "UMLS:Ph", predicate="biolink:treats"),  # violation, stays a flag
+        _edge("CHEBI:1", "UMLS:D", predicate="biolink:treats"),  # the drug's synonym: drop
+    ]
+    graph = tmp_path / "g"
+    graph.mkdir()
+    _write(graph / "nodes.jsonl", nodes)
+    _write(graph / "edges.jsonl", edges)
+    report = garbage.collect(graph, tmp_path / "out")
+    assert report.dropped_edges == {
+        "type_violation:biolink:treats->biolink:Procedure": 1,
+        "type_violation:biolink:treats->biolink:Drug": 1,
+    }
+    assert report.edges_out == 2
+    assert report.flags["type_violation"] == 1  # treats -> Phenomenon
+    assert report.type_violations_by_category == {
+        "biolink:treats": {"range: biolink:Phenomenon": 1}
+    }
+    assert report.dropped_nodes == {"orphan": 2}  # UMLS:P and UMLS:D lost their only edge
+    kept = {(e["subject"], e["object"]) for e in _read(tmp_path / "out" / "edges.jsonl")}
+    assert kept == {("CHEBI:1", "MONDO:1"), ("CHEBI:1", "UMLS:Ph")}
+
+
+def test_promoted_type_violation_matches_any_most_specific_category():
+    cats = ("biolink:Drug", "biolink:SmallMolecule", "biolink:ChemicalEntity", "biolink:NamedThing")
+    specific = ("biolink:Drug", "biolink:SmallMolecule")
+    disease = ("biolink:Disease", "biolink:NamedThing")
+    assert (
+        garbage.promoted_type_violation("biolink:treats", cats, cats, specific, specific)
+        == "type_violation:biolink:treats->biolink:Drug"
+    )
+    assert (
+        garbage.promoted_type_violation("biolink:treats", cats, disease, specific, disease[:1])
+        is None
+    )
+    # a violation whose predicate has no promotion stays a flag
+    assert (
+        garbage.promoted_type_violation(
+            "biolink:has_phenotype", cats, disease, specific, disease[:1]
+        )
+        is None
+    )
+
+
+def test_unresolved_nodes_tsv(graph, tmp_path):
+    report = garbage.collect(graph, tmp_path / "out")
+    rows = (tmp_path / "out" / "unresolved_nodes.tsv").read_text().splitlines()
+    assert rows[0] == "node\tprefix\tname\tdropped_edges\tsources\tpredicates"
+    assert rows[1:] == ["CHEMBL.TARGET:X\tCHEMBL.TARGET\t\t1\tinfores:test\tbiolink:interacts_with"]
+    written = json.loads((tmp_path / "out" / "cleaning_report.json").read_text())
+    assert written["dropped_edges_by_source_prefix"] == [
+        {"source": "infores:test", "prefix": "CHEMBL.TARGET", "edges": 1}
+    ]
+    assert report.dropped_edges_by_source_prefix[("infores:test", "CHEMBL.TARGET")] == 1

@@ -31,6 +31,10 @@ no-argument run is the real run. To drop more edges, put a drop list in `<output
   few examples of each.
 - `flagged_edges.jsonl`: the kept edges worth a look, one per line, keyed like a drop list (see
   below).
+- `unresolved_nodes.tsv`: every node NodeNorm couldn't resolve, with its prefix, name, the
+  edges it took down, and the sources and predicates of those edges, most costly first. This is
+  what a metadata fix needs: the identifiers, not just the prefix. About 68 MB on the full
+  graph; written on every run.
 
 ## Reading the result
 
@@ -51,8 +55,17 @@ Garbage collection (`garbage.py`), in this order. An edge is dropped when it:
 | `dangling` | names a node that isn't in `nodes.jsonl` |
 | `unresolved_node` | touches a node NodeNorm couldn't resolve (empty `equivalent_identifiers`) |
 | `drop_list:<name>` | listed in `<output>/drop_lists/<name>.jsonl` |
+| `type_violation:<predicate>-><category>` | a type violation promoted to a drop in `DROP_TYPE_VIOLATIONS`: today, `treats` whose object is a Procedure, ClinicalIntervention, BiologicalProcess, ChemicalEntity, OrganismTaxon, Protein or Drug |
 
 Then nodes are dropped when `unresolved`, or `orphan` (no kept edge touches them).
+
+The promoted type violations are the drops a reviewer made by hand on the Nov 9 graph, so an
+unattended run reaches the same result in one pass: DrugCentral `treats` edges to "General
+Anesthesia" (Procedure), "Asthma management" (ClinicalIntervention), "relaxation of muscle"
+(BiologicalProcess), "Diagnostic agents" (ChemicalEntity), "Vancomycin-Resistant Enterococci"
+(OrganismTaxon) or the drug's own synonym (Protein, Drug). `treats` to a Phenomenon stays a
+flag on purpose ("severe pain" is a real indication). To promote another pair, add it to the
+table with the names that justify it; every other violation stays a flag.
 
 Kept edges are counted, not changed, as flags: things to fix upstream in metadata, not reasons
 to lose a fact.
