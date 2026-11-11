@@ -63,7 +63,7 @@ $A --input data/filter --output data/augmentation apply
 `--help` lists the steps, and `augment.py STEP --help` a step's options. Every step takes
 `--input` (the graph), `--output` (where step 6 writes the augmented graph), `--work` (default
 `<output>/work`) and `--cache-dir` (default `data/augmentation/cache`, or `KGB_AUGMENT_CACHE_DIR`
-for the shared RENCI drive), before or after the step's name.
+to share them across a team), before or after the step's name.
 
 | Step | Main options (default) |
 | --- | --- |
@@ -76,9 +76,9 @@ for the shared RENCI drive), before or after the step's name.
 | `evaluate` | `--gold FILE` (`<work>/gold.jsonl`), `--run MODEL[@PROMPT_VERSION]` (repeatable; default the run in `label_run.json`), `--species-in-proposals` (off, as apply); or `--draw N --seed S` (0) to draw the pairs to curate |
 | (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--skip-review` |
 
-Environment: `RENCI_AZURE_API_KEY` for labeling and review with the RENCI models (not for
-`--dry-run`), and `ANTHROPIC_API_KEY` or an `ant auth login` profile with Claude models;
-labeling also needs the review model's, `RENCI_AZURE_API_KEY` by default, for the sentence
+Environment: `AZURE_OPENAI_API_KEY` for labeling and review with the Azure OpenAI models (not
+for `--dry-run`), and `AZURE_OPENAI_BASE_URL` to point them at your own endpoint, and `ANTHROPIC_API_KEY` or an `ant auth login` profile with Claude models;
+labeling also needs the review model's, `AZURE_OPENAI_API_KEY` by default, for the sentence
 repair pass. `NCBI_EMAIL`, and `NCBI_API_KEY` for 10 requests a second instead of 3, for the
 PubMed search. `NAMERES_URL` points the ground step at another Name Resolver.
 

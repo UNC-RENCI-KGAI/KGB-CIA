@@ -15,9 +15,9 @@
   (`labels`, `proposals`, `reviews`, `repairs`). No code reads or writes them any more, and they
   stay as they are.
 
-Both live under `config.DEFAULT_CACHE_DIR` (shared on the RENCI drive). They use SQLite's
-default rollback journal rather than WAL, which is unsafe on network filesystems. Write from one
-process at a time.
+Both live under `config.DEFAULT_CACHE_DIR`; point it at a shared directory to share them. They
+use SQLite's default rollback journal rather than WAL, which is unsafe on network filesystems.
+Write from one process at a time.
 """
 
 from __future__ import annotations

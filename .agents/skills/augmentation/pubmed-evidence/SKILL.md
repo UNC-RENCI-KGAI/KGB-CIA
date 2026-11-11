@@ -28,8 +28,8 @@ edit the graph, the caches or the claims by hand: every change to the graph come
   `label_run.json`, each refined pair's record (`refinements.jsonl`), the sample and evaluation
   reports, your tuned prompts and rules, and your `notes.md`. `reference/work-files.md`
   describes every file.
-- **Caches** in `data/augmentation/cache` (`--cache-dir`, or `KGB_AUGMENT_CACHE_DIR` for the
-  shared RENCI drive): PubMed responses, anatomy groundings, the pinned UBERON release, and
+- **Caches** in `data/augmentation/cache` (`--cache-dir`, or `KGB_AUGMENT_CACHE_DIR` to
+  share them across a team): PubMed responses, anatomy groundings, the pinned UBERON release, and
   every claim, check, review and repair. Reruns reuse them, so rerunning a step is cheap. Only
   one process should write to a cache at a time.
 
@@ -60,8 +60,8 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 
 ## Before you start
 
-- Labeling and review (not `--dry-run`) need the model's credentials: `RENCI_AZURE_API_KEY`
-  for the RENCI models, and for Claude models (`claude-...`) `ANTHROPIC_API_KEY` or an
+- Labeling and review (not `--dry-run`) need the model's credentials: `AZURE_OPENAI_API_KEY`
+  for the Azure OpenAI models (`AZURE_OPENAI_BASE_URL` for your own endpoint), and for Claude models (`claude-...`) `ANTHROPIC_API_KEY` or an
   `ant auth login` profile. If they're missing, the step stops and says so; stop too, and
   don't look for a key. Labeling also uses the review model's, for the sentence repair pass;
   the label summary says if the pass was skipped for lack of them.

@@ -146,8 +146,8 @@ before took: the 5% rule takes the failed calls as a share of them), `failed_cal
 
 ## Caches
 
-Two SQLite files under `--cache-dir` (`KGB_AUGMENT_CACHE_DIR`), meant to be shared on the
-RENCI drive. They use SQLite's rollback journal, not WAL (unsafe on network filesystems), so
+Two SQLite files under `--cache-dir` (`KGB_AUGMENT_CACHE_DIR`), meant to be shared on a
+team drive. They use SQLite's rollback journal, not WAL (unsafe on network filesystems), so
 only one process should write to a cache at a time. Never delete them: they hold paid claims.
 Beside them sits `uberon-basic.obo`, the UBERON release step 4 pins (`config.UBERON_URL`);
 delete it only to fetch another release after changing the pin.

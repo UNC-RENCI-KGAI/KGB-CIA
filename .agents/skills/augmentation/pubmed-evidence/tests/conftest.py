@@ -31,7 +31,7 @@ def no_model_credentials(monkeypatch, tmp_path_factory):
     profile, so a step that builds a real client fails before calling anything. A test that
     needs a key sets a made-up one."""
     for name in (
-        config.RENCI_API_KEY,
+        config.AZURE_KEY_VAR,
         config.ANTHROPIC_API_KEY,
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_PROFILE",
