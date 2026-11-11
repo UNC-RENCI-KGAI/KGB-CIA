@@ -9,7 +9,7 @@ problem it finds.
 | `request` | yes | The user's request, in their words. Kept in the report. |
 | `seeds` | yes | One or more seed rules (below). The seeds are the union of what they match. |
 | `hops` | no | How many steps out from the seeds, 0 to 3. Default 1. |
-| `max_degree` | no | Nodes with more allowed edges than this are kept but not expanded through. Default 2000. |
+| `max_degree` | no | Non-seed nodes with more allowed edges than this are kept but not expanded through; seeds always expand (the report lists big ones as `seed_hubs`). Default 2000. |
 | `sources` | no | Only edges from these primary knowledge sources (infores ids). Default: all. |
 | `predicates` | no | Only edges with these predicates. Default: all. |
 
@@ -22,7 +22,7 @@ Each rule has exactly one of these keys.
 | Rule | Matches |
 |---|---|
 | `{"ids": ["NCBIGene:1017", ...]}` | These nodes. |
-| `{"name": "kinase", "category": "biolink:Protein", "taxon": "NCBITaxon:9606"}` | Nodes whose name contains the text as a word, any case. `category` (optional, can be a list) and `taxon` (optional) narrow it; `find_nodes.py` shows each node's taxon. |
+| `{"name": "kinase", "taxon": "NCBITaxon:9606"}` | Nodes with a word in their name that starts with the text, any case ("kinase" matches "kinases", "ALK" matches "ALKBH5"; use `ids` for an exact set). `category` (optional, can be a list; matches if the node has that class anywhere in its category list) and `taxon` (optional) narrow it; `find_nodes.py` shows each node's taxon. |
 | `{"linked_to": ["MONDO:0004975"], "predicate": "biolink:subclass_of", "transitive": true}` | Nodes that are the subject of such an edge to one of the listed nodes: members, parts or subclasses. With `transitive`, their own members or subclasses too. `predicate` can be a list. |
 | `{"source": "infores:my-lab-data"}` | Every node an edge from that primary knowledge source touches: a whole dataset. |
 

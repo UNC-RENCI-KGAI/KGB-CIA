@@ -102,6 +102,30 @@ def test_hubs_are_kept_but_not_expanded(graph, tmp_path):
     assert report["hubs_not_expanded"] == {"G:9": 6}
 
 
+def test_seed_hubs_expand_and_are_reported(graph, tmp_path):
+    # G:9 has 6 edges, over max_degree=3, but it is a seed, so its partners are reached
+    focus = subgraph.load_focus(_focus(tmp_path, seeds=[{"ids": ["G:9"]}], max_degree=3))
+    report = subgraph.extract(focus, graph, tmp_path / "out")
+    assert {f"H:{i}" for i in range(5)} <= _ids(tmp_path / "out")
+    assert report["seed_hubs"] == {"G:9": 6}
+    assert report["hubs_not_expanded"] == {}
+    assert "G:9" in subgraph.summary(report)
+
+
+def test_name_rule_matches_word_starts_not_substrings(tmp_path):
+    d = tmp_path / "g"
+    d.mkdir()
+    names = ["ALK", "ALKBH5", "tyrosine kinases", "kinase", "pseudokinase", "TALK1"]
+    (d / "nodes.jsonl").write_text(
+        "".join(json.dumps({"id": f"N:{i}", "name": n}) + "\n" for i, n in enumerate(names))
+    )
+    (d / "edges.jsonl").write_text("")
+    for text, expected in (("ALK", {"N:0", "N:1"}), ("kinase", {"N:2", "N:3"})):
+        focus = subgraph.load_focus(_focus(tmp_path, seeds=[{"name": text}], hops=0))
+        seeds, _ = subgraph.find_seeds(focus, d / "nodes.jsonl", d / "edges.jsonl")
+        assert seeds == expected
+
+
 def test_name_rule_with_category(graph, tmp_path):
     seeds = [{"name": "kinase", "category": "biolink:Protein"}]
     focus = subgraph.load_focus(_focus(tmp_path, seeds=seeds, hops=0))
@@ -152,3 +176,124 @@ def test_find_nodes(graph, capsys):
     find_nodes.main(["--around", "D:1", str(graph)])
     out = capsys.readouterr().out
     assert "<- biolink:subclass_of  1 edges from infores:curated; e.g. D:2" in out
+
+
+def _small_graph(tmp_path, nodes, edges):
+    """A graph from {id: node fields} and (subject, predicate, object, source) tuples."""
+    d = tmp_path / "small"
+    d.mkdir(exist_ok=True)
+    (d / "nodes.jsonl").write_text(
+        "".join(json.dumps({"id": i, **fields}) + "\n" for i, fields in nodes.items())
+    )
+    (d / "edges.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "subject": s,
+                    "predicate": f"biolink:{p}",
+                    "object": o,
+                    "primary_knowledge_source": src,
+                }  # fmt: skip
+            )
+            + "\n"
+            for s, p, o, src in edges
+        )
+    )
+    return d
+
+
+def test_hops_zero_keeps_every_source_between_seeds_unless_sources_limits(tmp_path):
+    # "my dataset" at hops 0 still keeps another source's edge between two of its nodes
+    d = _small_graph(
+        tmp_path,
+        {"A": {"name": "a"}, "B": {"name": "b"}},
+        [
+            ("A", "interacts_with", "B", "infores:mine"),
+            ("A", "interacts_with", "B", "infores:other"),
+        ],
+    )
+    seeds = [{"source": "infores:mine"}]
+    both = subgraph.load_focus(_focus(tmp_path, seeds=seeds, hops=0))
+    assert subgraph.extract(both, d, tmp_path / "o1")["edges"] == 2
+    only = subgraph.load_focus(_focus(tmp_path, seeds=seeds, hops=0, sources=["infores:mine"]))
+    assert subgraph.extract(only, d, tmp_path / "o2")["edges_by_source"] == {"infores:mine": 1}
+
+
+def test_linked_to_finds_subjects_so_a_pathways_members_need_a_hop(tmp_path):
+    # pathway has_participant gene: the pathway is the subject, so linked_to can't find the genes
+    d = _small_graph(
+        tmp_path,
+        {"P": {"name": "pathway"}, "G1": {"name": "g1"}, "G2": {"name": "g2"}},
+        [
+            ("P", "has_participant", "G1", "infores:kegg"),
+            ("P", "has_participant", "G2", "infores:kegg"),
+        ],
+    )
+    by_link = [{"linked_to": ["P"], "predicate": "biolink:has_participant"}]
+    focus = subgraph.load_focus(_focus(tmp_path, seeds=by_link, hops=0))
+    assert subgraph.extract(focus, d, tmp_path / "o1")["seeds"] == 0
+    by_hop = subgraph.load_focus(
+        _focus(tmp_path, seeds=[{"ids": ["P"]}], hops=1, predicates=["biolink:has_participant"])
+    )
+    assert subgraph.extract(by_hop, d, tmp_path / "o2")["nodes"] == 3
+
+
+def test_ids_missing_from_the_graph_are_not_an_error(graph, tmp_path):
+    focus = subgraph.load_focus(_focus(tmp_path, seeds=[{"ids": ["G:1", "X:404"]}], hops=0))
+    report = subgraph.extract(focus, graph, tmp_path / "out")
+    assert report["seeds"] == 1 and report["seed_rules"][0]["nodes"] == 1
+
+
+def test_seed_hubs_is_empty_at_hops_zero(graph, tmp_path):
+    # nothing expands at hops 0, so an oversized seed is not reported: the skill says so
+    focus = subgraph.load_focus(_focus(tmp_path, seeds=[{"ids": ["G:9"]}], hops=0, max_degree=3))
+    assert subgraph.extract(focus, graph, tmp_path / "out")["seed_hubs"] == {}
+
+
+def test_hub_degree_counts_only_edges_that_pass_the_filters(tmp_path):
+    # N has 4 edges in all, so it is a hub at max_degree 2, but only 1 passes `sources`
+    d = _small_graph(
+        tmp_path,
+        {k: {"name": k} for k in ("S", "N", "X", "Y", "Z")},
+        [("S", "interacts_with", "N", "infores:a")]
+        + [("N", "interacts_with", other, "infores:b") for other in "XYZ"],
+    )
+    base = {"seeds": [{"ids": ["S"]}], "hops": 2, "max_degree": 2}
+    limited = subgraph.load_focus(_focus(tmp_path, **base, sources=["infores:a"]))
+    assert subgraph.extract(limited, d, tmp_path / "o1")["hubs_not_expanded"] == {}
+    unlimited = subgraph.load_focus(_focus(tmp_path, **base))
+    assert subgraph.extract(unlimited, d, tmp_path / "o2")["hubs_not_expanded"] == {"N": 4}
+
+
+def test_category_rule_matches_membership_not_the_first_entry(tmp_path):
+    # the merge sorts each category list, so a protein's first entry is BiologicalEntity
+    d = _small_graph(
+        tmp_path,
+        {
+            "K:1": {
+                "name": "ABL1 kinase",
+                "category": ["biolink:BiologicalEntity", "biolink:Protein"],
+            },
+            "K:2": {"name": "kinase pathway", "category": ["biolink:Pathway"]},
+        },
+        [],
+    )
+    focus = subgraph.load_focus(
+        _focus(tmp_path, seeds=[{"name": "kinase", "category": "biolink:Protein"}], hops=0)
+    )
+    assert subgraph.extract(focus, d, tmp_path / "out")["seeds"] == 1
+
+
+def test_the_same_focus_file_gives_the_same_subgraph(graph, tmp_path):
+    seeds = [{"ids": ["D:1"]}, {"linked_to": ["D:1"], "predicate": "biolink:subclass_of"}]
+    focus = subgraph.load_focus(_focus(tmp_path, seeds=seeds))
+    subgraph.extract(focus, graph, tmp_path / "first")
+    subgraph.extract(focus, graph, tmp_path / "second")
+    for name in ("nodes.jsonl", "edges.jsonl"):
+        assert (tmp_path / "first" / name).read_text() == (tmp_path / "second" / name).read_text()
+
+
+def test_seeds_without_edges_are_kept(graph, tmp_path):
+    focus = subgraph.load_focus(_focus(tmp_path, seeds=[{"ids": ["G:2"]}], hops=0))
+    subgraph.extract(focus, graph, tmp_path / "out")
+    assert _ids(tmp_path / "out") == {"G:2"}  # its only edge goes to D:3, which is not a seed

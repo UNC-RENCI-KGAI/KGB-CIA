@@ -38,8 +38,8 @@ examples, the subgraph's size, and its edges by source and predicate. With no fo
 Seeds are the union of the focus file's seed rules (exact ids; a word in node names, by category
 and taxon; members or subclasses of given nodes; everything one source touches). From the seeds
 it reaches out `hops` steps (default 1), not expanding through hubs with more than
-`max_degree` edges (default 2000). The subgraph's edges are every edge between its nodes,
-optionally only from some sources or with some predicates. The format is in the
+`max_degree` edges (default 2000), except seeds, which always expand. The subgraph's edges
+are every edge between its nodes, optionally only from some sources or with some predicates. The format is in the
 `focus-subgraph` skill's reference.
 
 ## Status

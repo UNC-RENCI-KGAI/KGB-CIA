@@ -8,8 +8,10 @@ node ids are held in memory.
 Seed rules, any number, combined as a union:
 
 - `{"ids": [CURIE, ...]}`: these nodes.
-- `{"name": TEXT, "category": CLASS, "taxon": TAXON}`: nodes whose name contains TEXT as a word
-  (any case), optionally only of a Biolink category and only of a taxon (NCBITaxon:9606).
+- `{"name": TEXT, "category": CLASS, "taxon": TAXON}`: nodes with a word in their name that
+  starts with TEXT (any case), so "kinase" matches "kinases" and "ALK" matches "ALKBH5"; use
+  `ids` for an exact set. Optionally only of a Biolink category and only of a taxon
+  (NCBITaxon:9606).
 - `{"linked_to": [CURIE, ...], "predicate": [PREDICATE, ...], "transitive": bool}`: nodes that
   are the subject of such an edge to one of those nodes, e.g. the subclasses of a disease;
   with transitive, their subclasses too.
@@ -18,8 +20,9 @@ Seed rules, any number, combined as a union:
 
 From the seeds the subgraph reaches out `hops` steps (default 1) along edges, not expanding
 through hub nodes with more than `max_degree` edges (default 2000), which would pull in most of
-the graph. Its edges are every edge between its nodes, optionally only from `sources` or with
-`predicates`.
+the graph. Seeds are the exception: the user asked for them, so they always expand, and the
+report lists any above `max_degree` as `seed_hubs`. Its edges are every edge between its
+nodes, optionally only from `sources` or with `predicates`.
 """
 
 from __future__ import annotations
@@ -158,6 +161,7 @@ def expand(focus: dict, seeds: set[str], edges_path: Path) -> tuple[set[str], di
     keep = set(seeds)
     frontier = set(seeds)
     hubs: Counter = Counter()
+    seed_hubs: Counter = Counter()
     for _ in range(focus["hops"]):
         if not frontier:
             break
@@ -175,13 +179,19 @@ def expand(focus: dict, seeds: set[str], edges_path: Path) -> tuple[set[str], di
                 reached[o].add(s)
         step = set()
         for node, neighbors in reached.items():
-            if node not in seeds and degree[node] > focus["max_degree"]:
-                hubs[node] = degree[node]  # kept, but not expanded through
-                continue
+            if degree[node] > focus["max_degree"]:
+                if node in seeds:
+                    seed_hubs[node] = degree[node]  # asked for by the user: expands anyway
+                else:
+                    hubs[node] = degree[node]  # kept, but not expanded through
+                    continue
             step |= neighbors
         frontier = step - keep
         keep |= step
-    return keep, {"hubs_not_expanded": dict(hubs.most_common(EXAMPLES))}
+    return keep, {
+        "hubs_not_expanded": dict(hubs.most_common(EXAMPLES)),
+        "seed_hubs": dict(seed_hubs.most_common(EXAMPLES)),
+    }
 
 
 def link_or_copy(source: Path, target: Path) -> None:
@@ -255,4 +265,7 @@ def summary(report: dict) -> str:
         lines.append(f"  {source}: {n:,} edges")
     if report["hubs_not_expanded"]:
         lines.append(f"Hubs not expanded: {', '.join(report['hubs_not_expanded'])}")
+    if report.get("seed_hubs"):
+        lines.append(f"Seeds with more than max_degree edges, expanded anyway: "
+                     f"{', '.join(report['seed_hubs'])}")  # fmt: skip
     return "\n".join(lines)

@@ -4,10 +4,10 @@
     find_nodes.py TEXT [GRAPH] [--category CLASS] [--limit N]
     find_nodes.py --around CURIE [GRAPH]
 
-With TEXT: nodes whose name contains TEXT as a word (any case), the same match a `name` seed
-rule makes, with how many there are by category. With --around: the edges touching one node,
-counted by predicate, direction and source, with examples, to find the predicate that links a
-family, pathway or disease to its members (for a `linked_to` rule).
+With TEXT: nodes with a word in their name that starts with TEXT (any case), the same match a
+`name` seed rule makes, with how many there are by category. With --around: the edges touching
+one node, counted by predicate, direction and source, with examples, to find the predicate that
+links a family, pathway or disease to its members (for a `linked_to` rule).
 
 GRAPH is a directory with nodes.jsonl and edges.jsonl (default: data/cleaning, else
 data/transformation/merged). Standard library only.
