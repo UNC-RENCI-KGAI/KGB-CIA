@@ -63,7 +63,13 @@ ids are in a namespace NodeNorm doesn't resolve, which the metadata step can fix
 
 - Overlap is shared nodes, not paths: two sources that connect only through a third aren't
   counted as overlapping.
-- Per-source counts are before merging. Category and predicate totals add up sources, so an
-  edge two sources both assert is counted twice there; graph totals from the merge or cleaning
-  are exact.
+- Node and edge totals, and node categories, come from the cleaned graph (else the merged
+  graph) and are exact. Each node counts once, under its most specific categories (a drug that
+  is also a small molecule counts under the pair); never read a node's first category, since
+  the merge sorts the list alphabetically.
+- Connections, predicates and publications are counted per source before merging and cleaning,
+  so an edge two sources both assert counts twice there, and edges cleaning removed still
+  count. The page and description.md label these "by source".
+- Sources that didn't build are listed as "other available sources not in the graph", each
+  with a plain reason and ORION's error.
 - A source whose `normalized_nodes.jsonl` is missing is left out of the overlap, with a warning.

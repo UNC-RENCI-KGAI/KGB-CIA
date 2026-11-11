@@ -7,11 +7,14 @@ TRANSFORMATION is kgb-transform's output directory (default data/transformation)
 graphs/ directory of per-source ORION workspaces. For each source this reads the workspace's
 `*.meta.json` (fetch, parse and normalization status and counts) and the build's QC file
 `<source>_<build>.json` (node types, predicates, subject-predicate-object type counts, edges with
-publications), so it never scans the graph itself.
+publications). Connection and publication counts come from these, by source before merging.
 
 Totals come from the most finished stage it finds: the cleaning report in the sibling cleaning/
 directory if that report was made from this run's merged/ graph, else merged/merge-metadata.json,
-else the sum over sources.
+else the sum over sources. Node categories are counted from that same graph's nodes.jsonl (the
+cleaned graph's, else the merged graph's), one count per node under its most specific
+categories, so they add up to the headline node count. Only without either graph do they fall
+back to the sources' QC files.
 
 `--user` names the user's own source(s), by source id or plain name ("human protein atlas").
 With it, the script also reads each built source's node ids (resolved ones only) to count the
@@ -19,7 +22,9 @@ nodes sources share: how much of the user's data is already in the graph, and wh
 cover the rest.
 
 Writes description.json (everything), description.md (for an agent to read and retell) and
-overview.html (a self-contained page with charts) to --output. Standard library only.
+overview.html (a self-contained page with charts) to --output. Standard library only; the
+repository's Biolink helper (agents/cleaning/biolink_types.py) is used for most specific
+categories when it can be imported, else they are inferred from the graph's own category lists.
 """
 
 from __future__ import annotations
@@ -60,18 +65,47 @@ def _stable_normalization(meta: dict) -> tuple[str, str, dict] | None:
     return parsing_id, norm_id, norm
 
 
+def _once(error: str) -> str:
+    """ORION's error text without its repeat: it writes `repr(e)-str(e)`, as in
+    `<HTTPError 404: 'Not Found'>-HTTP Error 404: Not Found`. Keeps the readable half."""
+    match = re.fullmatch(r"(?:<[^>]*>|\w+\(.*\))-(.+)", error, flags=re.S)
+    return match.group(1).strip() if match else error
+
+
 def _failure(meta: dict) -> str:
     """Where a source that didn't build stopped, in a few words."""
     if meta.get("fetch_status") != "stable":
         error = meta.get("fetch_error") or meta.get("fetch_status") or "not fetched"
-        return f"download failed: {error}"
+        return f"download failed: {_once(error)}"
     for parsing in (meta.get("parsings") or {}).values():
         if parsing.get("parsing_status") != "stable":
-            return f"parsing {parsing.get('parsing_status')}: {parsing.get('parsing_error', '')}"
+            error = _once(parsing.get("parsing_error", ""))
+            return f"parsing {parsing.get('parsing_status')}: {error}"
         for norm in (parsing.get("normalizations") or {}).values():
             if norm.get("normalization_status") != "stable":
                 return f"normalization {norm.get('normalization_status')}"
     return "no stable build"
+
+
+# Plain reasons for a source that isn't in the graph: (text in ORION's error, reason). First match.
+REASONS = (
+    (
+        "Checksum mismatch",
+        "Its files changed after its metadata was written; the metadata needs refreshing",
+    ),
+    ("HTTP Error 403", "Its website refused the download"),
+    ("HTTP Error 404", "Its download address no longer exists"),
+    ("Unsupported archive", "Its files come packaged in a way the build can't open yet"),
+    ("download failed", "Its files couldn't be downloaded"),
+    ("parsing", "Its files downloaded but couldn't be read"),
+    ("normalization", "Its identifiers couldn't be normalized"),
+    ("no ORION metadata", "It hasn't been built"),
+)
+
+
+def why_not(problem: str) -> str:
+    """A plain reason for a source that isn't in the graph, from where its build stopped."""
+    return next((reason for text, reason in REASONS if text in problem), "Its build didn't finish")
 
 
 def read_source(workspace: Path) -> dict:
@@ -130,6 +164,68 @@ def _first(types: list) -> str:
     return types[0] if types else "biolink:NamedThing"
 
 
+def _biolink_most_specific():
+    """The repository's `most_specific` (Biolink via bmt), or None outside the repository."""
+    root = Path(__file__).resolve().parents[5]
+    if str(root) not in sys.path:
+        sys.path.append(str(root))
+    try:
+        from agents.cleaning.biolink_types import most_specific
+
+        most_specific(("biolink:Protein", "biolink:NamedThing"))
+    except Exception:  # not in the repository, or bmt / biolink-model not installed
+        return None
+    return most_specific
+
+
+def _inferred_most_specific(profiles: Counter):
+    """Most specific categories inferred from the graph itself.
+
+    ORION writes every ancestor into a node's `category`, so a category's ancestors are the
+    categories every node carrying it also carries. Used only when Biolink can't be loaded, and
+    rougher than Biolink: two categories that always appear together are both kept, and a drug
+    that every node also calls a small molecule counts as a drug only.
+    """
+    ancestors: dict[str, set[str]] = {}
+    for profile in profiles:
+        for c in profile:
+            ancestors[c] = (ancestors[c] & set(profile)) if c in ancestors else set(profile)
+
+    def most_specific(profile: tuple[str, ...]) -> tuple[str, ...]:
+        present = set(profile)
+        # c is dropped when a category below it is present: c is its ancestor, not the reverse
+        return tuple(
+            sorted(
+                c
+                for c in present
+                if not any(c in ancestors[d] and d not in ancestors[c] for d in present - {c})
+            )
+        )
+
+    return most_specific
+
+
+def graph_node_categories(nodes_path: Path) -> dict[str, int]:
+    """Nodes per most specific category, from a graph's nodes.jsonl.
+
+    Never the first category: the merge sorts each node's list alphabetically, so a protein
+    reads `BiologicalEntity` first. A node with several most specific categories (a drug that
+    is also a small molecule) counts once, under the pair:
+    `biolink:Drug + biolink:SmallMolecule`.
+    """
+    profiles: Counter = Counter()
+    with open(nodes_path) as f:
+        for line in f:
+            if line.strip():
+                profiles[tuple(json.loads(line).get("category") or ())] += 1
+    most_specific = _biolink_most_specific() or _inferred_most_specific(profiles)
+    counts: Counter = Counter()
+    for profile, n in profiles.items():
+        key = " + ".join(most_specific(profile)) if profile else "biolink:NamedThing"
+        counts[key] += n
+    return dict(counts.most_common())
+
+
 def read_totals(merged: Path | None, cleaned: Path | None, sources: list[dict]) -> dict:
     """Graph-wide node and edge counts, from the most finished stage available."""
     if cleaned and (cleaned / "cleaning_report.json").exists():
@@ -155,7 +251,7 @@ def read_totals(merged: Path | None, cleaned: Path | None, sources: list[dict]) 
         }
     built = [s for s in sources if s["built"]]
     return {
-        "basis": "sum over sources, before merging (shared nodes and edges counted twice)",
+        "basis": "sum over sources before merging, so shared nodes and edges count twice",
         "nodes": sum(s["nodes"] for s in built),
         "edges": sum(s["edges"] for s in built),
     }
@@ -264,7 +360,7 @@ def find_layout(path: Path) -> tuple[Path, Path | None, Path | None]:
     """(graphs, merged, cleaned) from kgb-transform's output directory or its graphs/ directory.
 
     merged is OUTPUT/merged when it has merge metadata. cleaned is the sibling cleaning/ directory
-    when its report says it cleaned that merged graph, so a stale cleaning run is never used.
+    when its report cleaned that merged graph, so a stale cleaning run is never used.
     """
     output = path if (path / "graphs").is_dir() else path.parent
     graphs = output / "graphs" if (output / "graphs").is_dir() else path
@@ -272,13 +368,29 @@ def find_layout(path: Path) -> tuple[Path, Path | None, Path | None]:
     merged = merged if (merged / "merge-metadata.json").exists() else None
     cleaned = output.parent / "cleaning"
     report = cleaned / "cleaning_report.json"
-    if merged and report.exists():
-        cleaned_input = json.loads(report.read_text()).get("settings", {}).get("input", "")
-        if not cleaned_input or Path(cleaned_input).resolve() != merged.resolve():
-            cleaned = None
-    else:
+    if not (
+        merged and report.exists() and cleaned_this_merge(json.loads(report.read_text()), merged)
+    ):
         cleaned = None
     return graphs, merged, cleaned
+
+
+def cleaned_this_merge(report: dict, merged: Path) -> bool:
+    """Whether a cleaning report was made from this merged graph.
+
+    Its input path says so where the graph was cleaned. A graph copied elsewhere (downloaded
+    from the cluster, loaded on a server) keeps the original path, so a report whose input
+    counts equal this merge's final counts is taken as the same graph.
+    """
+    cleaned_input = report.get("settings", {}).get("input", "")
+    if cleaned_input and Path(cleaned_input).resolve() == merged.resolve():
+        return True
+    meta = json.loads((merged / "merge-metadata.json").read_text())
+    counts = (meta.get("final_node_count"), meta.get("final_edge_count"))
+    return None not in counts and counts == (
+        report.get("nodes", {}).get("in"),
+        report.get("edges", {}).get("in"),
+    )
 
 
 def _plain(name: str) -> str:
@@ -328,14 +440,26 @@ def describe(
         predicates.update(s.get("predicates", {}))
         for subject, predicate, obj, count in s.get("spo", []):
             spo[(subject, predicate, obj)] += count
+    totals = read_totals(merged, cleaned, sources)
+    nodes_file = {"cleaned graph": cleaned, "merged graph": merged}.get(totals["basis"])
+    nodes_file = nodes_file / "nodes.jsonl" if nodes_file else None
+    if nodes_file and nodes_file.exists():
+        categories = graph_node_categories(nodes_file)
+        categories_basis = totals["basis"]
+    else:
+        categories = dict(node_types.most_common())
+        categories_basis = "sources, before merging"
     description = {
         "date": date.today().isoformat(),
         "graphs": str(graphs),
-        "totals": read_totals(merged, cleaned, sources),
+        "totals": totals,
         "sources_built": len(built),
         "sources_total": len(sources),
         "edges_with_publications": sum(s.get("edges_with_publications", 0) for s in built),
         "edges_built": sum(s["edges"] for s in built),
+        # categories in the graph the totals describe; node_types (by source) sizes the map
+        "categories": categories,
+        "categories_basis": categories_basis,
         "node_types": dict(node_types.most_common()),
         "predicates": dict(predicates.most_common()),
         "spo": [
@@ -351,6 +475,8 @@ def describe(
 
 def label(curie: str) -> str:
     """'biolink:SequenceVariant' -> 'Sequence variant'; 'biolink:has_part' -> 'has part'."""
+    if " + " in curie:  # several most specific categories
+        return " + ".join(label(part) for part in curie.split(" + "))
     name = curie.removeprefix("biolink:")
     if "_" in name or name.islower():
         return name.replace("_", " ")
@@ -379,10 +505,10 @@ def markdown(d: dict) -> str:
         "",
         f"- **Nodes:** {t['nodes']:,}  **Edges:** {t['edges']:,}  ({t['basis']})",
         f"- **Sources built:** {d['sources_built']} of {d['sources_total']}",
-        f"- **Kinds of things (node categories):** {len(d['node_types'])}",
-        f"- **Kinds of relationships (predicates):** {len(d['predicates'])}",
+        f"- **Kinds of things (node categories):** {len(d['categories'])}",
+        f"- **Kinds of relationships (predicates):** {len(d['predicates'])} (by source)",
         f"- **Edges citing publications:** {d['edges_with_publications']:,} of "
-        f"{d['edges_built']:,} built",
+        f"{d['edges_built']:,} (by source, before merging and cleaning)",
     ]
     if "cleaning" in t:
         c = t["cleaning"]
@@ -390,9 +516,12 @@ def markdown(d: dict) -> str:
             f"- **Cleaning:** {c['edges_in']:,} edges in, {t['edges']:,} kept; dropped "
             + ", ".join(f"{k} {v:,}" for k, v in c["dropped_edges"].items())
         )
-    lines += ["", "## Node categories", "", "| Category | Nodes |", "|---|--:|"]
-    lines += [f"| {label(k)} | {v:,} |" for k, v in d["node_types"].items()]
-    lines += ["", "## Most common connections", "", "| Subject | Predicate | Object | Edges |"]
+    lines += ["", f"## Node categories ({d['categories_basis']})", ""]
+    lines += ["Each node counted once, under its most specific categories.", ""]
+    lines += ["| Category | Nodes |", "|---|--:|"]
+    lines += [f"| {label(k)} | {v:,} |" for k, v in d["categories"].items()]
+    lines += ["", "## Most common connections (by source, before merging and cleaning)", ""]
+    lines += ["| Subject | Predicate | Object | Edges |"]
     lines += ["|---|---|---|--:|"]
     lines += [
         f"| {label(r['subject'])} | {label(r['predicate'])} | {label(r['object'])} "
@@ -408,8 +537,12 @@ def markdown(d: dict) -> str:
         )
     not_built = [s for s in d["sources"] if not s["built"]]
     if not_built:
-        lines += ["", "## Sources not built", ""]
-        lines += [f"- {source_label(s['source_id'])}: {s['problem']}" for s in not_built]
+        lines += ["", "## Other available sources not in the graph", ""]
+        lines += ["| Source | Why it isn't in the graph | Details |", "|---|---|---|"]
+        lines += [
+            f"| {source_label(s['source_id'])} | {why_not(s['problem'])} | {s['problem']} |"
+            for s in not_built
+        ]
     user = d.get("overlap", {}).get("user")
     if user:
         lines += [
@@ -475,7 +608,7 @@ details{margin-top:24px}summary{cursor:pointer;color:var(--text-secondary)}
 table{border-collapse:collapse;margin:8px 0 16px;font-size:13px}
 td,th{padding:3px 10px;border-bottom:1px solid var(--rule);text-align:left}
 td.n{text-align:right;font-variant-numeric:tabular-nums}
-ul.problems{color:var(--text-secondary)}
+td.detail{color:var(--text-secondary);font-size:12px;word-break:break-word}
 """
 
 JS = """
@@ -595,11 +728,11 @@ def overview_html(d: dict) -> str:
         (short(t["nodes"]), "things (nodes)"),
         (short(t["edges"]), "connections (edges)"),
         (f"{d['sources_built']} of {d['sources_total']}", "sources built"),
-        (str(len(d["node_types"])), "kinds of things"),
+        (str(len(d["categories"])), "kinds of things"),
         (str(len(d["predicates"])), "kinds of connection"),
         (
             f"{d['edges_with_publications'] / d['edges_built']:.0%}" if d["edges_built"] else "0%",
-            "connections citing a publication",
+            "connections citing a publication (by source)",
         ),
     ]
     kpi_html = "".join(
@@ -655,10 +788,12 @@ def overview_html(d: dict) -> str:
         "<h2>What's in it</h2>"
         '<p class="note">Each circle is a kind of thing, sized by how many there are. A line '
         "joins two kinds when the graph connects them; thicker lines mean more connections. "
-        "Hover for the most common relationships.</p>"
+        "Hover for the most common relationships. Counted from each source before merging "
+        "and cleaning, so the sizes are relative, not the graph's totals.</p>"
         f'<div class="card">{category_svg}</div>',
         f"<h2>Where it came from</h2>"
-        f'<p class="note">Connections contributed by each source, before merging.</p>{legend}'
+        f'<p class="note">Connections contributed by each source, before merging and '
+        f"cleaning.</p>{legend}"
         f'<div class="card">{bar_chart(source_rows, "edges")}</div>',
     ]
 
@@ -712,11 +847,18 @@ def overview_html(d: dict) -> str:
 
     not_built = [s for s in d["sources"] if not s["built"]]
     if not_built:
-        items = "".join(
-            f"<li>{_esc(source_label(s['source_id']))}: {_esc(s['problem'])}</li>"
+        rows = "".join(
+            f"<tr><td>{_esc(source_label(s['source_id']))}</td><td>{_esc(why_not(s['problem']))}"
+            f"</td><td class='detail'>{_esc(s['problem'])}</td></tr>"
             for s in not_built
         )
-        sections.append(f"<h2>Not built yet</h2><ul class='problems'>{items}</ul>")
+        sections.append(
+            "<h2>Other available sources not in the graph</h2>"
+            '<p class="note">These sources have metadata and were tried, but their build '
+            "stopped before they could join the graph.</p>"
+            "<table><tr><th>Source</th><th>Why it isn't in the graph</th><th>Details</th></tr>"
+            f"{rows}</table>"
+        )
 
     def table(head: list[str], rows: list[list]) -> str:
         h = "".join(f"<th>{_esc(c)}</th>" for c in head)
@@ -733,7 +875,9 @@ def overview_html(d: dict) -> str:
 
     sections.append(
         "<details><summary>All the numbers as tables</summary>"
-        + table(["Category", "Nodes"], [[label(k), v] for k, v in d["node_types"].items()])
+        + f"<h3>Node categories ({_esc(d['categories_basis'])})</h3>"
+        + table(["Category", "Nodes"], [[label(k), v] for k, v in d["categories"].items()])
+        + "<h3>Most common connections (by source, before merging and cleaning)</h3>"
         + table(
             ["Subject", "Predicate", "Object", "Edges"],
             [

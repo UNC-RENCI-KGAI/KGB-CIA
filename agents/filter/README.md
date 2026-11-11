@@ -39,12 +39,14 @@ Seeds are the union of the focus file's seed rules (exact ids; a word in node na
 and taxon; members or subclasses of given nodes; everything one source touches). From the seeds
 it reaches out `hops` steps (default 1), not expanding through hubs with more than
 `max_degree` edges (default 2000), except seeds, which always expand. The subgraph's edges
-are every edge between its nodes, optionally only from some sources or with some predicates. The format is in the
-`focus-subgraph` skill's reference.
+are every edge between its nodes, optionally only from some sources or with some
+predicates. The format is in the `focus-subgraph` skill's reference.
 
 ## Status
 
-Works and is tested (`tests/test_filter.py`). On a 3.1M-edge trial graph (cleaned DrugCentral,
-HPA and orthologs from the Oct 30 run), "human kinases and the drugs that target them" gave 689
-seed proteins and an 18,106-edge subgraph in 11 seconds. Each hop is a pass over the edges, so
-expect minutes per request on the full graph.
+`kgb-filter` works and is tested (`tests/test_filter.py`). On the frozen merged graph (1.2M
+nodes, 12M edges) a request takes 2 to 3 minutes: each hop is a pass over the edges. For
+example, the 635 Pharos kinases and their drugs gave 633 seed proteins and 4,675 drug-target
+edges. The `describe-graph` skill (`.agents/skills/filter/describe-graph/`) does the first half
+of the filter's job: given the user's own source, it measures how much of it the pre-built
+sources already share and recommends which sources to focus on, with that list as the default.
