@@ -88,7 +88,7 @@ agents/mcp_interface/
 │   ├── prepare_dump.sh       # ORION dump -> kgb dump + artifacts tarball (see below)
 │   ├── make_dev_artifacts.py # synthetic reports + source records for the dev sample
 │   ├── helm/kgb-mcp/         # the chart: Neo4j (+ optional kgbcia-mcp over HTTP)
-│   ├── aws/                  # notes and scripts for the single-EC2 + k3s deployment
+│   ├── aws/                  # verify_host.sh, install.sh, values-aws-test.yaml, README.md
 │   ├── RUNBOOK.md            # dump -> publish -> helm install / upgrade, for both environments
 │   └── .env.example
 └── README.md                 # keep "Run it alone", "Input / output", "Neo4j notes" and
@@ -213,18 +213,45 @@ chart:
   each environment.
 - Validate it with `helm lint` and `helm template`. These need no cluster, so they can run in CI.
 
-**Final (AWS):** the **same chart** on a single EC2 instance running k3s. The steps are
-in `deploy/aws/` and `RUNBOOK.md`:
-- the instance (memory-optimized), a gp3 data volume and a security group opening only Bolt
-  and, if used, Neo4j HTTP and MCP HTTP;
-- installing k3s and Helm;
-- fetching the dump and tarball from S3;
-- `helm install -f values-aws.yaml`.
+**Final (AWS):** the **same chart** on a single EC2 instance running k3s. The host is already
+prepared by the maintainer:
+- **Instance:** Amazon Linux 2023 on **arm64 (Graviton)**, region `us-east-2`, with an Elastic
+  IP. Shell access is through `aws ssm start-session`, with no SSH. Use `dnf`, not `apt`; every
+  binary and container image must support arm64. The chart's `neo4j:5.26.31-community` and
+  `alpine` images do. Dumps built on x86 load fine.
+- **k3s** (`v1.37.2+k3s1`) is preinstalled with only `--disable traefik`. **ServiceLB is enabled**,
+  so Bolt is exposed with a `LoadBalancer` Service on **7687**, published on the instance's
+  address. `local-path` is the default storage class and stores data on the root disk under
+  `/var/lib/rancher/k3s/storage`.
+- **Helm v4.3.1** is installed manually, with `~/.kube/config` pointing at k3s. Use Helm 4 flags
+  and check them against its documentation.
+- **Security group:** inbound Bolt 7687 only, from the maintainer's IP during testing. Nothing
+  else inbound: no 22, 6443 or 7474.
+- **S3:** the dump is **private** (`s3://<bucket>/neo4j-dumps/kgb.dump`), and the artifacts
+  tarball is **public** (`…/mcp-data-artifact/artifacts.tar.gz`). The chart downloads the dump
+  through a **presigned URL** generated on the maintainer's laptop at install time
+  (`aws s3 presign … --expires-in 7200`). It is passed on the command line, never saved to a
+  file, and the checksum marker means it's fetched only once.
+- **The MCP server is not deployed on AWS** (`mcp.enabled=false`). Users run `kgbcia-mcp` locally
+  over stdio against `bolt://<elastic-ip>:7687`.
 
-The maintainer runs these steps by hand. Write shell scripts and docs, not a CDK app, and
-reference what the AWS admin already created (the S3 bucket, the VPC). Include **stopping the
-instance** between test sessions and **deleting everything** after judging, since compute is
-billed only while the instance runs.
+`deploy/aws/` contains:
+- `verify_host.sh`: read-only checks of the above (k3s active and node `Ready`, arm64, storage
+  class, Helm 4, `git` present, free disk), with the manual setup steps documented so the host
+  can be rebuilt. It installs nothing.
+- `values-aws-test.yaml`: an overlay sized for the development sample on this instance.
+  `values-aws.yaml` stays sized for the real graph.
+- `install.sh`: runs on the instance from a checkout of the branch. It creates the Secret
+  through `create_neo4j_secret.sh` (with password prompts), then runs
+  `helm upgrade --install` with the dump URL and both checksums passed as arguments, then waits
+  for the load and prints the Bolt Service and the `svclb` pod.
+- `README.md`: the whole sequence (presign on the laptop, install on the instance, verify from
+  the laptop), plus stopping and starting the instance, upgrading to a new dump, and tearing
+  everything down, including releasing the Elastic IP, which bills while unattached.
+
+The maintainer runs every step. Reference what the AWS admin created (the bucket, the VPC)
+instead of recreating it, and never write account-specific values, passwords or presigned URLs
+into files.
 
 **Both environments:** the same chart, kgb dump, artifacts and package version, with only the
 values file differing. Any other difference is a bug. Never commit hosts, passwords, account IDs
