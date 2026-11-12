@@ -59,11 +59,13 @@ stays in sync.
 - **Every node ID goes through NodeNorm** via `shared/nodenorm.py`.
 - **`evaluation/` is deliberately not a stage** and is not in `STAGES`.
 
-`kgb-transform` is the only stage command implemented; the other stages' `main` are stubs that
-print "not implemented yet". Semantic metadata comes from the `croissant-semantics` skill in
-`.agents/skills/metadata/`, run per source rather than through `kgb-metadata`. `make demo` only
-prints stage descriptions. The README mentions toy data in `tests/fixtures`; that directory does
-not exist yet.
+`kgb-transform`, `kgb-clean` and `kgb-filter` are the stage commands implemented on `main`; the
+other stages' `main` are stubs that print "not implemented yet". `kgb-transform` builds every source
+and merges them into one graph (`data/transformation/merged/`), `kgb-clean` reads that merged graph
+by default and writes `data/cleaning`, and `kgb-filter` cuts the user's subgraph from
+`data/cleaning` into `data/filter`, where augmentation reads it. Semantic metadata comes from the
+`croissant-semantics` skill in `.agents/skills/metadata/`, run per source rather than through `kgb-
+metadata`. `make demo` only prints stage descriptions.
 
 ## Design rules agreed by the team
 
@@ -72,6 +74,8 @@ not exist yet.
 - Biolink is fixed, not user-selectable.
 - Strong defaults everywhere; the filter stage is the only place that asks the user anything,
   and "go with your default" must always work.
+- The graph's scope comes from what the user asks for (the filter stage), never from a choice
+  made in advance about which sources or edges matter.
 - Evaluation stays outside the agent.
 
 ## Working in the repo
@@ -84,6 +88,9 @@ not exist yet.
   `shared/`, `.github/` and root files belong to the leads.
 - The PR template's checklist: `make test` passes, new edges carry provenance, and the agent's
   `README.md` is updated if its CLI changed.
+- The graph is frozen at the Nov 9, 2026 transformation run. Don't change metadata or
+  transformation code to fix the graph before the Nov 17 submission; write the fix into a report
+  (what, which source, why) instead. Work on the later stages, the demo and evaluation goes on.
 - No data in git. Source dumps and generated graphs go in `data/` (gitignored except its
   README) or on the shared RENCI drive; record each source's version and download date in
   `data/README.md`. `.gitignore` also blocks `*.jsonl`, `*.parquet`, `*.db`, `outputs/` and

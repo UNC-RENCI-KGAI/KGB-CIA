@@ -121,3 +121,5 @@ registered; no setting changed. Both `STOP DATABASE neo4j WAIT 60 SECONDS` and t
 database state change, so no restart or recovery was needed. Read-only mode protects the graph,
 but it does not prevent anonymous `CREATE USER`; no-auth AWS is safe only while the maintainer
 keeps Bolt exposure restricted.
+
+Note that on `main`, `kgb-mcp` is a stub that prints "not implemented yet". A first MCP server backed by Neo4j is in [#64](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/64) (in review), and is being deployed on AWS for the hosted demo.

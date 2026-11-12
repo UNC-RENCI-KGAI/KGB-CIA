@@ -90,7 +90,7 @@ to lose a fact.
 | `self_loop` | subject and object are the same node |
 | `knowledge_level_not_provided`, `agent_type_not_provided` | provenance slots left at `not_provided` |
 | `type_violation` | the predicate's Biolink domain or range doesn't fit the node categories (`biolink_types.py`); `type_violations_by_predicate` and `type_violations_by_category` in the report say where |
-| `rare_category_combination` | a (subject categories, predicate, object categories) combination, using each node's most specific categories, under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each |
+| `rare_category_combination` | a (subject categories, predicate, object categories) combination, using each node's most specific categories, under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each. A flag the input already carried is kept (see below) |
 | `opposing_predicate` | the pair also carries the opposite predicate (`treats` or a predicate under it, such as `ameliorates_condition`, with `contraindicated_in`); the pairs are listed |
 
 ### Flags on the edges
@@ -106,7 +106,14 @@ them on the edge, so the MCP interface can tell a user the edge is in question a
 
 The two lists line up, one plain sentence per flag. They are lists of strings so Neo4j stores
 them as they are. A cleaning pass replaces any flags its input already had, so the final pass
-after augmentation doesn't stack them.
+after augmentation doesn't stack them. The exception is `rare_category_combination`, which is
+a statistic of the graph it was computed on. The final pass runs on one request's subgraph, a
+biased sample of that graph (a cut around a gene holds a few thousand edges, and whatever it
+holds of a predicate says nothing about how rare a combination is across the graph), so a
+pass keeps the flag and reason its input carries, adds any it finds in its own input, and
+counts the kept ones under `flags_inherited` in the report. On the Nov 12 cleaned graph, a
+21,732-edge cut around its 1,325 rare-flagged edges came out of a second pass with 7 of them
+before this rule and all 1,325 after.
 
 A flag list is how a check outside `kgb-clean` marks edges without dropping them: a `.jsonl`
 file in `flag_lists/`, beside `drop_lists/` (`<output>/flag_lists/` by default), one edge per
