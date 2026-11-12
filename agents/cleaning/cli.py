@@ -39,9 +39,9 @@ def main(argv: list[str] | None = None) -> int:
         "--drop-lists",
         type=Path,
         default=None,
-        help="read drop lists from this directory instead of <output>/drop_lists; use it when "
-        "they were written for another cleaning pass, as the pipeline's final pass reads "
-        "data/cleaning/drop_lists",
+        help="read drop lists from this directory instead of <output>/drop_lists, and flag "
+        "lists from the flag_lists folder beside it; use it when they were written for another "
+        "cleaning pass, as the pipeline's final pass reads data/cleaning/drop_lists",
     )
     args = parser.parse_args(argv)
 

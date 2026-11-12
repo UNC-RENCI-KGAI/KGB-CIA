@@ -17,7 +17,8 @@ There are no rules to choose between: every rule always applies. To drop more ed
 list in `<output>/drop_lists/` (see below) rather than passing anything. The pipeline runs
 cleaning twice: first on the merged graph with no arguments, then as `final_cleaning` on
 augmentation's output (the third line). `--drop-lists` is only for that second pass, which
-reads the drop lists the evidence check wrote for the first pass's output directory.
+reads the drop lists the evidence check wrote for the first pass's output directory, and the
+flag lists beside them (`data/cleaning/flag_lists`), since the two folders travel together.
 
 ## Input / output
 
