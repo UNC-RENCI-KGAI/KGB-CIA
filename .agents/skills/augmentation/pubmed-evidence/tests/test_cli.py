@@ -173,7 +173,7 @@ def fakes(monkeypatch):
     monkeypatch.setattr(ground, "name_lookup", name_lookup)
     monkeypatch.setattr(uberon, "fetch", fetch_uberon)
     monkeypatch.setattr(llm, "client_for", lambda model, **kw: fake_model(calls))
-    for name in (config.AZURE_OPENAI_API_KEY, eutils_module.NCBI_API_KEY, eutils_module.NCBI_EMAIL):
+    for name in (config.AZURE_KEY_VAR, eutils_module.NCBI_API_KEY, eutils_module.NCBI_EMAIL):
         monkeypatch.delenv(name, raising=False)
     return calls
 

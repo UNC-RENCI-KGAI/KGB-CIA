@@ -33,7 +33,7 @@ The agent is this skill. `SKILL.md` is the workflow an agent (Pi or Claude Code)
 it drives the steps one at a time. Each step is a subcommand of `scripts/augment.py`, backed by
 one module of the library in `scripts/pubmed_evidence/`. The agent runs the label step on a
 sample, reads the results, tunes the prompt, then runs the full set. It calls the models listed
-in `config.MODELS`: the RENCI Azure ones Pi uses, and Claude models on Anthropic's own API.
+in `config.MODELS`: the Azure OpenAI deployments Pi uses, and Claude models on Anthropic's own API.
 `kgb-augment` (`agents/augmentation/cli.py`) runs the same library. With no subcommand it runs
 every step with its defaults, which is what `shared/pipeline.py` does.
 
@@ -54,9 +54,9 @@ every step with its defaults, which is what `shared/pipeline.py` does.
   API, endpoint and key variable, and its prices per million tokens (input, output, cache read
   and write, and any longer-prompt tier) with where and when they were copied from. It also has
   the output cap and reasoning effort a call sends unless `--max-output-tokens` or
-  `--reasoning-effort` overrides them: `low` for the RENCI bulk candidates, `medium` for the
+  `--reasoning-effort` overrides them: `low` for the Azure bulk candidates, `medium` for the
   rest, and Anthropic's own default for each Claude model until tuned. A model not in the table
-  is an error. The RENCI prices are copied from `.pi/models.json`, which Pi reads for itself,
+  is an error. The Azure prices are copied from `.pi/models.json`, which Pi reads for itself,
   so a price change there has to be copied by hand. The Claude prices are Anthropic's list
   prices, from its pricing page.
 - **Claude models** go through Anthropic's Messages API and its SDK (`llm.AnthropicClient`),
@@ -691,7 +691,7 @@ abstracts, and each candidate model labels the same pairs. Two gold tools serve 
 
 ## Caching
 
-Two SQLite caches under `data/`, shared on the RENCI drive since data stays out of git:
+Two SQLite caches under `data/`, kept out of git and shareable across a team (`KGB_AUGMENT_CACHE_DIR`):
 
 - **PubMed:** `shared.pubmed`'s cache, the file `KGB_PUBMED_CACHE` names (default
   `data/cache/pubmed.sqlite`), which every agent that reads PubMed shares: ESearch results

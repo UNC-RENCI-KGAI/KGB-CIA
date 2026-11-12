@@ -149,7 +149,7 @@ before took: the 5% rule takes the failed calls as a share of them), `failed_cal
 
 ## Caches
 
-Two SQLite files, meant to be shared on the RENCI drive: the PubMed cache, the file
+Two SQLite files, meant to be shared across a team: the PubMed cache, the file
 `KGB_PUBMED_CACHE` names (default `data/cache/pubmed.sqlite`), which every agent that reads
 PubMed shares, and `labels.sqlite` under `--cache-dir` (`KGB_AUGMENT_CACHE_DIR`). They use
 SQLite's rollback journal, not WAL (unsafe on network filesystems), so only one process should

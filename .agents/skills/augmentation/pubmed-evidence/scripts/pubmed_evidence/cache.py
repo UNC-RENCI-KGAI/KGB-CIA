@@ -12,7 +12,8 @@ label cache.
   prompt, message format, reply schema and reasoning effort, so a change to any of them asks
   again. It also logs each call's token use. Step 6 reads it, with the article types in the
   PubMed cache and the work files, so the graph can be rebuilt without calling a model. It lives
-  in the cache directory (`config.DEFAULT_CACHE_DIR`, shared on the RENCI drive).
+  in the cache directory (`config.DEFAULT_CACHE_DIR`); point it at a shared directory to share
+  it.
 - An older label cache also has the tables of the statement labels that came before the claims
   (`labels`, `proposals`, `reviews`, `repairs`). No code reads or writes them any more, and they
   stay as they are.

@@ -36,10 +36,11 @@ uv run kgb-augment STEP --help    # STEP: select, pubmed, label, ground, review,
 ```
 
 The skill's `scripts/augment.py` takes the same arguments; the skill's README lists each
-step's options. Set `AZURE_OPENAI_API_KEY` for labeling and review with the RENCI models
-(`ANTHROPIC_API_KEY`, or an `ant auth login` profile, with Claude models), and `NCBI_EMAIL`
-(plus `NCBI_API_KEY` for 10 requests a second) for the PubMed search. The search, its client and
-its cache are `shared.pubmed`'s; `KGB_PUBMED_CACHE` names the cache file (default
+step's options. Set `AZURE_OPENAI_API_KEY` (and `AZURE_OPENAI_BASE_URL` for your own
+endpoint) for labeling and review with the Azure OpenAI models (`ANTHROPIC_API_KEY`, or an
+`ant auth login` profile, with Claude models), and `NCBI_EMAIL` (plus `NCBI_API_KEY` for 10
+requests a second) for the PubMed search. The search, its client and its cache are
+`shared.pubmed`'s; `KGB_PUBMED_CACHE` names the cache file (default
 `data/cache/pubmed.sqlite`), which every agent that reads PubMed shares. With a `label_run.json`
 in the work directory, the full run continues that run (its model, prompt, reasoning effort,
 reviewer and review effort) and reuses its cached claims and verdicts; `--reasoning-effort`

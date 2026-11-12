@@ -64,7 +64,7 @@ $A --input data/filter --output data/augmentation apply
 `--help` lists the steps, and `augment.py STEP --help` a step's options. Every step takes
 `--input` (the graph), `--output` (where step 6 writes the augmented graph), `--work` (default
 `<output>/work`) and `--cache-dir` (the label cache and the UBERON release; default
-`data/augmentation/cache`, or `KGB_AUGMENT_CACHE_DIR` for the shared RENCI drive), before or
+`data/augmentation/cache`, or `KGB_AUGMENT_CACHE_DIR` to share them across a team), before or
 after the step's name.
 
 | Step | Main options (default) |
@@ -79,10 +79,10 @@ after the step's name.
 | (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--skip-review` |
 
 Environment (the repository's `.env.example` lists every variable): `AZURE_OPENAI_API_KEY`
-for labeling and review with the RENCI models (not for `--dry-run`), and `ANTHROPIC_API_KEY` or
-an `ant auth login` profile with Claude models; labeling also needs the review model's,
-`AZURE_OPENAI_API_KEY` by default, for the sentence repair pass. `AZURE_OPENAI_BASE_URL` points
-the RENCI model ids at your own Azure OpenAI resource (empty: RENCI's). `NCBI_EMAIL`, and
+for labeling and review with the Azure OpenAI models (not for `--dry-run`), and
+`AZURE_OPENAI_BASE_URL` to point them at your own endpoint; `ANTHROPIC_API_KEY` or an
+`ant auth login` profile with Claude models. Labeling also needs the review model's,
+`AZURE_OPENAI_API_KEY` by default, for the sentence repair pass. `NCBI_EMAIL`, and
 `NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search. `KGB_PUBMED_CACHE`
 is the PubMed cache file, `shared.pubmed`'s, which every agent that reads PubMed shares
 (default `data/cache/pubmed.sqlite`); a `pubmed.sqlite` from an older `--cache-dir` opens as it

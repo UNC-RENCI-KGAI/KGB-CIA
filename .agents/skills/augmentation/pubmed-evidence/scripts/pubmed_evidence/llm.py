@@ -19,7 +19,7 @@ for every backend (uncached input, cache read, cache write, output), and the mod
 answered.
 
 A model's `backend` picks its client (`client_for`): `OpenAIClient` speaks the OpenAI v1
-Responses API, which the RENCI Azure endpoint serves, through the `openai` SDK, and
+Responses API, which Azure OpenAI serves, through the `openai` SDK, and
 `AnthropicClient` Anthropic's Messages API, for Claude models, through the `anthropic` SDK.
 """
 
