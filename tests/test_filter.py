@@ -186,6 +186,36 @@ def test_the_output_cannot_be_the_input(graph, tmp_path, capsys):
     assert len((graph / "edges.jsonl").read_text().splitlines()) == len(EDGES)
 
 
+def test_sources_and_predicates_as_a_string_are_one_item_lists(graph, tmp_path):
+    focus = subgraph.load_focus(
+        _focus(
+            tmp_path,
+            seeds=[{"ids": ["C:1"]}],
+            hops=1,
+            sources="infores:curated",
+            predicates="biolink:treats",
+        )  # fmt: skip
+    )
+    assert focus["sources"] == ["infores:curated"] and focus["predicates"] == ["biolink:treats"]
+    report = subgraph.extract(focus, graph, tmp_path / "out")
+    assert report["edges"] == 1  # donepezil treats Alzheimer disease, not an empty cut
+
+
+def test_sources_and_predicates_must_be_strings(tmp_path):
+    with pytest.raises(subgraph.FocusError, match="sources: a list of strings"):
+        subgraph.load_focus(_focus(tmp_path, seeds=[{"ids": ["C:1"]}], sources={"a": 1}))
+    with pytest.raises(subgraph.FocusError, match="predicates: a list of strings"):
+        subgraph.load_focus(_focus(tmp_path, seeds=[{"ids": ["C:1"]}], predicates=[1]))
+
+
+def test_cli_input_without_nodes(graph, tmp_path, capsys):
+    (graph / "nodes.jsonl").unlink()
+    focus = _focus(tmp_path, seeds=[{"ids": ["C:1"]}], hops=0)
+    args = ["--input", str(graph), "--output", str(tmp_path / "out"), "--focus", str(focus)]
+    assert main(args) == 1
+    assert "no nodes.jsonl in" in capsys.readouterr().out
+
+
 def test_cli_without_a_graph(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert main([]) == 1

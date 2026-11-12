@@ -49,9 +49,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     input_dir = args.input or find_input()
-    if input_dir is None or not (input_dir / "edges.jsonl").exists():
-        print(f"Filter: no graph at {input_dir or ' or '.join(map(str, DEFAULT_INPUTS))}")
+    if input_dir is None:
+        print(f"Filter: no graph at {' or '.join(map(str, DEFAULT_INPUTS))}")
         print("  run the transformation (and cleaning) stages first, or pass --input")
+        return 1
+    missing = [n for n in ("nodes.jsonl", "edges.jsonl") if not (input_dir / n).exists()]
+    if missing:
+        print(f"Filter: no {' or '.join(missing)} in {input_dir}")
+        print("  --input needs a graph directory with nodes.jsonl and edges.jsonl")
         return 1
     try:
         if args.focus:
