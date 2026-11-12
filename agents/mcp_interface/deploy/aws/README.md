@@ -6,10 +6,11 @@ create AWS resources, deploy the MCP HTTP server, or publish `kgbcia-mcp` to PyP
 
 The chart exposes only Neo4j Bolt through k3s ServiceLB. Both AWS overlays set
 `neo4j.auth.enabled: false`, so Neo4j runs with `NEO4J_AUTH=none`: there is no user-creation
-Job, no chart Secret dependency, and laptop clients use no credentials. This avoids Neo4j
-Community's user-management risk, but makes network exposure entirely the maintainer's
-responsibility. Graph writes remain blocked by Neo4j's database-wide read-only setting; resource
-limits and the MCP server's existing read protections remain in force.
+Job, no chart Secret dependency, and laptop clients use no credentials. This removes the need
+for a reusable Bolt password, but it does not create an authorization boundary: anonymous Bolt
+clients can administer users in `system`. Network exposure is therefore entirely the
+maintainer's responsibility. Graph writes remain blocked by Neo4j's database-wide read-only
+setting; resource limits and the MCP server's existing read protections remain in force.
 
 ## Current deployment handoff (November 12, 2026)
 
@@ -32,10 +33,13 @@ not by this AWS chart while MCP is disabled.
 Verification completed successfully from a laptop: Bolt login as `kgbcia`, raw graph-write
 rejection, the configured integration smoke test, and a local `kgbcia-mcp serve` lineage answer
 for a direct edge. `kgbcia` was also confirmed able to create and drop system users despite the
-read-only graph database. The approved upgrade changes AWS to `NEO4J_AUTH=none`, eliminating
-that account's use and the Community user-management risk. The existing `kgb-mcp-auth` Secret
-and `kgbcia` account remain after this upgrade but are unused. Delete the unused Secret only
-when it is no longer needed for a rollback to authenticated local-style settings:
+read-only graph database. Helm revision 2 changed AWS to `NEO4J_AUTH=none`, eliminating that
+account's use, but post-upgrade anonymous verification confirmed that `CREATE USER` still
+succeeds in `system`; the uniquely named temporary probe user was removed immediately. Graph
+writes, `dbms.setConfigValue` (not registered), and both tested `STOP DATABASE` forms were
+rejected. The existing `kgb-mcp-auth` Secret and `kgbcia` account remain after this upgrade but
+are unused. Delete the unused Secret only when it is no longer needed for a rollback to
+authenticated local-style settings:
 
 ```bash
 kubectl -n kgb-mcp delete secret kgb-mcp-auth

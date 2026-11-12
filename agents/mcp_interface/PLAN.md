@@ -347,3 +347,36 @@ both AWS overlays), then `make lint`, `make test`, and `make demo`.  Stop after 
 results and provide the exact AWS `upgrade --install` command based on the recorded active
 release (`kgb-mcp`), namespace (`kgb-mcp`), and test values file—without executing it or
 changing any AWS resource.
+
+### Checkpoint 3 verification record (completed)
+
+The maintainer upgraded the AWS test release `kgb-mcp` in namespace `kgb-mcp` to Helm revision
+2 with `deploy/aws/values-aws-test.yaml`. The installer reported that authentication was disabled
+and skipped Secret creation; the StatefulSet rollout and Bolt ServiceLB pod completed.
+
+Unauthenticated laptop verification against the development-sample graph recorded:
+
+- ``MATCH (n:`biolink:NamedThing`) RETURN count(n)`` succeeded with **1,192** nodes.
+- A graph `CREATE` was rejected with
+  `Neo.ClientError.General.WriteOnReadOnlyAccessDatabase`: the graph database remains read-only.
+- `CREATE USER kgbcia_aws_auth_probe_nov2026` succeeded anonymously in `system`; the temporary
+  probe user was then successfully dropped. This confirms that no-auth Neo4j Community grants
+  system-user administration to a raw Bolt client, although the probe left no user behind.
+- The first dynamic-setting check did not execute because its preliminary `SHOW SETTINGS` query
+  used a non-existent `dynamic` yield column and raised
+  `Neo.ClientError.Statement.SyntaxError`. The corrected probe confirmed
+  `db.transaction.timeout` was `30s`, then attempted
+  `dbms.setConfigValue('db.transaction.timeout', '31s')`; Neo4j rejected it with
+  `Neo.ClientError.Procedure.ProcedureNotFound` because that procedure is not registered. No
+  setting changed and no restoration was needed.
+- The first stop/start attempt used `STOP DATABASE neo4j WAIT 60 SECONDS` and was rejected with
+  `Neo.ClientError.Statement.UnsupportedAdministrationCommand`. The final exact
+  `STOP DATABASE neo4j` probe was also rejected with the same code and no database state changed.
+  Because stopping was unsupported, no `START DATABASE` or recovery action was needed.
+
+**Checkpoint 3 conclusion:** unauthenticated Bolt can read the graph and execute `CREATE USER`
+in `system`, but the tested graph write, dynamic-setting procedure, and database-stop commands
+were rejected. `CREATE USER` is not a safe authorization boundary: it created a persistent user
+until the test removed it, and such a user would matter if authentication were ever re-enabled.
+No-auth AWS is therefore acceptable only while the maintainer restricts Bolt network exposure;
+read-only mode protects graph data but not all system administration.

@@ -80,9 +80,10 @@ Confirmed on the local-k8s Neo4j 5.26.31 load in November 2026:
 - The chart's `server.databases.default_to_read_only=true` rejects a graph `CREATE` through a
   raw driver session as well as through `query_cypher`.
 - Neo4j Community permits the separate `kgbcia` account to create and drop users in `system`
-  despite the graph database being read-only. AWS therefore sets `NEO4J_AUTH=none` instead of
-  creating that account. Network exposure remains the maintainer's responsibility; graph writes
-  remain blocked by the database-level read-only setting and resource limits.
+  despite the graph database being read-only. AWS sets `NEO4J_AUTH=none`, so there is no
+  application account or reusable password, but an unauthenticated raw client can still create
+  system users. Network exposure remains the maintainer's responsibility; graph writes remain
+  blocked by the database-level read-only setting and resource limits.
 
 ## Status
 
@@ -105,3 +106,18 @@ unchanged-password response as idempotent success. Laptop verification confirmed
 confirming the Neo4j Community security risk. The selected AWS chart configuration now disables
 Neo4j authentication (`NEO4J_AUTH=none`); laptop clients set only the Bolt URI and artifacts
 variables, while local k8s remains authenticated.
+
+Checkpoint 3 AWS verification completed after Helm revision 2 deployed the auth-disabled sample
+release. An unauthenticated graph read returned 1,192 nodes, and a graph `CREATE` was
+rejected with `Neo.ClientError.General.WriteOnReadOnlyAccessDatabase`. An anonymous `CREATE USER`
+in `system` succeeded, then its uniquely named temporary probe user was dropped successfully.
+This confirms the no-auth service still permits raw system-user administration, even though
+Graph writes remain read-only. The initial dynamic-setting probe did not execute because its
+preliminary `SHOW SETTINGS` query requested a non-existent `dynamic` column. The corrected
+probe confirmed the configured 30-second transaction timeout, but
+`dbms.setConfigValue('db.transaction.timeout', '31s')` was rejected because the procedure is not
+registered; no setting changed. Both `STOP DATABASE neo4j WAIT 60 SECONDS` and the exact
+`STOP DATABASE neo4j` command were rejected as unsupported administration commands, with no
+database state change, so no restart or recovery was needed. Read-only mode protects the graph,
+but it does not prevent anonymous `CREATE USER`; no-auth AWS is safe only while the maintainer
+keeps Bolt exposure restricted.

@@ -81,8 +81,10 @@ remaining safeguards are Neo4j's database-level read-only setting, transaction a
 and the MCP server's read-transaction, `EXPLAIN`, timeout, and row-cap protections.
 
 Neo4j Community lets the separate `kgbcia` account administer users in `system` despite graph
-read-only mode. Selecting no-auth AWS avoids that Community user-management risk and avoids a
-reusable password over plain Bolt; it does not make the endpoint safe to expose broadly.
+read-only mode. No-auth AWS avoids a reusable password over plain Bolt but does **not** remove
+system administration: verification confirmed that an unauthenticated raw Bolt client can
+create a user (the temporary probe was removed). It is not safe to expose broadly; retain strict
+maintainer-controlled Bolt network exposure, and reassess authentication before widening it.
 
 ## 5. Install or upgrade the local cluster deployment
 

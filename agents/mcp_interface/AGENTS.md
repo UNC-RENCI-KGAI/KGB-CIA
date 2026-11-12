@@ -393,12 +393,15 @@ Bolt directly, so protection has to live in Neo4j itself:
 **Authentication choice:** `neo4j.auth.enabled` defaults to true for local k8s, where the
 existing Secret and separate `kgbcia` account are retained. AWS values set it false, which gives
 Neo4j `NEO4J_AUTH=none`, requires neither a Secret nor a user Job, and lets `kgbcia-mcp` connect
-without credentials. This decision avoids the confirmed Community behavior where the separate
-account can create or drop users in `system`, and it avoids sending a reusable password over
-plain Bolt. It also makes the Bolt endpoint unauthenticated: AWS network exposure is the
-maintainer's responsibility and is outside this stage's scope. Read-only mode and the limits
-above remain mandatory. Confirm graph `CREATE` rejection through a raw unauthenticated driver;
-never try a system-database command that can disrupt service without an explicit safety review.
+without credentials. It avoids sending a reusable password over plain Bolt, but it does **not**
+provide an authorization boundary: AWS verification confirmed that an unauthenticated raw client
+can execute `CREATE USER` in `system` (the temporary test user was removed). The tested graph
+`CREATE`, `dbms.setConfigValue` procedure, and `STOP DATABASE` commands were rejected, but this
+is not a substitute for authentication. AWS network exposure is the maintainer's responsibility
+and is outside this stage's scope; use no-auth only while Bolt is restricted accordingly.
+Read-only mode and the limits above remain mandatory. Confirm graph `CREATE` rejection through a
+raw unauthenticated driver; never try a system-database command that can disrupt service without
+an explicit safety review.
 
 ## Tools
 
