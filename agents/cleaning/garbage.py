@@ -38,10 +38,20 @@ on DrugCentral, `treats` edges to a Procedure were wrong but `treats` edges to a
 (pain, skin irritation) were real indications, so a drop has to name a predicate and category,
 never a predicate alone.
 
-Every kept edge with a flag from LISTED_FLAGS is written to `flagged_edges.jsonl`, keyed like a
-drop list (subject, predicate, object, primary knowledge source) with its flags and endpoint
-categories, so the flags can be acted on: passed to an evidence check, or copied into a drop
-list. The `not_provided` flags are left out; they describe a source, not an edge.
+Every kept edge with a flag from LISTED_FLAGS, or from a flag list, carries its flags on the
+edge itself, in FLAGS_FIELD (`kgbcia_flags`, the flag names) and REASONS_FIELD
+(`kgbcia_flag_reasons`, one plain sentence per flag, in the same order), so the MCP interface can
+tell a user that an edge is in question and why. Both are lists of strings, which Neo4j stores
+as they are; any the input already had are replaced, so a second cleaning pass doesn't stack
+them. A flag list is a `.jsonl` file in the flag-lists directory, keyed like a drop list, with a
+`flag` and a `reason` on each line: how a check outside this module, such as the evidence
+check, marks edges without dropping them (a paper reporting a different mechanism than the
+edge's qualifier).
+
+The same edges are also written to `flagged_edges.jsonl`, keyed like a drop list (subject,
+predicate, object, primary knowledge source) with their flags and endpoint categories, so the
+flags can be acted on: passed to an evidence check, or copied into a drop list. The
+`not_provided` flags are left out of both; they describe a source, not an edge.
 
 Nothing here is optional. A source that loses most of its edges to unresolved nodes is listed
 under `attention` with the CURIE prefixes responsible: the fix is in that source's metadata (an
@@ -49,8 +59,8 @@ id pattern or prefix). `unresolved_nodes.tsv` lists every unresolved node with i
 edges it took down and the edges kept with a flag, and the sources and predicates of those
 edges, most costly first: the identifiers a plan fix needs, not just the prefix.
 
-Drop lists key edges by subject, predicate, object and primary knowledge source, not by edge
-id: the merge assigns new uuids on every run, so ids wouldn't match the next build.
+Drop and flag lists key edges by subject, predicate, object and primary knowledge source, not
+by edge id: the merge assigns new uuids on every run, so ids wouldn't match the next build.
 """
 
 from __future__ import annotations
@@ -72,7 +82,7 @@ RARE_SHARE = 0.001  # a category combination under this share of its predicate's
 RARE_MIN_EDGES = 1000  # only for predicates with at least this many kept edges
 # each side matches the predicate and every predicate under it
 OPPOSING = (("biolink:treats", "biolink:contraindicated_in"),)
-# flags written per edge to flagged_edges.jsonl
+# flags written on each kept edge (FLAGS_FIELD, REASONS_FIELD) and to flagged_edges.jsonl
 LISTED_FLAGS = (
     "unresolved_node",
     "self_loop",
@@ -85,6 +95,8 @@ LISTED_FLAGS = (
 # Vertebrate Trait ids as `OBA:VT0001253` (it should be `VT:0001253`), an id in no ontology; the
 # phenopacket-store plan makes a node per patient ("individual II-3"), not a biological concept.
 BROKEN_ID_PREFIXES = ("OBA:VT", "phenopacket.store:")
+FLAGS_FIELD = "kgbcia_flags"
+REASONS_FIELD = "kgbcia_flag_reasons"
 # Type violations promoted to drops: (predicate, side that fails) -> the most specific categories
 # of that end that make the edge wrong. Decided from names on the Nov 9 graph: DrugCentral
 # `treats` edges to "General Anesthesia" (Procedure), "Asthma management" (ClinicalIntervention),
@@ -154,6 +166,33 @@ def load_drop_lists(directory: Path) -> dict[str, set[EdgeKey]]:
     if not directory.is_dir():
         return {}
     return {path.stem: load_drop_list(path) for path in sorted(directory.glob("*.jsonl"))}
+
+
+def load_flag_list(path: Path) -> dict[EdgeKey, list[tuple[str, str]]]:
+    """(flag, reason) pairs by edge key from a JSON-lines file: the four key fields, a `flag`
+    (a short name such as `wrong_mechanism`) and a `reason` (one plain sentence for a user)."""
+    flags: dict[EdgeKey, list[tuple[str, str]]] = defaultdict(list)
+    with open(path) as f:
+        for number, line in enumerate(f, 1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            key = edge_key(record)
+            flag, reason = record.get("flag"), record.get("reason")
+            if not all(key) or not flag or not reason:
+                raise ValueError(
+                    f"{path}:{number}: a flag-list line needs subject, predicate, object, "
+                    "primary_knowledge_source, flag and reason"
+                )
+            flags[key].append((flag, reason))
+    return dict(flags)
+
+
+def load_flag_lists(directory: Path) -> dict[str, dict[EdgeKey, list[tuple[str, str]]]]:
+    """Every `*.jsonl` flag list in a directory, by file stem. A missing directory means none."""
+    if not directory.is_dir():
+        return {}
+    return {path.stem: load_flag_list(path) for path in sorted(directory.glob("*.jsonl"))}
 
 
 def category_label(categories: tuple[str, ...]) -> str:
@@ -381,15 +420,66 @@ def edge_flags(
         yield "type_violation"
 
 
-def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = None) -> Report:
+def short(curie_or_category: str) -> str:
+    return curie_or_category.removeprefix("biolink:")
+
+
+def flag_reason(
+    flag: str,
+    edge: dict,
+    s_spec: tuple[str, ...],
+    o_spec: tuple[str, ...],
+    unresolved: set[str],
+    also: Iterable[str] = (),
+    violates: str | None = None,
+) -> str:
+    """One plain sentence on why a kept edge carries `flag`, for a user reading the edge."""
+    predicate = short(edge["predicate"])
+    if flag == "unresolved_node":
+        ends = " and ".join(e for e in (edge["subject"], edge["object"]) if e in unresolved)
+        return (
+            f"NodeNorm could not resolve {ends}, so it may not join up with other sources; "
+            "the edge is kept because its other end resolved"
+        )
+    if flag == "self_loop":
+        return "the subject and object are the same node"
+    if flag == "type_violation":
+        side, end = ("domain", "subject") if violates == "domain" else ("range", "object")
+        expected = biolink_types.expected(edge["predicate"], side) or "another category"
+        actual = ", ".join(map(short, s_spec if violates == "domain" else o_spec)) or "unknown"
+        article = "an" if expected[0] in "aeiou" else "a"
+        return (
+            f"Biolink expects the {end} of {predicate} to be {article} {expected}, but it is "
+            f"{actual}"
+        )
+    if flag == "rare_category_combination":
+        s, o = ", ".join(map(short, s_spec)), ", ".join(map(short, o_spec))
+        return (
+            f"{s} {predicate} {o} is under {RARE_SHARE:.1%} of {predicate} edges, which often "
+            "means a node has the wrong category"
+        )
+    if flag == "opposing_predicate":
+        others = ", ".join(short(p) for p in sorted(also) if p != edge["predicate"])
+        return f"the same pair is also connected by {others}"
+    return flag.replace("_", " ")
+
+
+def collect(
+    input_dir: Path,
+    output_dir: Path,
+    drop_lists_dir: Path | None = None,
+    flag_lists_dir: Path | None = None,
+) -> Report:
     """Clean input_dir's nodes.jsonl and edges.jsonl into output_dir, and return the report.
 
-    Drop lists are read from drop_lists_dir, by default `output_dir/drop_lists`. Four streaming
+    Drop lists are read from drop_lists_dir, by default `output_dir/drop_lists`, and flag lists
+    from flag_lists_dir, by default the `flag_lists` folder beside it. Four streaming
     passes, so only node ids, categories and the unresolved nodes' names are held in memory:
     nodes (which ids exist, which are unresolved, their categories), edges (filter, including
     promoted type violations; count category combinations and opposing predicates; note what
     each unresolved node cost, then write unresolved_nodes.tsv), kept edges again (flag, now
-    that rare combinations and opposing pairs are known, and write flagged_edges.jsonl), nodes
+    that rare combinations and opposing pairs are known, write the flags onto each edge, and
+    write flagged_edges.jsonl), nodes
     again (write the ones still in use).
     """
     nodes_path, edges_path = input_dir / "nodes.jsonl", input_dir / "edges.jsonl"
@@ -398,11 +488,19 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
             raise FileNotFoundError(f"no {path.name} in {input_dir}")
     drop_lists_dir = drop_lists_dir or output_dir / "drop_lists"
     drop_lists = load_drop_lists(drop_lists_dir)
+    flag_lists_dir = flag_lists_dir or drop_lists_dir.parent / "flag_lists"
+    flag_lists = load_flag_lists(flag_lists_dir)
+    listed_flags: dict[EdgeKey, list[tuple[str, str]]] = defaultdict(list)
+    for entries in flag_lists.values():
+        for key, pairs in entries.items():
+            listed_flags[key].extend(pairs)
     report = Report(
         settings={
             "input": str(input_dir.resolve()),
             "drop_lists_dir": str(drop_lists_dir),
             "drop_lists": {name: len(keys) for name, keys in drop_lists.items()},
+            "flag_lists_dir": str(flag_lists_dir),
+            "flag_lists": {name: len(keys) for name, keys in flag_lists.items()},
         }
     )
 
@@ -437,8 +535,12 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
     lost: Counter = Counter()
     kept: Counter = Counter()
     lost_from: dict[str, set[tuple[str, str]]] = defaultdict(set)
-    with open(output_dir / "edges.jsonl", "w") as out:
+    # kept edges before their flags are known; pass 3 writes them to edges.jsonl with flags
+    unflagged = output_dir / "edges.unflagged.tmp"
+    with open(unflagged, "w") as out:
         for edge in read_jsonl(edges_path):
+            edge.pop(FLAGS_FIELD, None)
+            edge.pop(REASONS_FIELD, None)
             report.edges_in += 1
             source = edge.get("primary_knowledge_source") or "(none)"
             reason = edge_drop_reason(edge, known, unresolved_ids, drop_lists)
@@ -489,8 +591,11 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
         for c in report.rare_combinations()
     }
     opposing = {(p["subject"], p["object"]): set(p["predicates"]) for p in report.opposing_pairs()}
-    with open(output_dir / "flagged_edges.jsonl", "w") as out:
-        for edge in read_jsonl(output_dir / "edges.jsonl"):
+    with (
+        open(output_dir / "flagged_edges.jsonl", "w") as out,
+        open(output_dir / "edges.jsonl", "w") as edges_out,
+    ):
+        for edge in read_jsonl(unflagged):
             source = edge["primary_knowledge_source"]
             s_profile = categories_of[edge["subject"]]
             o_profile = categories_of[edge["object"]]
@@ -499,12 +604,30 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
             flags = list(edge_flags(edge, s_cats, o_cats, unresolved_ids))
             if (s_spec, edge["predicate"], o_spec) in rare:
                 flags.append("rare_category_combination")
-            if edge["predicate"] in opposing.get((edge["subject"], edge["object"]), ()):
+            also = opposing.get((edge["subject"], edge["object"]), set())
+            if edge["predicate"] in also:
                 flags.append("opposing_predicate")
+            from_lists = listed_flags.get(edge_key(edge), [])
+            flags += [flag for flag, _ in from_lists]
             for flag in flags:
                 report.flags[flag] += 1
                 report.flags_by_source[source][flag] += 1
             listed = [flag for flag in flags if flag in LISTED_FLAGS]
+            side = (
+                biolink_types.violation(edge["predicate"], s_cats, o_cats)
+                if "type_violation" in listed
+                else None
+            )
+            reasons = [
+                flag_reason(flag, edge, s_spec, o_spec, unresolved_ids, also, side)
+                for flag in listed
+            ]
+            listed += [flag for flag, _ in from_lists]
+            reasons += [reason for _, reason in from_lists]
+            if listed:
+                edge[FLAGS_FIELD] = listed
+                edge[REASONS_FIELD] = reasons
+            edges_out.write(json.dumps(edge) + "\n")
             if not listed:
                 continue
             line = dict(
@@ -517,8 +640,7 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
             line.update(
                 flags=listed, subject_categories=list(s_spec), object_categories=list(o_spec)
             )
-            if "type_violation" in listed:
-                side = biolink_types.violation(edge["predicate"], s_cats, o_cats)
+            if side:
                 line["violates"] = side
                 report.type_violations_by_predicate[edge["predicate"]] += 1
                 report.type_violations_by_category[edge["predicate"]][
@@ -527,6 +649,7 @@ def collect(input_dir: Path, output_dir: Path, drop_lists_dir: Path | None = Non
                 report.example("type_violation", edge)
             report.flagged_edges += 1
             out.write(json.dumps(line) + "\n")
+    unflagged.unlink()
 
     with open(output_dir / "nodes.jsonl", "w") as out:
         for node in read_jsonl(nodes_path):
