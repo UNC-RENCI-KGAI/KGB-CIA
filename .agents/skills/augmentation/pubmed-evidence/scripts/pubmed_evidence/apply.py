@@ -362,10 +362,26 @@ def pair_record(refined: Refined) -> dict[str, Any]:
     }
 
 
+def from_earlier_run(row: dict[str, Any]) -> bool:
+    """Whether an input edge is one an earlier run of step 6 wrote: it carries `augmentation`
+    (this format) or a `lit_` field (this format's and every earlier one's)."""
+    return "augmentation" in row or any(k.startswith("lit_") for k in row)
+
+
 def _plain(row: dict[str, Any], eid: str) -> dict[str, Any]:
-    """An input edge as read, with its id, without the fields an earlier run wrote, and with
-    its publications as its source cited them."""
-    return {k: v for k, v in {**graphio.as_cited(row), "id": eid}.items() if k not in AUGMENTED}
+    """An input edge as read, with its id, and with its publications as its source cited them.
+    An edge from an earlier run also loses the fields that run wrote (AUGMENTED).
+
+    Decision (review of #22, Nov 2026): strip only edges an earlier run wrote, and leave every
+    other edge exactly as its source wrote it. AUGMENTED holds generic names (`augmentation`,
+    `original_edge_ids`, `evidence`, `evidence_score`, `evidence_counts`) that a source may use
+    for its own data; stripping them from every edge would silently delete that data, even on
+    edges this step never checked. On the filter's output, the normal input, nothing is
+    stripped."""
+    out = {**graphio.as_cited(row), "id": eid}
+    if not from_earlier_run(row):
+        return out
+    return {k: v for k, v in out.items() if k not in AUGMENTED}
 
 
 class _Pass:

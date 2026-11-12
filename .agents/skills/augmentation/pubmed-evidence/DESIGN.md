@@ -620,10 +620,13 @@ them back out.
   nulls included (only the JSON's whitespace may differ), with the `id` added after them where
   an edge had none, a checked edge's supporting PMIDs appended to `publications`, and its own
   fields after that.
-- **Feeding the stage its own output adds nothing twice.** Every field step 6 has ever written
-  on an input edge, the `lit_*` fields and the earlier evidence fields alike, is stripped, and
-  the PMIDs it appended (`lit_added_publications`) are taken back out of `publications`, before
-  the edge is refined again. Edges an earlier run added (`kgbcia-augmentation:`) are dropped,
+- **Feeding the stage its own output adds nothing twice.** On an edge an earlier run wrote (it
+  carries `augmentation` or a `lit_*` field), every field step 6 has ever written, the `lit_*`
+  fields and the earlier evidence fields alike, is stripped, and the PMIDs it appended
+  (`lit_added_publications`) are taken back out of `publications`, before the edge is refined
+  again. Any other edge keeps every field as its source wrote it, even one named like ours
+  (`evidence`, `evidence_score`, `original_edge_ids`, ...): stripping those from every edge
+  would delete a source's own data, so we decided to strip only on a rerun (review of #22). Edges an earlier run added (`kgbcia-augmentation:`) are dropped,
   and this run adds its own. Step 1 never selects them.
 - **All or nothing:** the graph and `refinements.jsonl` are written under temporary names and
   renamed into place at the end, so a failed run leaves none half-written; `apply_report.json`

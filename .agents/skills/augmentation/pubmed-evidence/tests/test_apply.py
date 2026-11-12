@@ -927,3 +927,38 @@ def test_an_invalid_edge_fails_loudly(world, capsys):
     err = capsys.readouterr().err
     assert "edge 4 of" in err and "not a valid Edge" in err
     assert list((world.work.parent / "out").iterdir()) == []
+
+
+SOURCE_EDGE = {
+    "subject": "CHEBI:45783",
+    "predicate": "biolink:affects",
+    "object": "NCBIGene:25",
+    "primary_knowledge_source": "infores:some-source",
+    "knowledge_level": "knowledge_assertion",
+    "agent_type": "manual_agent",
+    "publications": ["PMID:100"],
+    "evidence": "ECO:0000269",
+    "evidence_score": 0.92,
+    "original_edge_ids": ["src-17"],
+}
+
+
+def test_a_source_edge_keeps_fields_that_share_a_name_with_ours():
+    """A source's own `evidence`, `evidence_score` or `original_edge_ids` passes through."""
+    assert apply._plain(SOURCE_EDGE, "e1") == {**SOURCE_EDGE, "id": "e1"}
+
+
+def test_an_edge_from_an_earlier_run_loses_that_runs_fields():
+    earlier = {
+        **SOURCE_EDGE,
+        "publications": ["PMID:100", "PMID:200"],
+        "augmentation": "checked",
+        "lit_support_score": 1,
+        "lit_added_publications": ["PMID:200"],
+    }
+    plain = apply._plain(earlier, "e1")
+    assert plain["publications"] == ["PMID:100"]
+    assert not set(plain) & set(apply.AUGMENTED)
+    # An edge in an earlier evidence format is recognised by its lit_ fields alone.
+    assert apply.from_earlier_run({**SOURCE_EDGE, "lit_action": "keep"})
+    assert not apply.from_earlier_run(SOURCE_EDGE)
