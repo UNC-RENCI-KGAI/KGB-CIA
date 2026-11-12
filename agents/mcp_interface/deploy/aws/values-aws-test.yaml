@@ -1,0 +1,31 @@
+# Development-sample overlay for the prepared single-node AWS r7g.large.
+# Install-time URLs and checksums are supplied with Helm --set-string, never committed here.
+neo4j:
+  service:
+    type: LoadBalancer
+    httpEnabled: false
+  storage:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 2Gi
+      ephemeral-storage: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+      ephemeral-storage: 2Gi
+  memory:
+    heapInitial: 1G
+    heapMax: 2G
+    pageCache: 1G
+  transaction:
+    timeout: 30s
+    memoryMax: 1G
+  bolt:
+    threadPoolMin: 5
+    threadPoolMax: 100
+
+mcp:
+  # The AWS test uses local stdio MCP clients against Bolt, not an in-cluster MCP server.
+  enabled: false

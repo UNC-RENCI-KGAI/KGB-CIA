@@ -1047,7 +1047,12 @@ def test_make_dev_artifacts_creates_synthetic_lineage(tmp_path):
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 def test_helm_chart_lints_and_templates_all_values_files():
     chart = Path(__file__).parents[1] / "agents/mcp_interface/deploy/helm/kgb-mcp"
-    for values_name in ("values.yaml", "values-dev.yaml", "values-aws.yaml"):
+    for values_name in (
+        "values.yaml",
+        "values-dev.yaml",
+        "values-aws.yaml",
+        "../../aws/values-aws-test.yaml",
+    ):
         values = chart / values_name
         for command in (
             ["helm", "lint", str(chart), "-f", str(values)],

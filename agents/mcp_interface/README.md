@@ -50,6 +50,10 @@ set -a; . agents/mcp_interface/deploy/.env; set +a
 uv run kgbcia-mcp serve --enable-cypher
 ```
 
+For the prepared AWS final host, use [`deploy/aws/README.md`](deploy/aws/README.md). It deploys
+only Neo4j from the same chart with the LitCoin test overlay and keeps `mcp.enabled=false`; run
+`kgbcia-mcp` locally over stdio against the host's Bolt Service.
+
 ## Input / output
 
 **Input:** `nodes.jsonl` and `edges.jsonl` in ORION KGX format (`shared.schema.Node` / `Edge`),
@@ -90,3 +94,8 @@ rejection against the 200-abstract development graph.
 
 The package pins FastMCP 3.4.11 (released October 20, 2026). Pi registration is configured for
 local stdio use; source the ignored deployment environment before launching Pi.
+
+AWS build-order step 4 is prepared but not yet executed: `deploy/aws/` contains the read-only
+host verification, LitCoin-sized `LoadBalancer` overlay, interactive-secret installer, and
+operator runbook. AWS deployment and laptop verification results will be recorded here after
+the maintainer runs them.

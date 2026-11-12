@@ -1,4 +1,4 @@
-"""Vendored transformation report models.
+"""Transformation report models.
 
 These models intentionally mirror ``shared.schema`` but cannot import it: the published server
 must install and run without the repository. A repository test compares their fields.

@@ -121,15 +121,13 @@ export KGB_MCP_ARTIFACTS='<the public artifacts.tar.gz URL>'
 export KGB_MCP_ARTIFACTS_SHA256=3ec97998f4716dffe7be69c13327b79ad1529c1b974c3ff228453486702cae56
 ```
 
-## 6. AWS final deployment
+## 6. AWS development-sample deployment
 
-Use the same `kgb.dump`, `artifacts.tar.gz`, package/image version, and chart. Only
-`values-aws.yaml` plus an uncommitted environment override differs. The AWS administrator
-must provide the pre-created instance, gp3 data volume, VPC/security group, and S3 bucket.
-Open only Bolt and any intentionally used Neo4j or MCP HTTP ports. Install k3s and Helm,
-create the same Secret, then run the `helm upgrade --install` command above with
-`values-aws.yaml` instead of `values-dev.yaml`.
+For the prepared final AWS host, follow [`aws/README.md`](aws/README.md). It is the
+maintainer-operated sequence for the arm64 single-node k3s host: verify the already-prepared
+host, generate a two-hour presigned URL for the private dump, use the sample-sized
+`aws/values-aws-test.yaml` overlay, and verify from a laptop over Bolt.
 
-Stop the EC2 instance between test sessions. After judging, remove the Helm release, its
-PVC and load balancer, delete published release objects if no longer needed, and terminate
-the instance and attached volume. These steps control the limited AWS budget.
+Do not install or reconfigure k3s or Helm, recreate AWS resources, put the presigned URL in a
+values file, or enable the optional MCP HTTP deployment. The final real-graph deployment will
+use the same chart and process with `values-aws.yaml` only after this sample deployment passes.
