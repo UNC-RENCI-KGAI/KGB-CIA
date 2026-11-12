@@ -65,6 +65,16 @@ def load_focus(path: Path) -> dict:
     if not isinstance(hops, int) or not 0 <= hops <= 3:
         problems.append("hops: 0 to 3")
     focus.setdefault("max_degree", DEFAULT_MAX_DEGREE)
+    # A single string is read as a one-item list; anything else would turn the edge test into a
+    # substring match and drop every edge without an error
+    for key in ("sources", "predicates"):
+        value = focus.get(key)
+        if isinstance(value, str):
+            focus[key] = [value]
+        elif value is not None and not (
+            isinstance(value, list) and all(isinstance(v, str) for v in value)
+        ):
+            problems.append(f"{key}: a list of strings")
     if problems:
         raise FocusError(f"{path}:\n  " + "\n  ".join(problems))
     return focus

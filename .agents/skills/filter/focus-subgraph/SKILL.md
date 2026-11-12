@@ -31,7 +31,9 @@ uv run python $S/find_nodes.py --around MONDO:0004975
   that have that Biolink class anywhere in their category list, so `biolink:Protein` selects
   proteins. The counts show each node's most specific category (a drug can have two, shown
   joined with " + "). To keep only human nodes use `taxon`. `--limit` shows more than 25
-  examples. Run it with `uv run python`, so the project environment is available.
+  examples. Run it with `uv run python`: it reads each node's most specific category with
+  the cleaning stage's Biolink code (`agents.cleaning.biolink_types`), which only the project
+  environment has. Run without it, it falls back to the first category listed and says so.
 - `find_nodes.py --around CURIE` shows the edges touching one node by predicate, direction and
   source. Use it to find how a family, pathway or disease links to its members or subclasses,
   for a `linked_to` rule.
