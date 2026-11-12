@@ -31,13 +31,15 @@ spec:
           env:
             - name: NEO4J_URI
               value: bolt://{{ include "kgb-mcp.neo4jService" . }}:7687
+            {{- if .Values.neo4j.auth.enabled }}
             - name: NEO4J_USER
               value: {{ .Values.neo4j.user | quote }}
             - name: NEO4J_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secret.existingSecret }}
+                  name: {{ required "secret.existingSecret is required when neo4j.auth.enabled" .Values.secret.existingSecret }}
                   key: {{ .Values.secret.userPasswordKey }}
+            {{- end }}
             - name: NEO4J_DATABASE
               value: {{ .Values.neo4j.database | quote }}
             - name: KGB_MCP_ARTIFACTS

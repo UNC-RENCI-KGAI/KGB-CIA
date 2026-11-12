@@ -1,5 +1,7 @@
 # AWS/k3s overlay. Replace URLs and checksums at install time; never commit credentials.
 neo4j:
+  auth:
+    enabled: false
   dumpUrl: https://example.invalid/kgb.dump
   dumpSha256: 0000000000000000000000000000000000000000000000000000000000000000
   service:

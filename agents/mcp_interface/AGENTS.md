@@ -35,8 +35,9 @@ the Helm chart that runs Neo4j, and the publishable server package.
 The server ships two ways from one codebase:
 
 - **Primary: a PyPI package, `kgbcia-mcp`, run over stdio** by any MCP client, Pi included:
-  `uvx kgbcia-mcp serve`, with `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` and
-  `KGB_MCP_ARTIFACTS` set. This is the same pattern as the LitCoin MCP server. Each user runs
+  `uvx kgbcia-mcp serve`, with `NEO4J_URI` and `KGB_MCP_ARTIFACTS` set; set the optional
+  `NEO4J_USER` and `NEO4J_PASSWORD` pair only for an authenticated deployment. This is the same
+  pattern as the LitCoin MCP server. Each user runs
   the server locally, and it connects to the shared, read-only Neo4j over Bolt.
 - **Optional: the same server over streamable HTTP**, run by the Helm chart next to Neo4j
   (`mcp.enabled`), for clients that can't run a local process.
@@ -71,7 +72,7 @@ agents/mcp_interface/
 ├── pyproject.toml            # distribution "kgbcia-mcp"; script kgbcia-mcp = kgbcia_mcp.cli:main
 ├── src/kgbcia_mcp/
 │   ├── cli.py                # serve, hubs
-│   ├── config.py             # NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE,
+│   ├── config.py             # NEO4J_URI, optional NEO4J_USER/NEO4J_PASSWORD, NEO4J_DATABASE,
 │   │                         # KGB_MCP_ARTIFACTS, KGB_MCP_ARTIFACTS_SHA256,
 │   │                         # KGB_MCP_ENABLE_CYPHER
 │   ├── artifacts.py          # local dir, or an http(s) URL to the artifacts tarball,
@@ -177,7 +178,7 @@ transformation (later: cleaning) -> nodes.jsonl + edges.jsonl + transform_report
   -> orion-neo4j-dump        -> ORION dump (Neo4j 5, ORION's indexes)
   -> deploy/prepare_dump.sh  -> kgb dump (+ our indexes) + artifacts tarball
   -> HTTP file server (k8s) / S3 (AWS)
-  -> helm install: download -> neo4j-admin load -> Neo4j 5 Community (read-only, auth on)
+  -> helm install: download -> neo4j-admin load -> Neo4j 5 Community (read-only; auth by values)
   <- uvx kgbcia-mcp serve (stdio), on each user's machine, over Bolt
   <- optional: kgbcia-mcp over HTTP in the chart
 ```
@@ -197,8 +198,9 @@ chart:
   install time, which is enough because it's only fetched once.
 - **Neo4j settings** come from values as `NEO4J_*` environment variables: heap, page cache,
   `server.databases.default_to_read_only=true`, `db.transaction.timeout`,
-  `db.memory.transaction.total.max`, and bolt thread limits. The admin password comes from a
-  Secret.
+  `db.memory.transaction.total.max`, and bolt thread limits. `neo4j.auth.enabled` controls
+  authentication: when true the admin password comes from a Secret; when false the StatefulSet
+  receives `NEO4J_AUTH=none` and needs no Secret or user Job.
 - **Exposure:** `neo4j.service.type` defaults to `ClusterIP`. Environments that serve PyPI users
   set it to `LoadBalancer` or `NodePort` for **Bolt (7687)**, and optionally HTTP (7474) for
   Neo4j Browser. There is **no TLS** in the initial version: Bolt and HTTP are plain, with
@@ -380,21 +382,23 @@ Bolt directly, so protection has to live in Neo4j itself:
 
 1. **Server-level:** `server.databases.default_to_read_only=true`, set by the chart from the
    first start (which is why the indexes are baked into the dump). With this set, Neo4j itself
-   rejects writes from any client.
+   rejects graph writes from any client.
 2. **Resource limits:** `db.transaction.timeout`, `db.memory.transaction.total.max` and the
-   bolt thread pool size in the chart values. With Bolt reachable from outside, these are what
-   protect the shared instance against expensive queries.
+   Bolt thread pool size in the chart values. With Bolt reachable from outside, these protect
+   the shared instance against expensive queries.
 3. **In our server:** only read transactions (`execute_read`), plus an `EXPLAIN` check, a
    per-query timeout and a row cap on `query_cypher`. This protects users of our server; it
-   can't stop someone using a raw Neo4j driver.
+   cannot stop someone using a raw Neo4j driver.
 
-**Accounts:** give users a separate account (for example `kgbcia`) and keep the admin password
-private. Community has no roles, so **confirm on k8s** whether that account can change
-passwords or create and drop users while the graph stays read-only. If it can, document the risk
-in the runbook and ask the maintainer whether to accept it or switch to `NEO4J_AUTH=none` with
-read-only plus limits (the pattern ROBOKOP's public instances use). Also confirm that a `CREATE`
-fails through a raw driver session. Plain Bolt sends the password unencrypted; note that in the
-runbook too.
+**Authentication choice:** `neo4j.auth.enabled` defaults to true for local k8s, where the
+existing Secret and separate `kgbcia` account are retained. AWS values set it false, which gives
+Neo4j `NEO4J_AUTH=none`, requires neither a Secret nor a user Job, and lets `kgbcia-mcp` connect
+without credentials. This decision avoids the confirmed Community behavior where the separate
+account can create or drop users in `system`, and it avoids sending a reusable password over
+plain Bolt. It also makes the Bolt endpoint unauthenticated: AWS network exposure is the
+maintainer's responsibility and is outside this stage's scope. Read-only mode and the limits
+above remain mandatory. Confirm graph `CREATE` rejection through a raw unauthenticated driver;
+never try a system-database command that can disrupt service without an explicit safety review.
 
 ## Tools
 

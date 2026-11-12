@@ -188,7 +188,10 @@ def _safe(function: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]
     except Neo4jNotConfigured:
         return {
             "error": "Neo4j not configured",
-            "hint": ("Set NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD, then restart the MCP server."),
+            "hint": (
+                "Set NEO4J_URI and, for an authenticated Neo4j deployment, set both "
+                "NEO4J_USER and NEO4J_PASSWORD; then restart the MCP server."
+            ),
         }
     except Neo4jUnavailable:
         return {

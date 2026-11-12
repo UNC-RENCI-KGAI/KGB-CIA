@@ -48,16 +48,12 @@ class Settings(BaseModel):
         return cls.model_validate(values)
 
     def require_neo4j(self) -> None:
-        """Raise a useful error if a command needing Neo4j lacks connection settings."""
+        """Raise a useful error if a command needing Neo4j lacks valid connection settings."""
 
-        missing = [
-            name
-            for name in ("neo4j_uri", "neo4j_user", "neo4j_password")
-            if not getattr(self, name)
-        ]
-        if missing:
-            joined = ", ".join(missing)
-            raise ValueError(f"missing required Neo4j settings: {joined}")
+        if not self.neo4j_uri:
+            raise ValueError("missing required Neo4j setting: neo4j_uri")
+        if bool(self.neo4j_user) != bool(self.neo4j_password):
+            raise ValueError("NEO4J_USER and NEO4J_PASSWORD must be set together")
 
     def require_artifacts(self) -> None:
         """Raise if a command needing lineage artifacts has no artifact source."""

@@ -4,10 +4,12 @@ This procedure deploys the LitCoin development-sample dump to the prepared singl
 k3s host. The maintainer runs every command. It does not install or reconfigure k3s or Helm,
 create AWS resources, deploy the MCP HTTP server, or publish `kgbcia-mcp` to PyPI.
 
-The chart exposes only Neo4j Bolt through k3s ServiceLB. The separate `kgbcia` account and
-Neo4j's database-wide read-only setting protect graph data, but Neo4j Community does not have
-role-based access control; the known ability of `kgbcia` to manage system users is documented
-in the parent [runbook](../RUNBOOK.md).
+The chart exposes only Neo4j Bolt through k3s ServiceLB. Both AWS overlays set
+`neo4j.auth.enabled: false`, so Neo4j runs with `NEO4J_AUTH=none`: there is no user-creation
+Job, no chart Secret dependency, and laptop clients use no credentials. This avoids Neo4j
+Community's user-management risk, but makes network exposure entirely the maintainer's
+responsibility. Graph writes remain blocked by Neo4j's database-wide read-only setting; resource
+limits and the MCP server's existing read protections remain in force.
 
 ## Current deployment handoff (November 12, 2026)
 
@@ -30,8 +32,17 @@ not by this AWS chart while MCP is disabled.
 Verification completed successfully from a laptop: Bolt login as `kgbcia`, raw graph-write
 rejection, the configured integration smoke test, and a local `kgbcia-mcp serve` lineage answer
 for a direct edge. `kgbcia` was also confirmed able to create and drop system users despite the
-read-only graph database. That Neo4j Community risk remains an explicit decision before any
-broader/public exposure.
+read-only graph database. The approved upgrade changes AWS to `NEO4J_AUTH=none`, eliminating
+that account's use and the Community user-management risk. The existing `kgb-mcp-auth` Secret
+and `kgbcia` account remain after this upgrade but are unused. Delete the unused Secret only
+when it is no longer needed for a rollback to authenticated local-style settings:
+
+```bash
+kubectl -n kgb-mcp delete secret kgb-mcp-auth
+```
+
+Deleting that Secret does not delete the Neo4j account; while AWS auth remains disabled, neither
+is used.
 
 ### Interrupted-install recovery already exercised
 
@@ -83,31 +94,33 @@ read -r -p 'Paste the fresh presigned dump URL: ' DUMP_URL
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE"
 
 bash agents/mcp_interface/deploy/aws/install.sh \
-  "$NAMESPACE" "$DUMP_URL" "$DUMP_SHA256" "$ARTIFACTS_SHA256"
+  "$NAMESPACE" "$DUMP_URL" "$DUMP_SHA256" "$ARTIFACTS_SHA256" \
+  agents/mcp_interface/deploy/aws/values-aws-test.yaml
 ```
 
-The installer prompts for the private Neo4j admin password and the `kgbcia` password, creates
-or updates the existing-Secret format, waits for the Neo4j StatefulSet and account hook Job,
-and prints the Bolt Service plus its `svclb` pod. It receives the dump URL only on the command
-line and never writes it to a values file. Keep the SSM session open until the load succeeds;
-if the two-hour URL expires first, create a new one on the laptop and rerun the installer.
+The installer reads `neo4j.auth.enabled` from the values file supplied as its final argument.
+For this AWS test overlay it skips Secret creation and the chart omits the user Job; if a
+supplied values file enables auth, it creates the Secret and fails clearly if that required
+Secret is absent. It waits for the Neo4j StatefulSet and any rendered hook Job, then prints the
+Bolt Service plus its `svclb` pod. It receives the dump URL only on the command line and never
+writes it to a values file. Keep the SSM session open until the load succeeds; if the two-hour
+URL expires first, create a new one on the laptop and rerun the installer.
 
 ## 3. On the laptop: prepare later verification
 
 After the ServiceLB pod is ready, use the Elastic IP's Bolt port—not HTTP—and configure the
-local stdio server shell. Do not put the password or the Elastic IP in a committed file.
+local stdio server shell. Do not put the Elastic IP in a committed file.
 
 ```bash
 export NEO4J_URI='bolt://<instance Elastic IP>:7687'
-export NEO4J_USER=kgbcia
-read -rsp 'kgbcia password: ' NEO4J_PASSWORD; echo
-export NEO4J_PASSWORD
 export KGB_MCP_ARTIFACTS="$ARTIFACTS_URL"
 export KGB_MCP_ARTIFACTS_SHA256="$ARTIFACTS_SHA256"
 ```
 
-For a new deployment or recovery, then verify Bolt login, read-only enforcement, the integration
-tests, and a local `kgbcia-mcp serve` lineage answer as recorded in the handoff section above.
+For a new deployment or recovery, then verify unauthenticated queries, read-only enforcement,
+the integration tests, and a local `kgbcia-mcp serve` lineage answer. Do not set either
+`NEO4J_USER` or `NEO4J_PASSWORD`: credentials must be supplied together for authenticated
+Neo4j, while the AWS deployment uses neither.
 
 ## Operations
 

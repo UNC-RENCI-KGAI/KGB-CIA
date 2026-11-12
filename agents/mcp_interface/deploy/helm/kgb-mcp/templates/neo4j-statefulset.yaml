@@ -82,10 +82,14 @@ spec:
               containerPort: 7474
           env:
             - name: NEO4J_AUTH
+              {{- if .Values.neo4j.auth.enabled }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "secret.existingSecret is required" .Values.secret.existingSecret }}
+                  name: {{ required "secret.existingSecret is required when neo4j.auth.enabled" .Values.secret.existingSecret }}
                   key: {{ .Values.secret.adminAuthKey }}
+              {{- else }}
+              value: none
+              {{- end }}
             - name: NEO4J_server_databases_default__to__read__only
               value: "true"
             - name: NEO4J_server_memory_heap_initial__size

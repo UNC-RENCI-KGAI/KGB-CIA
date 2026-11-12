@@ -34,6 +34,7 @@ uv run kgb-mcp check --input <graph-dir> --report <transform_report.json>
 MCP server, against a running Neo4j:
 
 ```bash
+# Authenticated Neo4j (the local-k8s default): set both variables.
 export NEO4J_URI=bolt://<host>:7687 NEO4J_USER=<user> NEO4J_PASSWORD=<password>
 export KGB_MCP_ARTIFACTS=<dir or URL of the artifacts tarball>
 export KGB_MCP_ARTIFACTS_SHA256=<required when artifacts is a URL>
@@ -41,8 +42,8 @@ uv run kgbcia-mcp serve --enable-cypher            # stdio
 uvx kgbcia-mcp serve --enable-cypher               # once published to PyPI
 ```
 
-For the local cluster, port-forward Bolt and source the local ignored deployment environment
-before starting Pi or the server:
+For the local authenticated cluster, port-forward Bolt and source the local ignored deployment
+environment before starting Pi or the server:
 
 ```bash
 kubectl -n <namespace> port-forward svc/kgb-mcp-neo4j 7687:7687
@@ -79,9 +80,9 @@ Confirmed on the local-k8s Neo4j 5.26.31 load in November 2026:
 - The chart's `server.databases.default_to_read_only=true` rejects a graph `CREATE` through a
   raw driver session as well as through `query_cypher`.
 - Neo4j Community permits the separate `kgbcia` account to create and drop users in `system`
-  despite the graph database being read-only. This is a documented security risk in the runbook;
-  before any public deployment the maintainer must explicitly accept it or choose the
-  `NEO4J_AUTH=none` alternative.
+  despite the graph database being read-only. AWS therefore sets `NEO4J_AUTH=none` instead of
+  creating that account. Network exposure remains the maintainer's responsibility; graph writes
+  remain blocked by the database-level read-only setting and resource limits.
 
 ## Status
 
@@ -101,4 +102,6 @@ after an interrupted Helm client, and the account hook was corrected to treat Ne
 unchanged-password response as idempotent success. Laptop verification confirmed Bolt login as
 `kgbcia`, raw graph-write rejection, the AWS integration smoke suite, and a local-stdio
 `kgbcia-mcp serve` answer with edge lineage. `kgbcia` can create and drop system users on AWS,
-confirming the Neo4j Community security risk documented above and in the runbook.
+confirming the Neo4j Community security risk. The selected AWS chart configuration now disables
+Neo4j authentication (`NEO4J_AUTH=none`); laptop clients set only the Bolt URI and artifacts
+variables, while local k8s remains authenticated.

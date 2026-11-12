@@ -1,6 +1,8 @@
 # Development-sample overlay for the prepared single-node AWS r7g.large.
 # Install-time URLs and checksums are supplied with Helm --set-string, never committed here.
 neo4j:
+  auth:
+    enabled: false
   service:
     type: LoadBalancer
     httpEnabled: false

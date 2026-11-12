@@ -333,6 +333,28 @@ def test_settings_environment_and_overrides():
     settings.require_neo4j()
 
 
+def test_settings_allow_no_credentials_but_reject_partial_credentials():
+    unauthenticated = Settings.from_env({"neo4j_uri": "bolt://example"}, {})
+    unauthenticated.require_neo4j()
+
+    partial = Settings.from_env({"neo4j_uri": "bolt://example", "neo4j_user": "reader"}, {})
+    with pytest.raises(ValueError, match="must be set together"):
+        partial.require_neo4j()
+
+
+def test_neo4j_service_creates_driver_without_auth(monkeypatch):
+    calls = []
+    driver = object()
+    monkeypatch.setattr(
+        "kgbcia_mcp.services.neo4j_service.GraphDatabase.driver",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or driver,
+    )
+
+    service = Neo4jService("bolt://example", None, None)
+    assert service._get_driver() is driver
+    assert calls == [(("bolt://example",), {})]
+
+
 def test_fulltext_assumption_includes_list_property():
     assert FULLTEXT_INDEX_PROPERTIES == ("name", "synonym", "equivalent_identifiers")
 
@@ -1047,6 +1069,7 @@ def test_make_dev_artifacts_creates_synthetic_lineage(tmp_path):
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 def test_helm_chart_lints_and_templates_all_values_files():
     chart = Path(__file__).parents[1] / "agents/mcp_interface/deploy/helm/kgb-mcp"
+    rendered = {}
     for values_name in (
         "values.yaml",
         "values-dev.yaml",
@@ -1054,15 +1077,49 @@ def test_helm_chart_lints_and_templates_all_values_files():
         "../../aws/values-aws-test.yaml",
     ):
         values = chart / values_name
-        for command in (
+        lint = subprocess.run(
             ["helm", "lint", str(chart), "-f", str(values)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert lint.returncode == 0, lint.stdout + lint.stderr
+        template = subprocess.run(
             ["helm", "template", "kgb-mcp", str(chart), "-f", str(values)],
-        ):
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
-            assert result.returncode == 0, result.stdout + result.stderr
-            if command[1] == "template":
-                assert "/data/import/neo4j.dump" in result.stdout
-                assert ".kgbcia-load.sha256" in result.stdout
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert template.returncode == 0, template.stdout + template.stderr
+        assert "/data/import/neo4j.dump" in template.stdout
+        assert ".kgbcia-load.sha256" in template.stdout
+        rendered[values_name] = template.stdout
+
+    assert "name: NEO4J_AUTH\n              valueFrom:" in rendered["values.yaml"]
+    assert "kgb-mcp-create-user" in rendered["values.yaml"]
+    for values_name in ("values-aws.yaml", "../../aws/values-aws-test.yaml"):
+        assert "name: NEO4J_AUTH\n              value: none" in rendered[values_name]
+        assert "secretKeyRef:" not in rendered[values_name]
+        assert "kgb-mcp-create-user" not in rendered[values_name]
+
+    no_auth_mcp = subprocess.run(
+        [
+            "helm",
+            "template",
+            "kgb-mcp",
+            str(chart),
+            "-f",
+            str(chart / "values-aws.yaml"),
+            "--set",
+            "mcp.enabled=true",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert no_auth_mcp.returncode == 0, no_auth_mcp.stdout + no_auth_mcp.stderr
+    assert "name: NEO4J_USER" not in no_auth_mcp.stdout
+    assert "name: NEO4J_PASSWORD" not in no_auth_mcp.stdout
 
 
 requires_neo4j = pytest.mark.skipif(
@@ -1131,10 +1188,10 @@ def test_integration_smoke_against_configured_neo4j():
     finally:
         service.close()
 
-    driver = GraphDatabase.driver(
-        settings.neo4j_uri,
-        auth=(settings.neo4j_user, settings.neo4j_password),
+    driver_options = (
+        {"auth": (settings.neo4j_user, settings.neo4j_password)} if settings.neo4j_user else {}
     )
+    driver = GraphDatabase.driver(settings.neo4j_uri, **driver_options)
     try:
         with pytest.raises(Neo4jError):
             with driver.session(database=settings.neo4j_database) as session:

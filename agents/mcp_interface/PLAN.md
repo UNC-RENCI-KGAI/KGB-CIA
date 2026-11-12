@@ -277,3 +277,73 @@ before laptop verification logs in as `kgbcia`.
   rejected write, integration tests with the Elastic-IP Bolt URI, and one local-stdio
   `kgbcia-mcp serve` provenance answer. Record only outcomes (never credentials or URLs), fix
   failures, and reconfirm/document the already-observed Community user-management risk.
+
+## Proposed checkpoint 1: AWS authentication-free deployment
+
+**Approved decision:** use `NEO4J_AUTH=none` for AWS rather than expose a Neo4j Community
+account that can administer users in the `system` database.  This removes authentication from
+an externally reachable Bolt service, so the maintainer retains sole control over network
+exposure (security groups and all other AWS resources remain out of scope).  Graph protection
+continues to be enforced by `server.databases.default_to_read_only=true`, Neo4j transaction and
+Bolt limits, and the MCP server's existing read transaction, `EXPLAIN`, timeout, and row-cap
+protections.  It also eliminates reusable plaintext Bolt passwords and the Community
+user-management escalation observed in the November 12 test deployment.
+
+### Chart and installer changes
+
+1. Add `neo4j.auth.enabled: true` to the chart's `values.yaml`.  Authentication remains the
+   local-k8s default, preserving the existing Secret and `kgbcia`-account workflow there.
+2. Set `neo4j.auth.enabled: false` in both
+   `deploy/helm/kgb-mcp/values-aws.yaml` and `deploy/aws/values-aws-test.yaml`.
+3. Make all Secret-dependent chart resources conditional on that setting:
+   - render `NEO4J_AUTH=none` as a literal in the Neo4j StatefulSet when disabled; otherwise
+     retain the existing `secretKeyRef`;
+   - omit `user-job.yaml` completely when disabled; and
+   - when optional in-cluster MCP is enabled with auth disabled, omit `NEO4J_USER` and
+     `NEO4J_PASSWORD` there as well, so it uses the same unauthenticated connection mode and
+     needs no Secret.
+4. Update `deploy/aws/install.sh` to accept a values-file argument and determine whether to
+   create the Secret from that file's resolved `neo4j.auth.enabled` setting, not from an overlay
+   name. When auth is enabled it will create/update, then verify, the required Secret and fail
+   clearly if it remains missing; when disabled it skips the Secret step. It retains the precise
+   recorded upgrade inputs: release `kgb-mcp`, namespace supplied as `kgb-mcp`,
+   `deploy/aws/values-aws-test.yaml`, and the dump URL/checksum plus artifacts checksum passed
+   with `--set-string`. It will still use Helm 4's `upgrade --install`,
+   `--wait`, `--wait-for-jobs`, and `--timeout 30m`; no PVC, dump-marker, AWS, security-group,
+   or other infrastructure behavior changes.
+
+### MCP package behavior
+
+1. Treat `NEO4J_USER` and `NEO4J_PASSWORD` as an all-or-none optional pair.  `NEO4J_URI` remains
+   required for a Neo4j operation; neither credential set means an unauthenticated driver, and
+   only one set produces a clear configuration error rather than guessing.
+2. Change driver creation so the no-credential case calls `GraphDatabase.driver(uri)` with no
+   `auth=` argument.  The credentialed case continues to pass the existing tuple.
+3. Revise configuration warnings and tool hints to say that `NEO4J_URI` is required and that
+   credentials are required only for an authenticated Neo4j deployment.  Do not alter the
+   read-transaction, `EXPLAIN`, query timeout, forbidden-Cypher, or row-cap code paths.
+
+### Documentation and tests
+
+- Revise the specification's **Read-only enforcement** section in `AGENTS.md` to make this the
+  selected AWS pattern, explain the no-auth exposure trade-off and retained safeguards, and
+  replace the former pending Community-account decision.
+- Update the stage `README.md`, `deploy/RUNBOOK.md`, and `deploy/aws/README.md` for the two
+  explicit modes: authenticated local k8s versus no-auth AWS.  AWS laptop examples will contain
+  no `NEO4J_USER` or `NEO4J_PASSWORD`; they will retain the exact active release/namespace and
+  sample-overlay handoff information, including that the pre-upgrade Secret and `kgbcia` account
+  remain unused and how to delete that Secret. The README holds the authenticated local-k8s
+  example. `.pi/mcp.json` has one `kgbcia-mcp` AWS entry containing URI and artifact settings
+  only (with its artifact checksum).
+- Add focused tests for Settings with URI and no credentials, rejection of a partial credential
+  pair, and a mocked driver created without `auth`.  Extend Helm render coverage to render both
+  auth settings, asserting the enabled render retains Secret references and the user Job while
+  the disabled render has literal `NEO4J_AUTH=none`, no Secret reference, and no user Job.
+
+### Validation and next checkpoint
+
+After approval, run `helm lint` and `helm template` for every supported values file (including
+both AWS overlays), then `make lint`, `make test`, and `make demo`.  Stop after reporting those
+results and provide the exact AWS `upgrade --install` command based on the recorded active
+release (`kgb-mcp`), namespace (`kgb-mcp`), and test values file—without executing it or
+changing any AWS resource.

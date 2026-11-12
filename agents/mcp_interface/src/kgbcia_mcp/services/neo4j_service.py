@@ -81,13 +81,18 @@ class Neo4jService:
 
         if self._driver is not None:
             return self._driver
-        if not self._uri or not self._user or not self._password:
+        if not self._uri:
             raise Neo4jNotConfigured("Neo4j not configured")
+        if bool(self._user) != bool(self._password):
+            raise Neo4jNotConfigured("NEO4J_USER and NEO4J_PASSWORD must be set together")
         try:
-            self._driver = GraphDatabase.driver(
-                self._uri,
-                auth=(self._user, self._password),
-            )
+            if self._user:
+                self._driver = GraphDatabase.driver(
+                    self._uri,
+                    auth=(self._user, self._password),
+                )
+            else:
+                self._driver = GraphDatabase.driver(self._uri)
         except (Neo4jError, OSError, ValueError) as exc:
             raise Neo4jUnavailable("Neo4j unreachable") from exc
         return self._driver

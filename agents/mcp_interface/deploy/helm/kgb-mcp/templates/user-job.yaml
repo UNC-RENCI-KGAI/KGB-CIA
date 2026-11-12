@@ -1,3 +1,4 @@
+{{- if .Values.neo4j.auth.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -62,3 +63,4 @@ spec:
                   *) printf '%s\\n' "$alter_output" >&2; exit 1 ;;
                 esac
               fi
+{{- end }}

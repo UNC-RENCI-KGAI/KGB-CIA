@@ -58,12 +58,12 @@ local Pi testing. If an HTTP-only client is added later, build the image from
 docker build -f deploy/Dockerfile -t kgbcia-mcp:dev .
 ```
 
-## 4. Create the password Secret
+## 4. Configure authentication
 
-The chart references an existing Secret named `kgb-mcp-auth` by default. Run the
-maintainer-operated helper, passing the existing namespace. It creates or updates
-`neo4j-auth` (the full Neo4j `NEO4J_AUTH` value, including `neo4j/`) and `user-password`
-(the raw password for the `kgbcia` account created by the post-install hook):
+`neo4j.auth.enabled` controls authentication for one chart rather than maintaining chart forks.
+It defaults to `true`, so local k8s uses the existing Secret named `kgb-mcp-auth`. Create or
+rotate it with the maintainer-operated helper; it stores `neo4j-auth` (the complete
+`neo4j/<password>` value) and `user-password` (for the `kgbcia` post-install Job):
 
 ```bash
 bash agents/mcp_interface/deploy/create_neo4j_secret.sh <namespace>
@@ -73,16 +73,16 @@ For a password rotation, supply the existing Neo4j admin password and the new `k
 password, then run `helm upgrade`. The post-upgrade Job reconciles the database account to
 `user-password`; updating the Secret alone does not change an already-created Neo4j user.
 
-Passwords traverse plain Bolt in this initial deployment. Treat the network path as
-trusted; TLS is intentionally out of scope. Neo4j Community has no role-based access
-control, so the database-level read-only setting and resource limits are the protections.
+Both AWS values overlays set `neo4j.auth.enabled: false`. In that mode the StatefulSet receives
+`NEO4J_AUTH=none`; the chart renders neither a Secret reference nor the user-creation Job, and
+AWS `install.sh` skips Secret creation. The existing `kgbcia` account is not used. AWS exposes
+an unauthenticated Bolt endpoint, so the maintainer alone controls its network exposure. Its
+remaining safeguards are Neo4j's database-level read-only setting, transaction and Bolt limits,
+and the MCP server's read-transaction, `EXPLAIN`, timeout, and row-cap protections.
 
-**Confirmed on local k8s and the AWS development-sample deployment (November 2026):** the
-separate `kgbcia` account can create and drop users in `system` even while graph writes are
-rejected by the read-only database setting. This is an accepted risk only if the maintainer
-explicitly approves it before public exposure. Otherwise use the alternative `NEO4J_AUTH=none`
-deployment pattern with read-only and resource limits; it avoids sending a reusable Bolt
-password over plain text but also removes password authentication entirely.
+Neo4j Community lets the separate `kgbcia` account administer users in `system` despite graph
+read-only mode. Selecting no-auth AWS avoids that Community user-management risk and avoids a
+reusable password over plain Bolt; it does not make the endpoint safe to expose broadly.
 
 ## 5. Install or upgrade the local cluster deployment
 
@@ -129,5 +129,7 @@ host, generate a two-hour presigned URL for the private dump, use the sample-siz
 `aws/values-aws-test.yaml` overlay, and verify from a laptop over Bolt.
 
 Do not install or reconfigure k3s or Helm, recreate AWS resources, put the presigned URL in a
-values file, or enable the optional MCP HTTP deployment. The final real-graph deployment will
-use the same chart and process with `values-aws.yaml` only after this sample deployment passes.
+values file, or enable the optional MCP HTTP deployment. Both AWS overlays use unauthenticated
+Neo4j (`NEO4J_AUTH=none`); see the AWS README for its exposure and unused-Secret notes. The
+final real-graph deployment will use the same chart and process with `values-aws.yaml` only
+after this sample deployment passes.

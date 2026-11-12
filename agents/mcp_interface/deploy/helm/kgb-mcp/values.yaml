@@ -11,6 +11,10 @@ secret:
 
 neo4j:
   image: neo4j:5.26.31-community
+  auth:
+    # Local Kubernetes defaults to password authentication. AWS overlays disable it because
+    # Neo4j Community accounts can administer users in the system database.
+    enabled: true
   # Placeholder values make templates inspectable but are not deployable.
   dumpUrl: https://example.invalid/kgb.dump
   dumpSha256: 0000000000000000000000000000000000000000000000000000000000000000

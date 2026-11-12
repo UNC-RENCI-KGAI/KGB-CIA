@@ -77,11 +77,13 @@ def _create_service(settings: Settings) -> Neo4jService:
             hubs = _hub_ids(bundle.hubs)
         except Exception as exc:
             _warn(f"lineage artifacts unavailable: {exc}")
-    if not settings.neo4j_uri or not settings.neo4j_user or not settings.neo4j_password:
+    if not settings.neo4j_uri:
         _warn(
             "Neo4j not configured; tools will return a configuration hint until the server "
-            "is restarted with NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD"
+            "is restarted with NEO4J_URI"
         )
+    elif bool(settings.neo4j_user) != bool(settings.neo4j_password):
+        _warn("NEO4J_USER and NEO4J_PASSWORD must be set together when authentication is used")
     return Neo4jService(
         settings.neo4j_uri,
         settings.neo4j_user,
