@@ -51,8 +51,14 @@ spec:
                 --param "app_password => '$app_password_literal'" \
                 "CREATE USER $NEO4J_APP_USER IF NOT EXISTS SET PASSWORD \$app_password CHANGE NOT REQUIRED"
               # Keep the database credential synchronized if the Secret is rotated
-              # after an earlier successful install.
-              cypher-shell -a bolt://{{ include "kgb-mcp.neo4jService" . }}:7687 \
+              # after an earlier successful install. Neo4j rejects an unchanged password;
+              # that specific result is the successful, idempotent case after CREATE USER.
+              if ! alter_output=$(cypher-shell -a bolt://{{ include "kgb-mcp.neo4jService" . }}:7687 \
                 -u neo4j -p "$admin_password" -d system \
                 --param "app_password => '$app_password_literal'" \
-                "ALTER USER $NEO4J_APP_USER SET PASSWORD \$app_password CHANGE NOT REQUIRED"
+                "ALTER USER $NEO4J_APP_USER SET PASSWORD \$app_password CHANGE NOT REQUIRED" 2>&1); then
+                case "$alter_output" in
+                  *'Old password and new password cannot be the same.'*) ;;
+                  *) printf '%s\\n' "$alter_output" >&2; exit 1 ;;
+                esac
+              fi
