@@ -494,7 +494,7 @@ def test_run_fails_cleanly_without_inputs(tmp_path, scene, monkeypatch, capsys):
     assert review.run(_args(empty)) == 1  # no label_run.json
     assert "kgb-augment label" in capsys.readouterr().err
     assert review.run(_args(scene)) == 1  # no API key
-    assert config.RENCI_API_KEY in capsys.readouterr().err
+    assert config.AZURE_OPENAI_API_KEY in capsys.readouterr().err
     assert review.run(_args(scene, "--model", "not-a-model")) == 1
     assert "not-a-model is not in config.MODELS" in capsys.readouterr().err
     (scene.cache_dir / config.UBERON_FILE).unlink()

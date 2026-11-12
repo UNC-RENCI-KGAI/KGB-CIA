@@ -19,7 +19,7 @@ MODEL = config.Model(
     id="gpt-test",
     backend="openai",
     base_url="https://example.test/openai/v1",
-    api_key=config.RENCI_API_KEY,
+    api_key=config.AZURE_OPENAI_API_KEY,
     price=config.Price(input=0.2, output=1.2, cache_read=0.02, cache_write=0.25),
     price_source="a test",
     effort="medium",
@@ -202,13 +202,13 @@ def test_a_refusal_is_a_failed_call():
 
 
 def test_missing_key(monkeypatch):
-    monkeypatch.delenv(config.RENCI_API_KEY, raising=False)
-    with pytest.raises(llm.LLMError, match=config.RENCI_API_KEY):
+    monkeypatch.delenv(config.AZURE_OPENAI_API_KEY, raising=False)
+    with pytest.raises(llm.LLMError, match=config.AZURE_OPENAI_API_KEY):
         llm.OpenAIClient(MODEL)
 
 
 def test_key_from_environment(monkeypatch):
-    monkeypatch.setenv(config.RENCI_API_KEY, "from-env")
+    monkeypatch.setenv(config.AZURE_OPENAI_API_KEY, "from-env")
     server = Server(reply("{}"))
     call(client(server, api_key=None))
     assert server.requests[0].headers["authorization"] == "Bearer from-env"
@@ -272,7 +272,7 @@ def _schemas() -> list[llm.Schema]:
 
 
 def test_reply_schemas_keep_both_providers_rules(monkeypatch):
-    monkeypatch.setenv(config.RENCI_API_KEY, "key")
+    monkeypatch.setenv(config.AZURE_OPENAI_API_KEY, "key")
     monkeypatch.setenv(config.ANTHROPIC_API_KEY, "key")
     openai = llm.client_for(config.MODELS["gpt-6-luna"])
     claude = llm.client_for(config.MODELS["claude-sonnet-5-5"])
@@ -327,7 +327,7 @@ def test_claude_models_and_their_client(monkeypatch):
     for target in ("claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"):  # their fallbacks
         assert config.MODELS[target].backend == "anthropic"
     monkeypatch.setenv(config.ANTHROPIC_API_KEY, "key")
-    monkeypatch.setenv(config.RENCI_API_KEY, "key")
+    monkeypatch.setenv(config.AZURE_OPENAI_API_KEY, "key")
     assert isinstance(llm.client_for(config.MODELS["gpt-6-luna"]), llm.OpenAIClient)
     claude = llm.client_for(sonnet, reasoning_effort="low")
     assert isinstance(claude, llm.AnthropicClient)

@@ -96,14 +96,18 @@ class Model:
 
 
 # The RENCI Azure deployments, as `.pi/models.json` lists them for Pi. Pi reads that file
-# itself, so a price change there has to be copied here by hand.
-RENCI_URL = "https://renci-analytics.openai.azure.com/openai/v1"
-RENCI_API_KEY = "RENCI_AZURE_API_KEY"
+# itself, so a price change there has to be copied here by hand. The key and the endpoint take
+# Pi's standard Azure names, as `.env.example` lists them: AZURE_OPENAI_BASE_URL, if set and not
+# empty, is another Azure OpenAI resource with deployments under the same ids.
+AZURE_OPENAI_API_KEY = "AZURE_OPENAI_API_KEY"
+AZURE_URL = (
+    os.environ.get("AZURE_OPENAI_BASE_URL") or "https://renci-analytics.openai.azure.com/openai/v1"
+)
 _PI = ".pi/models.json, 2026-11-03"
 
 
 def _renci(id: str, price: Price, effort: str | None = "medium", reasoning: bool = True) -> Model:
-    return Model(id, "openai", RENCI_URL, RENCI_API_KEY, price, _PI, reasoning, effort)
+    return Model(id, "openai", AZURE_URL, AZURE_OPENAI_API_KEY, price, _PI, reasoning, effort)
 
 
 # Claude models, on Anthropic's own API. The SDK reads the key, or an `ant auth login` profile.

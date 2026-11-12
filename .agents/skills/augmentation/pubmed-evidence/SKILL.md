@@ -60,7 +60,7 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 
 ## Before you start
 
-- Labeling and review (not `--dry-run`) need the model's credentials: `RENCI_AZURE_API_KEY`
+- Labeling and review (not `--dry-run`) need the model's credentials: `AZURE_OPENAI_API_KEY`
   for the RENCI models, and for Claude models (`claude-...`) `ANTHROPIC_API_KEY` or an
   `ant auth login` profile. If they're missing, the step stops and says so; stop too, and
   don't look for a key. Labeling also uses the review model's, for the sentence repair pass;

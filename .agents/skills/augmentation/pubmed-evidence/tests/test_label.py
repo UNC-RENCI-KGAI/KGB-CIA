@@ -884,9 +884,9 @@ def test_missing_input_names_the_step(w, capsys):
 
 
 def test_missing_key(w, monkeypatch, capsys):
-    monkeypatch.delenv(config.RENCI_API_KEY, raising=False)
+    monkeypatch.delenv(config.AZURE_OPENAI_API_KEY, raising=False)
     assert label.run(args_for(w)) == 1
-    assert config.RENCI_API_KEY in capsys.readouterr().err
+    assert config.AZURE_OPENAI_API_KEY in capsys.readouterr().err
 
 
 def test_unknown_model(w, capsys):
@@ -1063,7 +1063,7 @@ def test_dry_run_sends_nothing(w, monkeypatch):
         raise AssertionError("a dry run must not build a client")
 
     monkeypatch.setattr(llm, "client_for", no_client)
-    monkeypatch.delenv(config.RENCI_API_KEY, raising=False)
+    monkeypatch.delenv(config.AZURE_OPENAI_API_KEY, raising=False)
     summary = label.label_pairs(w.work, w.cache_dir, model=MODEL, dry_run=True)
     assert summary["requests"] == 2 and summary["calls"] == 0
     assert summary["abstracts_to_answer"] == 4

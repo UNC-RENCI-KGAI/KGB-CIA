@@ -36,7 +36,7 @@ uv run kgb-augment STEP --help    # STEP: select, pubmed, label, ground, review,
 ```
 
 The skill's `scripts/augment.py` takes the same arguments; the skill's README lists each
-step's options. Set `RENCI_AZURE_API_KEY` for labeling and review with the RENCI models
+step's options. Set `AZURE_OPENAI_API_KEY` for labeling and review with the RENCI models
 (`ANTHROPIC_API_KEY`, or an `ant auth login` profile, with Claude models), and `NCBI_EMAIL`
 (plus `NCBI_API_KEY` for 10 requests a second) for the PubMed search. With a `label_run.json`
 in the work directory, the full run continues that run (its model, prompt, reasoning effort,

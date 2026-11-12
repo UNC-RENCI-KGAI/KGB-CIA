@@ -76,11 +76,13 @@ for the shared RENCI drive), before or after the step's name.
 | `evaluate` | `--gold FILE` (`<work>/gold.jsonl`), `--run MODEL[@PROMPT_VERSION]` (repeatable; default the run in `label_run.json`), `--species-in-proposals` (off, as apply); or `--draw N --seed S` (0) to draw the pairs to curate |
 | (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--skip-review` |
 
-Environment: `RENCI_AZURE_API_KEY` for labeling and review with the RENCI models (not for
-`--dry-run`), and `ANTHROPIC_API_KEY` or an `ant auth login` profile with Claude models;
-labeling also needs the review model's, `RENCI_AZURE_API_KEY` by default, for the sentence
-repair pass. `NCBI_EMAIL`, and `NCBI_API_KEY` for 10 requests a second instead of 3, for the
-PubMed search. `NAMERES_URL` points the ground step at another Name Resolver.
+Environment (the repository's `.env.example` lists every variable): `AZURE_OPENAI_API_KEY`
+for labeling and review with the RENCI models (not for `--dry-run`), and `ANTHROPIC_API_KEY` or
+an `ant auth login` profile with Claude models; labeling also needs the review model's,
+`AZURE_OPENAI_API_KEY` by default, for the sentence repair pass. `AZURE_OPENAI_BASE_URL` points
+the RENCI model ids at your own Azure OpenAI resource (empty: RENCI's). `NCBI_EMAIL`, and
+`NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search. `NAMERES_URL`
+points the ground step at another Name Resolver.
 
 The same library is the pipeline's augmentation stage: `uv run kgb-augment` takes the same
 arguments as `augment.py`.
