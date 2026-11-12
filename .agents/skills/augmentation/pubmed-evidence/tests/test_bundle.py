@@ -429,13 +429,13 @@ def test_load_names_the_step_to_run_first(world):
         world.load()
 
 
-def test_an_invalid_edge_in_scope_is_an_error(world):
+def test_an_invalid_edge_in_scope_is_skipped(world):
+    """Select reports it and apply writes it as read; the bundle leaves it out."""
     world.edges(edge(IMATINIB, "biolink:treats", CML))
     path = world.graph / graphio.EDGES
     bad = {"subject": IMATINIB, "predicate": "treats", "object": CML}
-    graphio.write_jsonl(path, [*graphio.read_jsonl(path), bad])
-    with pytest.raises(ValueError, match="edge 2 of .* is not a valid Edge"):
-        world.load()
+    graphio.write_jsonl(path, [*graphio.read_jsonl(path), bad, ["not", "an", "edge"]])
+    assert [len(b.edges) for b in world.load().pairs] == [1]
 
 
 def test_an_id_two_different_edges_give_is_an_error(world):

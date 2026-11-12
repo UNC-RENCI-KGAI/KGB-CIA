@@ -16,11 +16,12 @@ import gzip
 import hashlib
 import json
 import re
+from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import IO, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from shared import schema
 from shared.pubmed import pmid_of as shared_pmid_of
@@ -85,6 +86,60 @@ def read_nodes(directory: Path) -> Iterator[Node]:
 def read_edges(directory: Path) -> Iterator[Edge]:
     for d in read_jsonl(graph_file(directory, EDGES)):
         yield Edge.model_validate(d)
+
+
+# How many invalid edges a report lists by line number; the rest are only counted.
+INVALID_EXAMPLES = 10
+
+
+class InvalidEdges:
+    """Edges that aren't valid `Edge` records, counted by reason, with the first few lines.
+
+    Decision (review of #22, Nov 2026): one bad edge never stops the stage, or the pipeline.
+    Select and bundle skip it, apply writes it out exactly as read, and each step's report
+    counts it and the run prints a warning. Dropping bad edges is the final cleaning pass's job,
+    not augmentation's."""
+
+    def __init__(self) -> None:
+        self.by_reason: Counter[str] = Counter()
+        self.examples: list[dict[str, Any]] = []
+
+    def check(self, row: Any, line: int) -> Edge | None:
+        """The row as an Edge, or None (counted) if it isn't a valid one."""
+        try:
+            return Edge.model_validate(row)
+        except ValidationError as e:
+            problem = e.errors()[0]
+            where = ".".join(map(str, problem["loc"])) or "record"
+            reason = f"{where}: {problem['msg']}"
+            self.by_reason[reason] += 1
+            if len(self.examples) < INVALID_EXAMPLES:
+                self.examples.append({"line": line, "reason": reason})
+            return None
+
+    @property
+    def count(self) -> int:
+        return sum(self.by_reason.values())
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "edges": self.count,
+            "by_reason": dict(self.by_reason.most_common()),
+            "examples": self.examples,
+        }
+
+
+def invalid_warning(step: str, invalid: dict[str, Any], path: Path, done: str) -> str | None:
+    """The warning a step prints for the invalid edges its report lists; None if none."""
+    if not invalid["edges"]:
+        return None
+    reason, n = next(iter(invalid["by_reason"].items()))
+    lines = ", ".join(str(x["line"]) for x in invalid["examples"])
+    return (
+        f"{step}: warning: {invalid['edges']:,} edges in {path} aren't valid Edge records and "
+        f"were {done} (most common: {reason}, {n:,} edges; lines {lines}); see "
+        f"invalid_edges in the report"
+    )
 
 
 def extras(record: BaseModel) -> dict[str, Any]:

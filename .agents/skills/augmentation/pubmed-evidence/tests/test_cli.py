@@ -535,3 +535,22 @@ def test_script_header_lists_the_projects_dependencies():
     assert header is not None
     meta = tomllib.loads("\n".join(line[2:] for line in header[1].splitlines()))
     assert sorted(meta["dependencies"]) == sorted(wanted)
+
+
+def test_one_bad_edge_does_not_stop_the_run(tmp_path, capsys, fakes):
+    """A bad edge among good ones: every step runs, select skips it, apply writes it as read,
+    both reports count it, and the run warns instead of failing."""
+    graph = tmp_path / "filter"
+    bad = {"subject": IMATINIB, "predicate": "treats", "object": CML}  # no biolink:, no source
+    graphio.write_jsonl(graph / "nodes.jsonl", NODES)
+    graphio.write_jsonl(graph / "edges.jsonl", [*EDGES, bad])
+    out = tmp_path / "out"
+    argv = ["--input", str(graph), "--output", str(out), "--cache-dir", str(tmp_path / "cache")]
+
+    assert cli.main(argv) == 0
+    err = capsys.readouterr().err
+    assert "select: warning: 1 edges" in err and "apply: warning: 1 edges" in err
+    edges = list(graphio.read_jsonl(out / "edges.jsonl"))
+    assert bad in edges
+    for report in ("scope_report.json", "apply_report.json"):
+        assert json.loads((out / "work" / report).read_text())["invalid_edges"]["edges"] == 1

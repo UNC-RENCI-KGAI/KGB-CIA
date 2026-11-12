@@ -125,6 +125,7 @@ Written next to the step's other files:
 | --- | --- |
 | `input`, `rules_file`, `capped_limit`, `min_score` | What the step ran on |
 | `edges_read`, `earlier_run_skipped`, `missing_node_skipped` | Edge counts before any rule |
+| `invalid_edges` | Edges that aren't valid `Edge` records, skipped: `edges`, `by_reason` (count per reason, most common first), `examples` (the first 10, `line` and `reason`) |
 | `kept` | `edges`, `statements`, `pairs`, `entities` kept in all; `negated_edges` among the edges; `misdirected_edges` (below) |
 | `rules` | Per rule id. Query and capped: `tier`, `matched_edges`, `matched_statements`, and the `edges`, `statements` and `pairs` kept; capped rules add `dropped_by_min_score` (`statements`, `edges`) and `dropped_by_cap` (`pairs`, `statements`, `edges`). Skip: `tier`, `skipped_edges` |
 | `skipped` | One entry per (subject category, predicate, object category) not kept, using each node's first (most specific) category: `edges` and `rule` (`skip:<id>` or `unmatched`), most edges first |

@@ -63,16 +63,17 @@ from pubmed_evidence.graphio import (
     EDGES,
     ID_PREFIX,
     NODES,
+    InvalidEdges,
     edge_statement_id,
     extras,
     graph_file,
+    invalid_warning,
     is_negated,
     pair_id,
     pair_nodes,
     pmid_key,
     pmid_of,
     qualifiers_of,
-    read_edges,
     read_jsonl,
     read_nodes,
     write_jsonl,
@@ -439,10 +440,13 @@ def select(
     skipped: Counter[tuple[str, str, str, str]] = Counter()
     matched_edges: Counter[str] = Counter()
     edges_read = earlier = missing = 0
-    for edge in read_edges(input_dir):
-        edges_read += 1
+    invalid = InvalidEdges()
+    for edges_read, row in enumerate(read_jsonl(graph_file(input_dir, EDGES)), 1):
         if edges_read % PROGRESS_EVERY == 0:
             print(f"{STEP}: {edges_read:,} edges read", file=sys.stderr)
+        edge = invalid.check(row, edges_read)
+        if edge is None:
+            continue
         if edge.id and edge.id.startswith(ID_PREFIX):
             earlier += 1
             continue
@@ -548,6 +552,7 @@ def select(
         "min_score": min_score,
         "edges_read": edges_read,
         "earlier_run_skipped": earlier,
+        "invalid_edges": invalid.report(),
         "missing_node_skipped": missing,
         "kept": {
             "edges": sum(s.edge_count for s in statement_records),
@@ -651,6 +656,11 @@ def run(args: argparse.Namespace) -> int:
         return 1
     for line in summary(report):
         print(f"{STEP}: {line}")
+    warning = invalid_warning(
+        STEP, report["invalid_edges"], graph_file(input_dir, EDGES), "skipped"
+    )
+    if warning:
+        print(warning, file=sys.stderr)
     misdirected = report["kept"]["misdirected_edges"]
     if misdirected:
         print(

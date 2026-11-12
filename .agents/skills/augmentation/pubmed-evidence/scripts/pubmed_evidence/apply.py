@@ -69,8 +69,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
-
 from pubmed_evidence import bundle, cache, config, graphio, records, refine, repair
 from pubmed_evidence.bundle import Bundle, Bundles
 from shared.pubmed import default_cache_path
@@ -406,22 +404,19 @@ class _Pass:
             0,
         )
         self.unchecked = dict.fromkeys(("not_fully_labeled", "not_searched", "held"), 0)
+        self.invalid = graphio.InvalidEdges()
 
     def originals(self, rows: Iterable[dict[str, Any]], path: Path) -> Iterator[dict[str, Any]]:
         """The input edges, each with its `id`, the checked ones with their outcome; none an
-        earlier run added. Each is validated as an Edge, but written back as its own dict."""
+        earlier run added. Each is validated as an Edge, but written back as its own dict; one
+        that isn't valid is written exactly as read and counted (graphio.InvalidEdges)."""
         stats = self.stats
         for row in rows:
             stats["edges_read"] += 1
-            try:
-                edge = Edge.model_validate(row)
-            except ValidationError as e:
-                problem = e.errors()[0]
-                where = ".".join(map(str, problem["loc"])) or "record"
-                raise ApplyError(
-                    f"edge {stats['edges_read']} of {path} is not a valid Edge: "
-                    f"{where}: {problem['msg']}"
-                ) from e
+            edge = self.invalid.check(row, stats["edges_read"])
+            if edge is None:
+                yield row
+                continue
             if not row.get("id"):
                 stats["ids_assigned"] += 1
             eid = graphio.edge_id(row)
@@ -637,9 +632,15 @@ def apply_claims(
         "skipped": dict(sorted(loaded.counts.items())),
         "refinements": lines,
         "edges_written": edges,
+        "invalid_edges": graph.invalid.report(),
     }
     records.write_json(work / APPLY_REPORT, report)
     _warn(report, run)
+    warning = graphio.invalid_warning(
+        "apply", report["invalid_edges"], edges_in, "written as read, unchecked"
+    )
+    if warning:
+        print(warning, file=sys.stderr)
     return report
 
 

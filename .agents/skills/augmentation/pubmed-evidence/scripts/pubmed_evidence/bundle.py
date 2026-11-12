@@ -182,14 +182,16 @@ def edges_of(
 ) -> tuple[dict[str, list[Edge]], dict[str, list[Edge]]]:
     """The edges of `path` between the pairs in `pair_ids`, each with its id and its
     publications as its source cited them, by pair, in file order; none an earlier run added:
-    those whose statement is in `statements`, and the others. Raises ValueError for such an edge
-    that isn't a valid Edge, and for an id that two different records of the file give
-    (identical records may repeat: they are one edge, refined once), since step 6 writes each
-    id's outcome on every edge that has it."""
+    those whose statement is in `statements`, and the others. An edge that isn't a valid Edge
+    is skipped (select reports it). Raises ValueError for an id that two different records of
+    the file give (identical records may repeat: they are one edge, refined once), since step 6
+    writes each id's outcome on every edge that has it."""
     out: dict[str, list[Edge]] = defaultdict(list)
     others: dict[str, list[Edge]] = defaultdict(list)
     seen: dict[str, tuple[int, bytes]] = {}  # an id records give -> (first line, its digest)
     for n, row in enumerate(graphio.read_jsonl(path), 1):
+        if not isinstance(row, dict):
+            continue  # not an edge; select counted it, and apply writes it as read
         own = row.get("id")
         if isinstance(own, str) and own and not own.startswith(graphio.ID_PREFIX):
             digest = hashlib.sha256(canonical(row).encode("utf-8")).digest()
@@ -210,12 +212,8 @@ def edges_of(
             continue
         try:
             edge = Edge.model_validate({**graphio.as_cited(row), "id": eid})
-        except ValidationError as e:
-            problem = e.errors()[0]
-            where = ".".join(map(str, problem["loc"])) or "record"
-            raise ValueError(
-                f"edge {n} of {path} is not a valid Edge: {where}: {problem['msg']}"
-            ) from e
+        except ValidationError:
+            continue  # select counted it, and apply writes it as read (graphio.InvalidEdges)
         if graphio.edge_statement_id(edge) in statements:
             out[pid].append(edge)
         else:

@@ -919,14 +919,22 @@ def test_two_different_edges_with_one_id_fail_loudly(world, capsys):
     assert not (world.work.parent / "out").exists()
 
 
-def test_an_invalid_edge_fails_loudly(world, capsys):
+def test_an_invalid_edge_is_written_as_read_and_reported(world, capsys):
+    """One bad edge doesn't stop the step: it is written exactly as read, unchecked, the report
+    counts it by reason with its line, and the run warns."""
     scene(world)
+    bad = {"subject": "A:1", "predicate": "treats", "object": "B:2"}
     with (world.graph / graphio.EDGES).open("a") as f:
-        f.write('{"subject":"A:1","predicate":"treats","object":"B:2"}\n')
-    assert apply.run(args_for(world)) == 1
+        f.write(json.dumps(bad) + "\n")
+    assert apply.run(args_for(world)) == 0
     err = capsys.readouterr().err
-    assert "edge 4 of" in err and "not a valid Edge" in err
-    assert list((world.work.parent / "out").iterdir()) == []
+    assert "apply: warning: 1 edges in" in err and "lines 4" in err
+    out = list(graphio.read_jsonl(world.work.parent / "out" / graphio.EDGES))
+    assert out[3] == bad
+    report = json.loads((world.work / apply.APPLY_REPORT).read_text())
+    invalid = report["invalid_edges"]
+    assert invalid["edges"] == 1 and [x["line"] for x in invalid["examples"]] == [4]
+    assert report["edges_read"] == report["edges_written"] == 4
 
 
 SOURCE_EDGE = {

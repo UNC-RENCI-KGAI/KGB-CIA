@@ -114,6 +114,8 @@ Fields by file:
     with anatomy names never grounded, abstracts without publication types, claims failing a
     check;
   - `refinements` (lines written to `refinements.jsonl`) and `edges_written`.
+  - `invalid_edges`: edges that aren't valid `Edge` records, written as read and unchecked:
+    `edges`, `by_reason` (count per reason), `examples` (the first 10, `line` and `reason`).
 - **`gold_pairs.jsonl`**: one line per pair `evaluate --draw` drew, in the order drawn, from
   the refined pairs with at least one abstract read (the draw prints how many it left out):
   `pair_id`, the stratum it was drawn for (`outcome`: `unsupported`, `supported` or `refined`;

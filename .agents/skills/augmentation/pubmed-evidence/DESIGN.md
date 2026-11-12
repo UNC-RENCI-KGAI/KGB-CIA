@@ -628,6 +628,13 @@ them back out.
   (`evidence`, `evidence_score`, `original_edge_ids`, ...): stripping those from every edge
   would delete a source's own data, so we decided to strip only on a rerun (review of #22). Edges an earlier run added (`kgbcia-augmentation:`) are dropped,
   and this run adds its own. Step 1 never selects them.
+- **One bad edge never stops the run.** An edge that isn't a valid `Edge` record (a predicate
+  without `biolink:`, a knowledge source without `infores:`, a missing subject, ...) is skipped
+  by select and the bundle, and written exactly as read by apply, unchecked. Both reports list
+  it under `invalid_edges` (by reason, with the first lines), and each step prints a warning;
+  the run and the pipeline go on. Removing bad edges is the final cleaning pass's job, not
+  augmentation's. Only a problem with the input as a whole (a line that isn't JSON, a missing
+  file) stops the step.
 - **All or nothing:** the graph and `refinements.jsonl` are written under temporary names and
   renamed into place at the end, so a failed run leaves none half-written; `apply_report.json`
   follows them.
