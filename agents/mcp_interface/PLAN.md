@@ -151,13 +151,12 @@ three values files.
   (v2.0.13; Neo4j 5.25.1; `orion-neo4j-dump` verified).
 - Synthetic mappings derive endpoint categories from `nodes.jsonl`, using each node's
   first category.
-- The chart will reference a pre-created Secret with `neo4j-auth` and
-  `user-password`. It sets `NEO4J_AUTH` from `neo4j-auth`; a post-install hook
-  will idempotently create the values-configured `kgbcia` account in the system
-  database. Whether this works while the graph database is read-only remains a
-  `TODO(k8s)` for the first cluster load.
+- The chart references a pre-created Secret with `neo4j-auth` and `user-password`. It sets
+  `NEO4J_AUTH` from `neo4j-auth`; its post-install hook idempotently creates the
+  values-configured `kgbcia` account in the system database. This was confirmed on local k8s
+  and the AWS development-sample deployment while the graph database remained read-only.
 
-## Proposed build-order step 4 (AWS development-sample deployment)
+## Build-order step 4 (AWS development-sample deployment)
 
 **Status: completed November 12, 2026.** The LitCoin development-sample deployment and laptop
 verification passed on the prepared host. This was a maintainer-operated test deployment only;
@@ -165,6 +164,46 @@ it used the existing single-node arm64 k3s host,
 the LitCoin development-sample `kgb.dump`, and the public artifacts bundle. It does not
 publish the package to PyPI, deploy the optional MCP HTTP service, change AWS resources,
 or reconfigure k3s or Helm.
+
+### Deployment handoff record
+
+At the completed test-deployment checkpoint, the active Helm release is **`kgb-mcp`** in
+namespace **`kgb-mcp`**. It was installed from
+`agents/mcp_interface/deploy/helm/kgb-mcp` using the chart defaults plus
+`deploy/aws/values-aws-test.yaml`; the real-graph `values-aws.yaml` was **not** used. The
+installer additionally passed the private dump URL and dump checksum through Helm
+`--set-string`, and passed the artifacts checksum for the disabled optional MCP deployment.
+No URL, password, host, or other account-specific value is recorded in Git.
+
+The test overlay is the LitCoin-sized configuration: a 5 Gi local-path PVC, a 2 CPU / 4 GiB
+Neo4j limit, 1 GiB initial / 2 GiB maximum heap, 1 GiB page cache, Bolt-only `LoadBalancer`,
+and `mcp.enabled=false`. The server is therefore not deployed to AWS: laptop clients run
+`kgbcia-mcp serve` locally over stdio against Bolt.
+
+The dump was downloaded once by the StatefulSet's `download-dump` init container from a
+two-hour presigned URL, SHA-256 verified, and loaded by the `load-dump` init container with
+`neo4j-admin database load --overwrite-destination`. The `.kgbcia-load.sha256` marker on the
+PVC is keyed to the dump checksum. With that PVC and matching marker intact, upgrades and pod
+restarts skip both download and load; a lost/deleted PVC needs a newly presigned URL and a
+fresh load. The public artifacts tarball is fetched later by each local MCP process, not by the
+AWS chart while MCP remains disabled.
+
+One non-obvious recovery occurred during this deployment. An SSM inactivity timeout terminated
+the local Helm client after Kubernetes had loaded Neo4j, leaving Helm revision 1 in
+`pending-install`; the PVC and database were healthy. The initial account hook then found the
+newly created `kgbcia` password unchanged and Neo4j returned `Old password and new password
+cannot be the same.` as an error. `user-job.yaml` now accepts only that exact response as the
+idempotent success case and still fails all other account-update errors. If a future interrupted
+install leaves a pending release, preserve the PVC, uninstall only the Helm release and failed
+hook Job, verify the PVC remains `Bound`, then reinstall with the corrected chart. Never delete
+the PVC merely to clear Helm state.
+
+Verification passed: `kgbcia` logged in through the external Bolt Service; raw graph `CREATE`
+was rejected; the configured AWS integration smoke test passed; and a local-stdio MCP server
+answered a direct-edge "why does A connect to B?" question with lineage. `kgbcia` can create
+and drop system users on Neo4j Community even though graph writes are rejected. This known risk
+must be explicitly accepted before any broader/public exposure, or the documented
+`NEO4J_AUTH=none` alternative must be selected.
 
 ### Current chart review
 

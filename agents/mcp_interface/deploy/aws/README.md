@@ -9,6 +9,41 @@ Neo4j's database-wide read-only setting protect graph data, but Neo4j Community 
 role-based access control; the known ability of `kgbcia` to manage system users is documented
 in the parent [runbook](../RUNBOOK.md).
 
+## Current deployment handoff (November 12, 2026)
+
+The LitCoin development-sample deployment is active as Helm release **`kgb-mcp`** in namespace
+**`kgb-mcp`**. It uses the chart at `../helm/kgb-mcp` with its default `values.yaml` plus this
+directory's `values-aws-test.yaml`. It does **not** use `../helm/kgb-mcp/values-aws.yaml`,
+which is reserved for a future real graph and is too large for this development instance.
+The test overlay gives Neo4j a 5 Gi local-path PVC, 2 CPU / 4 GiB limit, 1 GiB initial / 2 GiB
+maximum heap, 1 GiB page cache, Bolt-only `LoadBalancer` exposure, and `mcp.enabled=false`.
+
+The private LitCoin `kgb.dump` was supplied only as a two-hour presigned URL at install time.
+The `download-dump` init container verified its SHA-256; `load-dump` then ran
+`neo4j-admin database load --overwrite-destination`. A checksum-keyed
+`.kgbcia-load.sha256` marker resides on PVC `data-kgb-mcp-neo4j-0`. Keep that PVC to preserve
+the loaded database: pod restarts and re-installs with the same dump checksum skip both download
+and load. If the PVC is lost or deliberately deleted, generate a fresh presigned URL and load
+the dump again. The public artifacts tarball is consumed by each laptop-local stdio MCP process,
+not by this AWS chart while MCP is disabled.
+
+Verification completed successfully from a laptop: Bolt login as `kgbcia`, raw graph-write
+rejection, the configured integration smoke test, and a local `kgbcia-mcp serve` lineage answer
+for a direct edge. `kgbcia` was also confirmed able to create and drop system users despite the
+read-only graph database. That Neo4j Community risk remains an explicit decision before any
+broader/public exposure.
+
+### Interrupted-install recovery already exercised
+
+An SSM inactivity timeout can terminate the local Helm client without rolling back Kubernetes
+resources. During this deployment that left revision 1 in `pending-install` after the PVC had
+already loaded successfully. Preserve the PVC in this situation. The original account hook also
+created `kgbcia` and then failed because Neo4j treats an unchanged `ALTER USER` password as an
+error. The corrected `user-job.yaml` accepts only `Old password and new password cannot be the
+same.` as idempotent success. If this recovery is needed again: use the corrected checkout,
+uninstall the stuck Helm release and delete only its failed hook Job, verify the PVC remains
+`Bound`, then rerun `install.sh`. Do **not** delete the PVC merely to recover Helm state.
+
 ## 1. On the laptop: create a short-lived dump URL
 
 Confirm that the development-sample checksums are the release values in the parent runbook,
@@ -71,8 +106,8 @@ export KGB_MCP_ARTIFACTS="$ARTIFACTS_URL"
 export KGB_MCP_ARTIFACTS_SHA256="$ARTIFACTS_SHA256"
 ```
 
-Stop here and report the host/install result. The next checkpoint verifies Bolt login,
-read-only enforcement, integration tests, and a local `kgbcia-mcp serve` lineage answer.
+For a new deployment or recovery, then verify Bolt login, read-only enforcement, the integration
+tests, and a local `kgbcia-mcp serve` lineage answer as recorded in the handoff section above.
 
 ## Operations
 
