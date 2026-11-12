@@ -43,8 +43,13 @@ edge itself, in FLAGS_FIELD (`kgbcia_flags`, the flag names) and REASONS_FIELD
 (`kgbcia_flag_reasons`, one plain sentence per flag, in the same order), so the MCP interface can
 tell a user that an edge is in question and why. Both are lists of strings, which Neo4j stores
 as they are; any the input already had are replaced, so a second cleaning pass doesn't stack
-them. A flag list is a `.jsonl` file in the flag-lists directory, keyed like a drop list, with a
-`flag` and a `reason` on each line: how a check outside this module, such as the evidence
+them. The one exception is `rare_category_combination`, which is a statistic of the graph it
+was computed on: a later pass runs on a subgraph of it (the final pass after augmentation sees
+one request's cut from the filter), a biased sample that can't contradict it, so the flag and
+reason the input carries are kept, and any the pass finds in its own input are added. A flag
+list is a
+`.jsonl` file in the flag-lists directory, keyed like a drop list, with a `flag` and a `reason`
+on each line: how a check outside this module, such as the evidence
 check, marks edges without dropping them (a paper reporting a different mechanism than the
 edge's qualifier).
 
@@ -97,6 +102,9 @@ LISTED_FLAGS = (
 BROKEN_ID_PREFIXES = ("OBA:VT", "phenopacket.store:")
 FLAGS_FIELD = "kgbcia_flags"
 REASONS_FIELD = "kgbcia_flag_reasons"
+# the reason an input edge already carried for rare_category_combination, carried between the
+# edge passes in the temporary file only; never written to edges.jsonl
+INHERITED_RARE_FIELD = "_kgbcia_inherited_rare_reason"
 # Type violations promoted to drops: (predicate, side that fails) -> the most specific categories
 # of that end that make the edge wrong. Decided from names on the Nov 9 graph: DrugCentral
 # `treats` edges to "General Anesthesia" (Procedure), "Asthma management" (ClinicalIntervention),
@@ -235,6 +243,8 @@ class Report:
     unresolved_nodes_by_prefix: Counter = field(default_factory=Counter)
     flags: Counter = field(default_factory=Counter)
     flags_by_source: dict = field(default_factory=lambda: defaultdict(Counter))
+    # flags kept from the input rather than found here (counted in flags too)
+    flags_inherited: Counter = field(default_factory=Counter)
     edges_out_by_source: Counter = field(default_factory=Counter)
     examples: dict = field(default_factory=lambda: defaultdict(list))
     type_violations_by_predicate: Counter = field(default_factory=Counter)
@@ -269,12 +279,17 @@ class Report:
                 )
         return sorted(found, key=lambda a: (-a["share_dropped"], -a["edges_in"]))
 
+    def edges_per_predicate(self) -> Counter:
+        """Kept edges by predicate."""
+        per_predicate: Counter = Counter()
+        for (_, predicate, _), n in self.combinations.items():
+            per_predicate[predicate] += n
+        return per_predicate
+
     def rare_combinations(self) -> list[dict]:
         """Category combinations rare for their predicate: a subject or object whose category
         almost never takes this predicate, which is how a wrong NodeNorm category shows up."""
-        per_predicate = Counter()
-        for (_, predicate, _), n in self.combinations.items():
-            per_predicate[predicate] += n
+        per_predicate = self.edges_per_predicate()
         found = []
         for (s_cats, predicate, o_cats), n in self.combinations.items():
             total = per_predicate[predicate]
@@ -332,6 +347,7 @@ class Report:
                 source: dict(counts.most_common())
                 for source, counts in sorted(self.flags_by_source.items())
             },
+            "flags_inherited": dict(self.flags_inherited.most_common()),
             "edges_out_by_source": dict(self.edges_out_by_source.most_common()),
             "flagged_edges": self.flagged_edges,
             "type_violations_by_predicate": dict(self.type_violations_by_predicate.most_common()),
@@ -418,6 +434,15 @@ def edge_flags(
         yield "agent_type_not_provided"
     if biolink_types.violation(edge["predicate"], subject_categories, object_categories):
         yield "type_violation"
+
+
+def inherited_rare_reason(edge: dict) -> str | None:
+    """The reason an input edge already carries for `rare_category_combination`, if any."""
+    flags, reasons = edge.get(FLAGS_FIELD) or [], edge.get(REASONS_FIELD) or []
+    for flag, reason in zip(flags, reasons, strict=False):  # a hand-edited edge may differ
+        if flag == "rare_category_combination" and reason:
+            return reason
+    return None
 
 
 def short(curie_or_category: str) -> str:
@@ -539,6 +564,7 @@ def collect(
     unflagged = output_dir / "edges.unflagged.tmp"
     with open(unflagged, "w") as out:
         for edge in read_jsonl(edges_path):
+            inherited = inherited_rare_reason(edge)
             edge.pop(FLAGS_FIELD, None)
             edge.pop(REASONS_FIELD, None)
             report.edges_in += 1
@@ -572,6 +598,8 @@ def collect(
             used.add(edge["object"])
             report.edges_out += 1
             report.edges_out_by_source[source] += 1
+            if inherited:
+                edge[INHERITED_RARE_FIELD] = inherited
             out.write(json.dumps(edge) + "\n")
 
     with open(output_dir / "unresolved_nodes.tsv", "w") as out:
@@ -602,8 +630,14 @@ def collect(
             s_cats, o_cats = profiles[s_profile], profiles[o_profile]
             s_spec, o_spec = specific[s_profile], specific[o_profile]
             flags = list(edge_flags(edge, s_cats, o_cats, unresolved_ids))
+            inherited = edge.pop(INHERITED_RARE_FIELD, None)
             if (s_spec, edge["predicate"], o_spec) in rare:
                 flags.append("rare_category_combination")
+                inherited = None
+            elif inherited:
+                # computed on the graph this input was cut from, which this pass can't see
+                flags.append("rare_category_combination")
+                report.flags_inherited["rare_category_combination"] += 1
             also = opposing.get((edge["subject"], edge["object"]), set())
             if edge["predicate"] in also:
                 flags.append("opposing_predicate")
@@ -619,7 +653,9 @@ def collect(
                 else None
             )
             reasons = [
-                flag_reason(flag, edge, s_spec, o_spec, unresolved_ids, also, side)
+                inherited
+                if inherited and flag == "rare_category_combination"
+                else flag_reason(flag, edge, s_spec, o_spec, unresolved_ids, also, side)
                 for flag in listed
             ]
             listed += [flag for flag, _ in from_lists]

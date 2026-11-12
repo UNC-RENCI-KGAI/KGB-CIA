@@ -370,7 +370,8 @@ def test_opposing_counts_edges_and_includes_narrower_predicates(tmp_path):
     ]
 
 
-def test_rare_category_combination(tmp_path):
+def _rare_graph(tmp_path):
+    """1,500 gene-gene interacts_with edges and one gene-procedure one: a rare combination."""
     nodes = [
         {
             "id": f"X:{i}",
@@ -392,6 +393,11 @@ def test_rare_category_combination(tmp_path):
     graph.mkdir()
     _write(graph / "nodes.jsonl", nodes)
     _write(graph / "edges.jsonl", edges)
+    return graph
+
+
+def test_rare_category_combination(tmp_path):
+    graph = _rare_graph(tmp_path)
     report = garbage.collect(graph, tmp_path / "out")
     rare = report.rare_combinations()
     assert [(c["subject_categories"], c["object_categories"], c["edges"]) for c in rare] == [
@@ -402,6 +408,56 @@ def test_rare_category_combination(tmp_path):
     assert report.flags_by_source["infores:test"]["rare_category_combination"] == 1
     [flagged] = _read(tmp_path / "out" / "flagged_edges.jsonl")
     assert flagged["object"] == "T:1" and flagged["flags"] == ["rare_category_combination"]
+
+
+def test_rare_flag_survives_a_pass_on_a_subgraph(tmp_path):
+    # The final pass runs on one request's subgraph (filter, then augmentation), a biased sample
+    # of the graph the flag was computed on, so it keeps what the first pass found
+    first = tmp_path / "first"
+    garbage.collect(_rare_graph(tmp_path), first)
+    rare_edge = next(e for e in _read(first / "edges.jsonl") if e["object"] == "T:1")
+    common = [e for e in _read(first / "edges.jsonl") if e["object"] != "T:1"][:2]
+    cut = tmp_path / "cut"
+    cut.mkdir()
+    _write(cut / "nodes.jsonl", _read(first / "nodes.jsonl"))
+    _write(cut / "edges.jsonl", [rare_edge, *common])
+    report = garbage.collect(cut, tmp_path / "final")
+    final = {e["object"]: e for e in _read(tmp_path / "final" / "edges.jsonl")}
+    assert final["T:1"]["kgbcia_flags"] == ["rare_category_combination"]
+    assert final["T:1"]["kgbcia_flag_reasons"] == rare_edge["kgbcia_flag_reasons"]
+    assert "kgbcia_flags" not in final["X:1"]
+    assert not any(k.startswith("_kgbcia") for e in final.values() for k in e)
+    assert report.flags["rare_category_combination"] == 1
+    assert report.flags_inherited == {"rare_category_combination": 1}
+    assert report.rare_combinations() == []  # not recomputed, inherited
+    [flagged] = _read(tmp_path / "final" / "flagged_edges.jsonl")
+    assert flagged["object"] == "T:1"
+
+
+def test_rare_flags_found_here_are_added_to_inherited_ones_without_doubling(tmp_path):
+    # A second pass on the same graph finds the rare combination again: one flag, counted as
+    # found here, not inherited. One it can't see is inherited beside it.
+    first = tmp_path / "first"
+    garbage.collect(_rare_graph(tmp_path), first)
+    edges = _read(first / "edges.jsonl")
+    common = next(e for e in edges if e["object"] != "T:1")
+    common["kgbcia_flags"] = ["rare_category_combination"]
+    common["kgbcia_flag_reasons"] = ["from a larger graph this one was cut from"]
+    again = tmp_path / "again"
+    again.mkdir()
+    _write(again / "nodes.jsonl", _read(first / "nodes.jsonl"))
+    _write(again / "edges.jsonl", edges)
+    report = garbage.collect(again, tmp_path / "second")
+    second = _read(tmp_path / "second" / "edges.jsonl")
+    flagged = [e for e in second if "kgbcia_flags" in e]
+    assert len(flagged) == 2
+    assert all(e["kgbcia_flags"] == ["rare_category_combination"] for e in flagged)
+    assert next(e["kgbcia_flag_reasons"] for e in flagged if e["object"] != "T:1") == [
+        "from a larger graph this one was cut from"
+    ]
+    assert report.flags["rare_category_combination"] == 2
+    assert report.flags_inherited == {"rare_category_combination": 1}
+    assert len(report.rare_combinations()) == 1
 
 
 def test_violation_rules():
