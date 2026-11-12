@@ -47,10 +47,12 @@ The original reasoning is in `docs/agent_plan.md`; where this list differs, this
   metadata, builds each source, and merges them into one graph with ORION's merge rules
   (`merged/`). Wrapping ORION by hand as the whole stage was ruled out; the agent writes the
   parsers.
-- **cleaning**: `kgb-clean` drops edges that can't be right (no provenance, a node NodeNorm
-  couldn't resolve or that doesn't exist, or listed in a drop list) and flags suspicious ones
-  without removing them (Biolink type violations, rare category combinations, opposing
-  predicates, self-loops), writing each flag and its reason onto the edge (`kgbcia_flags`,
+- **cleaning**: `kgb-clean` drops edges that can't be right (no provenance, a node that doesn't
+  exist, both ends unresolved by NodeNorm or an id that is wrong rather than unknown, a drop
+  list, or a `treats` edge to a category that can't be treated), keeps an edge with one
+  unresolved end and flags it `unresolved_node`, and flags other suspicious ones without
+  removing them (Biolink type violations, rare category combinations, opposing predicates,
+  self-loops), writing each flag and its reason onto the edge (`kgbcia_flags`,
   `kgbcia_flag_reasons`) and listing flagged edges in `flagged_edges.jsonl`. It runs twice: on the
   merged graph before the filter, and as `final_cleaning` on augmentation's output, applying the
   drop lists and flag lists the evidence check wrote. An edge isn't dropped just because no
