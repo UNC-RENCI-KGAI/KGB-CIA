@@ -10,11 +10,15 @@ why. Maps to the accuracy and pruning criterion.
 ```bash
 uv run kgb-clean                                # data/transformation/merged -> data/cleaning
 uv run kgb-clean --input <dir> --output <dir>   # only when the graph lives somewhere else
+uv run kgb-clean --input data/augmentation --output data/final --drop-lists data/cleaning/drop_lists
 ```
 
-There are no options to choose between: every rule always applies, so the pipeline's
-no-argument run is the real run. To drop more edges, put a drop list in `<output>/drop_lists/`
-(see below) rather than passing anything.
+There are no rules to choose between: every rule always applies. To drop more edges, put a drop
+list in `<output>/drop_lists/` (see below) rather than passing anything. The pipeline runs
+cleaning twice: first on the merged graph with no arguments, then as `final_cleaning` on
+augmentation's output (the third line). `--drop-lists` is only for that second pass, which
+reads the drop lists the evidence check wrote for the first pass's output directory, and the
+flag lists beside them (`data/cleaning/flag_lists`), since the two folders travel together.
 
 ## Input / output
 
