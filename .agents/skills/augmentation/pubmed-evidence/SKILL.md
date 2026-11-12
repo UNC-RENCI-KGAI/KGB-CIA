@@ -50,8 +50,8 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 | `augment.py pubmed [--limit N] [--max-abstracts N] [--refresh]` | Step 2: one PubMed search per pair (names, synonyms, MeSH), the abstracts it finds and those the edges already cite |
 | `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and the review model repairs evidence sentences that weren't found |
 | `augment.py ground [--refresh]` | Step 4: the anatomy the claims name, to UBERON terms; pins the UBERON release. No model calls |
-| `augment.py review [--model M]` | Step 5: a stronger model upholds or rejects, in one pass, each claim that would count: one that would add a PMID to an edge or propose a more specific edge |
-| `augment.py apply [--no-review] [--species-in-proposals]` | Step 6: refine each checked edge from its pair's claims (its supporting PMIDs, and the more specific edges they propose) and write the graph, `refinements.jsonl` and `apply_report.json` |
+| `augment.py review [--model M] [--review-support-only]` | Step 5: a stronger model upholds or rejects, in one pass, each claim that would count: one that would add a PMID to an edge or propose a more specific edge. A support-only statement (`ameliorates_condition` under `treats`, `config.SUPPORT_ONLY`) isn't sent unless `--review-support-only` |
+| `augment.py apply [--no-review] [--species-in-proposals] [--review-support-only]` | Step 6: refine each checked edge from its pair's claims (its supporting PMIDs, and the more specific edges they propose) and write the graph, `refinements.jsonl` and `apply_report.json` |
 | `augment.py evaluate [--gold FILE] [--run MODEL[@PROMPT_VERSION] ...] [--species-in-proposals]` | Score a run's claims, and the support, PMIDs and proposals they lead to, against a curator's gold set |
 | `augment.py evaluate --draw N [--seed S]` | Draw N pairs for a gold set from `refinements.jsonl`, stratified by outcome (unsupported, supported, refined) and predicate family, into `work/gold_pairs.jsonl` |
 | `augment.py` | Every step but evaluate, in order: what the pipeline runs |
@@ -193,7 +193,9 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    Read a few lines of `work/refinements.jsonl`, and look up two or three added PMIDs and
    proposed edges' PMIDs in their abstracts to confirm they say what the edge says. Proposed
    edges carry no species unless you pass `--species-in-proposals`; the originals' support is
-   the same either way.
+   the same either way. `ameliorates_condition` is never proposed under a `treats` edge; such a
+   claim only supports it, unreviewed unless review and apply both got
+   `--review-support-only`.
 
 10. **Write `work/notes.md`:** the commands you ran, counts from each step's summary, the
     prompt changes and why, the model choice and its basis, the total cost (from the label and

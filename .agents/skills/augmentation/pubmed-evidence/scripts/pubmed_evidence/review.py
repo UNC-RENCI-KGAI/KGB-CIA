@@ -11,8 +11,11 @@ The claims sent are those of each bundled pair (`bundle.py`) that would count if
 (`refine.would_count`): quote-checked, from a paper not retracted, not a hypothesis, and with a
 statement narrower than or equal to an in-scope edge's. A positive claim's statements are its
 own and those it also supports (`also_supports`); a negative claim's are only the latter.
-Claims that only add a PMID to an edge are among them. Each claim's effect is independent of
-the others', so one pass sends every such claim with no verdict yet. One whose call fails, or
+Claims that only add a PMID to an edge are among them, but not those that add it only through a
+statement config.SUPPORT_ONLY exempts (`ameliorates` under a `treats` edge), which step 6
+counts unreviewed, unless config.REVIEW_SUPPORT_ONLY or `--review-support-only` sends them.
+Each claim's effect is independent of the others', so one pass sends every such claim with no
+verdict yet. One whose call fails, or
 that a reply leaves out, stays unreviewed: step 6 holds its pair, and the next run sends it
 again.
 
@@ -299,16 +302,25 @@ def _load(
     return loaded, synonyms
 
 
-def to_review(loaded: Bundles) -> tuple[dict[str, list[Item]], dict[str, list[Item]]]:
-    """Each pair's claims that would count if upheld (`refine.would_count`), in its claims'
-    order: those with no verdict of this review yet, which the pass sends, and those with one,
-    upheld or rejected, which it doesn't. Pairs with none are left out. Identical claims of an
+def to_review(
+    loaded: Bundles, review_support_only: bool | None = None
+) -> tuple[dict[str, list[Item]], dict[str, list[Item]]]:
+    """Each pair's claims that would count if upheld (`refine.would_count`, with
+    `review_support_only`, default config.REVIEW_SUPPORT_ONLY), in its claims' order: those
+    with no verdict of this review yet, which the pass sends, and those with one, upheld or
+    rejected, which it doesn't. Pairs with none are left out. Identical claims of an
     abstract share a key, and so one item."""
     unreviewed: dict[str, list[Item]] = {}
     reviewed: dict[str, list[Item]] = {}
     for b in loaded.pairs:
         items: dict[ClaimKey, Item] = {}
-        for i in refine.would_count(b.edges, b.claims, loaded.lattice, loaded.categories):
+        for i in refine.would_count(
+            b.edges,
+            b.claims,
+            loaded.lattice,
+            loaded.categories,
+            review_support_only=review_support_only,
+        ):
             items.setdefault(b.keys[i], Item(b.keys[i], b.claims[i].record))
         for item in items.values():
             side = unreviewed if item.record.review is None else reviewed
@@ -349,6 +361,7 @@ def review_claims(
     reasoning_effort: str | None = None,
     max_output_tokens: int | None = None,
     limit: int | None = None,
+    review_support_only: bool | None = None,
 ) -> dict[str, Any]:
     """Review, with `model`, in one pass, the claims of the run `label_run.json` names that
     would count and have no verdict of this review yet (`to_review`); store the verdicts and,
@@ -357,8 +370,12 @@ def review_claims(
     edges the claims would count for. `client` (anything with a client's `call`) is built from
     `model` if not given and there is something to send, with `max_output_tokens` and
     `reasoning_effort` overriding the model's own settings. `limit` reviews only the first
-    pairs by id. Raises ReviewError for a missing input or an unusable model."""
+    pairs by id. `review_support_only` (default config.REVIEW_SUPPORT_ONLY) sends the claims
+    that would count only through a statement config.SUPPORT_ONLY exempts too. Raises
+    ReviewError for a missing input or an unusable model."""
     work, cache_dir, prompt = Path(work), Path(cache_dir), Path(prompt)
+    if review_support_only is None:
+        review_support_only = config.REVIEW_SUPPORT_ONLY
     run = resolve_label_run(work)
     try:
         system, version = review_prompt(prompt, model, reasoning_effort)
@@ -372,12 +389,13 @@ def review_claims(
         "reviewer": reviewer,
         "review_prompt_version": version,
         "reasoning_effort": effort,
+        "review_support_only": review_support_only,
     }
     warning = repair.stale(run)
     if warning:
         print(f"review: warning: {warning}", file=sys.stderr)
     loaded, synonyms = _load(work, cache_dir, Path(input_dir), run, reviewer, version, limit)
-    groups, before = to_review(loaded)
+    groups, before = to_review(loaded, review_support_only)
     calls = batches(groups)
     summary |= {
         "pairs": len(loaded.pairs),
@@ -492,6 +510,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--limit", type=int, default=None, help="review only the first N pairs by id"
     )
+    parser.add_argument(
+        "--review-support-only",
+        action=argparse.BooleanOptionalAction,
+        default=config.REVIEW_SUPPORT_ONLY,
+        help="also review the claims that support an edge only through a narrower predicate "
+        "config.SUPPORT_ONLY lists under its own ('ameliorates' under 'treats'); without it, "
+        "step 6 counts them unreviewed (give apply the same flag)",
+    )
 
 
 def _print_review(s: dict[str, Any]) -> None:
@@ -512,6 +538,12 @@ def _print_review(s: dict[str, Any]) -> None:
         f"{v['reject']} rejected; {s['omitted']} left out of the replies (sent again next run), "
         f"{s['repeated']} repeated entries"
     )
+    if not s["review_support_only"]:
+        print(
+            "review: claims that support an edge only through a support-only predicate "
+            "(config.SUPPORT_ONLY) not sent; step 6 counts them unreviewed "
+            "(--review-support-only sends them)"
+        )
     if s["unreviewed"]:
         print(
             f"review: {s['unreviewed']} claims that would count still have no verdict; step 6 "
@@ -547,6 +579,7 @@ def run(args: argparse.Namespace) -> int:
             reasoning_effort=args.reasoning_effort,
             max_output_tokens=args.max_output_tokens,
             limit=args.limit,
+            review_support_only=args.review_support_only,
         )
     except ReviewError as e:
         print(f"review: {e}", file=sys.stderr)

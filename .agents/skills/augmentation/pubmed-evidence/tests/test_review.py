@@ -200,6 +200,24 @@ def test_claims_that_would_not_count_are_not_sent(scene):
     assert counts(s) == (10, 0, 10, 0, 2, 2)
 
 
+def test_a_support_only_claim_is_sent_only_with_review_support_only(scene):
+    """Rule 11: "imatinib ameliorates CML" only supports the treats edge, so it isn't sent
+    unless `review_support_only` asks for it."""
+    relieved = "Imatinib relieved the symptoms of chronic myeloid leukemia"
+    scene.abstract(TREATS_PAIR, "105", f"{relieved}.")
+    ameliorates = statement(IMATINIB, "biolink:ameliorates_condition", CML)
+    scene.answer(TREATS_PAIR, "105", stored(ameliorates, sentence=relieved))
+    client = reviewer()
+    s = run_review(scene, client)
+    assert sent_pmids(client) == [set(TRIALS_PMIDS), set(GENE_PMIDS)]
+    assert counts(s) == (10, 0, 10, 0, 2, 2) and not s["review_support_only"]
+
+    client = reviewer()
+    s = run_review(scene, client, review_support_only=True)
+    assert sent_pmids(client) == [{"105"}]
+    assert counts(s) == (1, 10, 1, 0, 1, 3) and s["review_support_only"]
+
+
 def test_identical_claims_of_an_abstract_are_sent_once(scene):
     """They share a key, and so a verdict."""
     scene.abstract(TREATS_PAIR, "105", f"{TESTED}.")

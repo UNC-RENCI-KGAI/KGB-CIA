@@ -461,6 +461,27 @@ def test_an_unreviewed_claim_holds_its_pair_only_when_it_would_count(world, caps
     assert f"1 pairs have claims that would count but no review ({REVIEWER} hasn't" in err
 
 
+def test_a_support_only_claim_counts_unreviewed_and_proposes_nothing(world):
+    """Rule 11: an unreviewed "imatinib ameliorates CML" adds its PMID to the treats edge and
+    proposes nothing; with `review_support_only`, its missing review holds the pair."""
+    scene(world)
+    relieved = "Imatinib relieved the symptoms of chronic myeloid leukemia"
+    world.abstract(TREATS_PAIR, "105", f"{relieved}.")
+    ameliorates = statement(IMATINIB, "biolink:ameliorates_condition", CML)
+    world.answer(TREATS_PAIR, "105", stored(ameliorates, sentence=relieved, species=None))
+    review(world, {"105": None})
+    report, edges = run_apply(world)
+    treats = edges[0]
+    assert treats["lit_supporting_publications"] == ["PMID:101", "PMID:102", "PMID:105"]
+    assert treats["lit_refined_by"] == [] and report["proposed"]["edges"] == 1  # in the liver
+    assert report["held"]["pairs_unreviewed"] == 0
+    assert report["run"]["review_support_only"] is False
+
+    report, edges = run_apply(world, review_support_only=True)
+    assert edges[0] == dump(TREATS_EDGE)
+    assert report["held"]["pairs_unreviewed"] == 1 and report["run"]["review_support_only"]
+
+
 def test_without_a_review_pairs_are_held_and_no_review_writes_them(world, capsys):
     scene(world)
     report, edges = run_apply(world)

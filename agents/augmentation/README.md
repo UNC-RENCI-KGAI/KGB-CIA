@@ -45,6 +45,9 @@ labels at another effort (default: the model's own, low for gpt-6-luna). `--skip
 out the review: step 6 then holds every pair with a claim that would count but has no review,
 and writes its edges unchanged. `kgb-augment apply --species-in-proposals` keeps the species in
 proposed edges, which `SPECIES_IN_PROPOSALS` in the skill's `config.py` leaves out by default.
+`ameliorates_condition` is never proposed under a `treats` edge (`SUPPORT_ONLY`): such a claim
+only adds its PMID, and by default without review. `--review-support-only` on both `review` and
+`apply` (or `REVIEW_SUPPORT_ONLY`) reviews those claims and counts only the upheld ones.
 
 ## Input / output
 

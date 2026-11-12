@@ -22,6 +22,11 @@ them ("rule 2"). Pure: no I/O and no model calls. Biolink's hierarchies come fro
   strictly narrower than the edge is proposed, once per pair however many claims make it or
   edges it refines. A proposal an edge of the pair already makes is a link to that edge, not a
   new edge. A pair is held while a claim that would count has no review.
+- **Support only** (rule 11). A statement narrower than an edge only by a predicate
+  config.SUPPORT_ONLY lists under the edge's ("ameliorates" under "treats") supports the edge
+  and is never proposed under it. Unless `review_support_only` (config.REVIEW_SUPPORT_ONLY), it
+  needs no review: it counts without a verdict, unless the claim was rejected, and alone it
+  neither sends a claim to review nor holds a pair.
 - **Species in proposals** (rule 7). `without_species` takes the species out of a pair's
   proposals, as step 6 does unless config.SPECIES_IN_PROPOSALS keeps it: those that become the
   same statement merge, one that becomes an edge it refines no longer refines that edge, and
@@ -35,7 +40,7 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
 
-from pubmed_evidence import biolink, graphio
+from pubmed_evidence import biolink, config, graphio
 from shared.schema import ClaimRecord, Edge, PublicationEvidence, Statement
 
 QUALIFIED_PREDICATE = "qualified_predicate"
@@ -326,13 +331,32 @@ def _counts(claim: Claim, require_review: bool) -> bool:
     return eligible(claim) and (review == "upheld" or (review is None and not require_review))
 
 
+def support_only(statement: Statement, target: Statement) -> bool:
+    """Whether the statement, if narrower than the target, only supports it (rule 11): its
+    predicate is one config.SUPPORT_ONLY lists under the target's, or below one."""
+    return any(
+        biolink.is_a(statement.predicate, p) for p in config.SUPPORT_ONLY.get(target.predicate, ())
+    )
+
+
+def _review_support_only(flag: bool | None) -> bool:
+    return config.REVIEW_SUPPORT_ONLY if flag is None else flag
+
+
 def _would_count(
-    lattice: Lattice, stated: Sequence[tuple[Statement, ...]], targets: Sequence[Statement]
+    lattice: Lattice,
+    stated: Sequence[tuple[Statement, ...]],
+    targets: Sequence[Statement],
+    review_support_only: bool,
 ) -> list[int]:
     return [
         i
         for i, statements in enumerate(stated)
-        if any(narrower(lattice, s, t) for s in statements for t in targets)
+        if any(
+            narrower(lattice, s, t) and (review_support_only or not support_only(s, t))
+            for s in statements
+            for t in targets
+        )
     ]
 
 
@@ -341,13 +365,18 @@ def would_count(
     claims: Sequence[Claim],
     lattice: Lattice,
     categories: Mapping[str, Sequence[str]] | None = None,
+    *,
+    review_support_only: bool | None = None,
 ) -> tuple[int, ...]:
     """The indices of the claims that would count if upheld (DESIGN.md's step 5), whatever their
     review: those that could count (`_could_count`) with a statement narrower than or equal to
-    some edge's in `edges`, the pair's in-scope edges. Step 5 reviews those without a verdict,
-    and step 6 holds the pair while one has none."""
+    some edge's in `edges`, the pair's in-scope edges. A statement that only supports the edge
+    (`support_only`) needs no review, so it doesn't make a claim one of these, unless
+    `review_support_only` (default config.REVIEW_SUPPORT_ONLY). Step 5 reviews those without a
+    verdict, and step 6 holds the pair while one has none."""
     stated = [statements_of(c, categories) if _could_count(c) else () for c in claims]
-    return tuple(_would_count(lattice, stated, [statement_of(e) for e in edges]))
+    targets = [statement_of(e) for e in edges]
+    return tuple(_would_count(lattice, stated, targets, _review_support_only(review_support_only)))
 
 
 # --- Refinement ---
@@ -462,8 +491,9 @@ def refine_pair(
     others: Sequence[Edge] = (),
     *,
     require_review: bool = True,
+    review_support_only: bool | None = None,
 ) -> PairRefinement:
-    """One pair's refinement from its claims (rules 1 to 6).
+    """One pair's refinement from its claims (rules 1 to 6, and 11).
 
     `edges` are the pair's in-scope edges and `others` the ones select left out; each needs its
     `id`. `categories` maps node ids to Biolink categories, for the claims' context and the
@@ -472,9 +502,12 @@ def refine_pair(
     without it, which is for testing only, unreviewed claims count too.
 
     Each edge is supported by the counting claims with a statement narrower than or equal to
-    its own, and each of those statements strictly narrower than the edge is proposed. A
-    statement is one proposal however many claims make it or edges it refines. A proposal that
-    isn't `valid` either way round is dropped, and its claims still support the edge. One whose
+    its own, and each of those statements strictly narrower than the edge is proposed, but one
+    that only supports it (`support_only`). Unless `review_support_only` (default
+    config.REVIEW_SUPPORT_ONLY), such a statement counts without review too: a claim not
+    rejected supports the edge through it whatever its verdict. A statement is one proposal
+    however many claims make it or edges it refines. A proposal that isn't `valid` either way
+    round is dropped, and its claims still support the edge. One whose
     statement an edge of the pair already makes is a link to that edge. A species narrows like
     any other qualifier; `without_species` takes it out (rule 7). The output depends on the
     claims' order only through the index tuples.
@@ -483,12 +516,15 @@ def refine_pair(
         if edge.id is None:
             raise ValueError("an edge needs its id to be refined; give it graphio.edge_id first")
     lattice = lattice if lattice is not None else Lattice()
+    review_support_only = _review_support_only(review_support_only)
     stated = [statements_of(c, categories) if _could_count(c) else () for c in claims]
     targets = [statement_of(e) for e in edges]
     unreviewed = tuple(
-        i for i in _would_count(lattice, stated, targets) if claims[i].record.review is None
+        i
+        for i in _would_count(lattice, stated, targets, review_support_only)
+        if claims[i].record.review is None
     )
-    counting = [i for i, c in enumerate(claims) if stated[i] and _counts(c, require_review)]
+    live = [i for i, c in enumerate(claims) if stated[i] and eligible(c)]
 
     keys = [statement_key(t) for t in targets]
     made: dict[str, dict[str, None]] = {}  # statement key -> ids of the pair's edges making it
@@ -501,12 +537,18 @@ def refine_pair(
     found: dict[str, _Found] = {}
     for n, (target, key) in enumerate(zip(targets, keys, strict=True)):
         mine = []
-        for i in counting:
+        for i in live:
             below = [s for s in stated[i] if narrower(lattice, s, target)]
             if not below:
                 continue
+            proposing = [s for s in below if not support_only(s, target)]
+            if not _counts(claims[i], require_review):
+                # Not upheld: it counts only through statements that need no review.
+                if review_support_only or len(proposing) == len(below):
+                    continue
+                proposing = []
             mine.append(i)
-            for s in below:
+            for s in proposing:
                 k = statement_key(s)
                 if k != key:
                     f = found.setdefault(k, _Found(s))

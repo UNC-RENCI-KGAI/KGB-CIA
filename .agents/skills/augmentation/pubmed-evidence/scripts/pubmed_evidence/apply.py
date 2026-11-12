@@ -38,6 +38,11 @@ their numbers ("rule 4"). No model is called, so the graph can be rebuilt from t
   claim names anatomy the ground step never looked up (`kgb-augment ground` clears it), so that
   a partial run never writes a partial answer. `--no-review` counts the unreviewed claims
   instead, for testing only; a rejected claim counts for nothing either way.
+- **Support only** (rule 11). A claim statement narrower than an edge only by a predicate
+  config.SUPPORT_ONLY lists under the edge's (`ameliorates_condition` under `treats`) supports
+  the edge but is never proposed under it, and, unless config.REVIEW_SUPPORT_ONLY or
+  `--review-support-only`, counts without review and holds no pair. Give `review` the same
+  flag: a claim it didn't send holds its pair here until it is reviewed.
 - **Unchecked edges** pass through as read, apart from their `id`: those out of scope, and those
   in a pair that isn't fully labeled after a failed call, or with claims a stopped label run
   never checked, which the next label run finishes.
@@ -186,10 +191,12 @@ def refine_pairs(
     loaded: Bundles,
     require_review: bool = True,
     species_in_proposals: bool = config.SPECIES_IN_PROPOSALS,
+    review_support_only: bool = config.REVIEW_SUPPORT_ONLY,
 ) -> Refinements:
     """Refine every bundled pair (`refine.refine_pair`). A pair with a claim that would count
     and has no review is held, unless `require_review` is False; a held pair contributes
-    nothing. Unless `species_in_proposals`, the species is taken out of the proposals
+    nothing. `review_support_only` requires review for support-only statements too (rule
+    11). Unless `species_in_proposals`, the species is taken out of the proposals
     (`refine.without_species`). Each edge's outcome is kept by its id, the first one where an
     edge is listed twice (identical records; `bundle.edges_of` refuses an id two different ones
     give)."""
@@ -202,6 +209,7 @@ def refine_pairs(
             loaded.categories,
             b.others,
             require_review=require_review,
+            review_support_only=review_support_only,
         )
         if r.held:
             out.held.append(b.pair_id)
@@ -523,6 +531,7 @@ def apply_claims(
     *,
     require_review: bool = True,
     species_in_proposals: bool | None = None,
+    review_support_only: bool | None = None,
     model: str | None = None,
     prompt_version: str | None = None,
     reviewer: str | None = None,
@@ -530,12 +539,15 @@ def apply_claims(
 ) -> dict[str, Any]:
     """Refine the checked edges, write the graph to `output_dir` and `refinements.jsonl` and
     `apply_report.json` to `work`; return the report. `species_in_proposals` keeps the species
-    in proposed edges (default config.SPECIES_IN_PROPOSALS). Raises ApplyError on a problem with
-    the inputs."""
+    in proposed edges (default config.SPECIES_IN_PROPOSALS). `review_support_only` counts
+    support-only statements only once upheld (default config.REVIEW_SUPPORT_ONLY; rule 11).
+    Raises ApplyError on a problem with the inputs."""
     input_dir, output_dir, work = Path(input_dir), Path(output_dir), Path(work)
     cache_dir = Path(cache_dir)
     if species_in_proposals is None:
         species_in_proposals = config.SPECIES_IN_PROPOSALS
+    if review_support_only is None:
+        review_support_only = config.REVIEW_SUPPORT_ONLY
     if output_dir.resolve() == input_dir.resolve():
         raise ApplyError(f"output dir {output_dir} is the input dir; choose another")
     for name in (graphio.NODES, graphio.EDGES):
@@ -543,7 +555,7 @@ def apply_claims(
             raise ApplyError(f"{input_dir / name} not found")
     run = resolve_run(work, model, prompt_version, reviewer, review_prompt_version)
     loaded = _load(input_dir, cache_dir, work, run)
-    refined = refine_pairs(loaded, require_review, species_in_proposals)
+    refined = refine_pairs(loaded, require_review, species_in_proposals, review_support_only)
     scope = {
         s.statement_id for s in records.read_records(work / records.STATEMENTS, records.Statement)
     }
@@ -572,7 +584,11 @@ def apply_claims(
     stats = graph.stats
     report = {
         "run": run.model_dump()
-        | {"require_review": require_review, "species_in_proposals": species_in_proposals},
+        | {
+            "require_review": require_review,
+            "species_in_proposals": species_in_proposals,
+            "review_support_only": review_support_only,
+        },
         "input": str(input_dir),
         "output": str(output_dir),
         "uberon_version": loaded.uberon_version,
@@ -633,6 +649,12 @@ def summary(report: dict[str, Any]) -> list[str]:
         f"specific edges; {report['publications_added']} PMIDs added to their publications",
         f"proposed {proposed['edges']} new edges and {proposed['links']} links to edges that "
         f"already say it; species in proposals: {species}",
+        "support-only statements (config.SUPPORT_ONLY): never proposed, "
+        + (
+            "counted once upheld"
+            if run["review_support_only"]
+            else "counted unreviewed (--review-support-only requires review)"
+        ),
         f"held unchanged: {held['edges']} edges in {held['pairs_unreviewed']} pairs with claims "
         f"no review has judged and {held['pairs_anatomy_not_looked_up']} with anatomy the ground "
         "step never looked up",
@@ -666,6 +688,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "is taken out and the proposals that become the same are merged (the originals' support "
         "is the same either way)",
     )
+    parser.add_argument(
+        "--review-support-only",
+        action=argparse.BooleanOptionalAction,
+        default=config.REVIEW_SUPPORT_ONLY,
+        help="count a statement that supports an edge only through a narrower predicate "
+        "config.SUPPORT_ONLY lists under its own ('ameliorates' under 'treats') only once "
+        "review upheld its claim; without it, it counts unreviewed (give review the same flag)",
+    )
     parser.add_argument("--model", help="bulk model of the run (default: from label_run.json)")
     parser.add_argument(
         "--prompt-version", help="label prompt version (default: from label_run.json)"
@@ -685,6 +715,7 @@ def run(args: argparse.Namespace) -> int:
             args.work,
             require_review=not args.no_review,
             species_in_proposals=args.species_in_proposals,
+            review_support_only=args.review_support_only,
             model=args.model,
             prompt_version=args.prompt_version,
             reviewer=args.reviewer,

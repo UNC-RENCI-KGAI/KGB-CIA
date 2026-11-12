@@ -224,6 +224,19 @@ SPECIES_TAXA: dict[str, str | None] = {
 # `apply --species-in-proposals` turns it on.
 SPECIES_IN_PROPOSALS = False
 
+# Steps 5 and 6: narrower predicates that only support an edge of the key's predicate. A claim
+# statement whose predicate is one listed here, or below one, adds its PMID to such an edge
+# like any narrower statement, but is never proposed as a more specific edge than that edge:
+# label may say "ameliorates", but a `treats` edge isn't refined to it. Unless
+# REVIEW_SUPPORT_ONLY, step 5 doesn't review a claim for such a statement, and step 6 counts it
+# without a verdict; a rejected claim counts for nothing either way. With REVIEW_SUPPORT_ONLY,
+# review judges such a claim and only an upheld one counts, as for any other statement.
+# `review --review-support-only` and `apply --review-support-only` turn it on for a run.
+SUPPORT_ONLY: dict[str, tuple[str, ...]] = {
+    "biolink:treats": ("biolink:ameliorates_condition",),
+}
+REVIEW_SUPPORT_ONLY = False
+
 SKILL_DIR = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = SKILL_DIR / "prompts"
 LABEL_PROMPT = PROMPTS_DIR / "label.md"

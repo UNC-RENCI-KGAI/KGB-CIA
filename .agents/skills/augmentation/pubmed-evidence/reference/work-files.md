@@ -90,7 +90,7 @@ Fields by file:
   counted, in the report.
 - **`apply_report.json`**:
   - `run`: the label run applied (the fields of `label_run.json`), plus `require_review`
-    (false with `--no-review`) and `species_in_proposals`; `input`, `output`; `uberon_version`
+    (false with `--no-review`), `species_in_proposals` and `review_support_only`; `input`, `output`; `uberon_version`
     (of the file loaded); `nodes`;
   - `edges_read`, `ids_assigned` (edges given a hashed `id`), `earlier_edges_dropped` (edges
     an earlier run added), `pairs_refined`;

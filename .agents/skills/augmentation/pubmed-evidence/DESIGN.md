@@ -389,7 +389,10 @@ qualifier value is an enum, so code checks only what a schema can't say (above).
   says what narrower means). That takes in the claims that only add a PMID to an edge as well
   as those that propose one, and a negative claim through the positive statements it
   `also_supports` (rule 8). A claim that supports no edge of its pair, a broader, sibling or
-  contrary statement say, isn't sent: it changes nothing.
+  contrary statement say, isn't sent: it changes nothing. Nor is one whose only such statement
+  is support-only for that edge (rule 11, `ameliorates_condition` under `treats`): step 6
+  counts it without review, unless `config.REVIEW_SUPPORT_ONLY` or `--review-support-only`
+  sends it.
 - **One pass.** Each claim's effect is independent of the others', so the step sends, once,
   every claim that would count and has no verdict of this reviewer and prompt version yet. A
   claim whose call fails, or that a reply leaves out, stays unreviewed: step 6 holds its pair,
@@ -463,9 +466,10 @@ order on statements is the one step 5 uses to find the claims that would count.
   the slot; elsewhere the context neither narrows nor blocks. An anatomy name that didn't
   ground adds nothing and becomes a context note.
 - **Which claims count** (rules 1, 9 and 10). A claim counts when its quote passed the check,
-  its paper isn't a Retracted Publication, its role isn't `hypothesis`, and review upheld it.
-  Nothing else filters claims: there are no weights and no thresholds, for `treats` as for any
-  other predicate. A claim's study design, hedging, background role and finding type are
+  its paper isn't a Retracted Publication, its role isn't `hypothesis`, and review upheld it
+  (or, for a support-only statement, rule 11, wasn't rejected). Nothing else filters claims:
+  there are no weights and no thresholds, for `treats` as for any other predicate. A claim's
+  study design, hedging, background role and finding type are
   recorded on the evidence and filter nothing.
 - **Support and PMIDs** (rules 2 and 3). An in-scope edge E is supported when at least one
   counting claim has a statement narrower than or equal to E's. Its supporting PMIDs are those
@@ -494,6 +498,21 @@ order on statements is the one step 5 uses to find the claims that would count.
   They stay in the cache. An unsupported E is written unchanged, with score 0 and no
   proposals. Step 6 only adds PMIDs and proposed edges; it never removes, negates or replaces
   an edge.
+- **Support only** (rule 11). A statement narrower than E only by a predicate
+  `config.SUPPORT_ONLY` lists under E's predicate, or one below it, supports E but is never
+  proposed under it. The table has one entry: `ameliorates_condition` under `treats`. Label
+  tells them apart ("relieves B's symptoms without the abstract presenting it as a
+  treatment"), but the graph doesn't need the narrower edge, and in DrugCentral it was 700 of
+  the 1,186 proposals. Such a statement adds its PMID to E like any other narrower statement.
+  - **Review.** Off by default (`config.REVIEW_SUPPORT_ONLY`): a claim isn't sent to review for
+    a support-only statement, and step 6 counts that statement without a verdict, so it holds
+    no pair. A rejected claim still counts for nothing, so verdicts from an earlier review
+    still apply. Review's `--review-support-only` sends such claims, and apply's counts them
+    only once upheld; give both steps the flag, since apply holds a pair whose claim review
+    didn't send.
+  - **Only under the listed predicate.** Under a broader edge, such as
+    `treats_or_applied_or_studied_to_treat`, `ameliorates_condition` is an ordinary narrower
+    statement: it is proposed, and needs review.
 - **Species in proposals** (rule 7) sit behind a flag, `config.SPECIES_IN_PROPOSALS`, off by
   default; apply's `--species-in-proposals` turns it on for a run. Almost every in-scope
   association allows a species, so with it on almost every supported edge whose claims name
@@ -526,7 +545,8 @@ order on statements is the one step 5 uses to find the claims that would count.
   report counts them and warns of each kind of hold, so a partial run never writes a partial
   answer. A name that was looked up and didn't ground holds nothing: it is a context note.
   `apply --no-review`, for testing only, counts unreviewed claims instead of holding their
-  pairs; a rejected claim counts for nothing either way.
+  pairs; a rejected claim counts for nothing either way. A support-only statement (rule 11)
+  holds nothing unless `--review-support-only`.
 - **Tests:** six properties, each over 300 seeded random claim sets, run with the species kept
   and with it taken out: adding a counting claim never removes a PMID, a supported edge or a
   proposal; the claims' order doesn't change the output; ignored claims change nothing; no
@@ -719,6 +739,9 @@ saves little. Revisit if we move to full text and need to choose which paragraph
   gold set can show whether one abstract is precise enough.
 - **Species in proposals** are off by default (rule 7). Turned on, almost every supported edge
   whose claims name a species gains a proposed "E in human", "E in mouse" and so on.
+- **Support-only claims go unreviewed** by default (rule 11). An unreviewed
+  `ameliorates_condition` claim adds its PMID to its `treats` edge: in DrugCentral's run,
+  review upheld 1,309 of 1,470 such claims, and they added 1,255 PMIDs.
 - **Unstated qualifiers:** an original with a qualifier no claim can state, such as
   `frequency_qualifier`, `onset_qualifier`, a population or a disease context, can never be
   supported. The checked Monarch and DrugCentral edges carry no qualifiers today.

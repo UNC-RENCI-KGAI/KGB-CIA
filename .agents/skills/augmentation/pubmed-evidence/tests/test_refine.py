@@ -11,7 +11,7 @@ import dataclasses
 import random
 
 import pytest
-from pubmed_evidence import graphio, refine
+from pubmed_evidence import biolink, config, graphio, refine
 
 from shared.schema import ClaimContext, ClaimRecord, Edge, PublicationEvidence, Statement
 
@@ -481,6 +481,48 @@ def test_would_count_ignores_the_review():
     assert refine.would_count([], claims, LATTICE) == ()
 
 
+AMELIORATES = drug("ameliorates_condition")
+
+
+def test_a_support_only_statement_supports_unreviewed_and_proposes_nothing():
+    """Rule 11: 'D ameliorates DZ' under 'D treats DZ' adds its PMID whatever its review, but a
+    rejected claim's; it proposes nothing, isn't sent to review and holds nothing. Under a
+    broader edge it is an ordinary narrower statement."""
+    edges = [edge(drug())]
+    claims = [
+        claim(AMELIORATES, pmid="PMID:1", review=None),
+        claim(AMELIORATES, pmid="PMID:2"),
+        claim(AMELIORATES, pmid="PMID:3", review="reject"),
+        claim(drug("ameliorates_condition", **{ANATOMY: LIVER}), pmid="PMID:4", review=None),
+    ]
+    r = refined(edges, claims)
+    assert (r.proposed, r.links, r.unreviewed, r.held) == ((), (), (), False)
+    (o,) = r.edges
+    assert (o.claims, o.pmids, o.refined_by) == ((0, 1, 3), ("PMID:1", "PMID:2", "PMID:4"), ())
+    assert refine.would_count(edges, claims, LATTICE, CATEGORIES) == ()
+
+    # Another narrower predicate still needs review, and is proposed once upheld.
+    prevents = [claim(drug("preventative_for_condition"), pmid="PMID:5", review=None)]
+    r = refined(edges, claims + prevents)
+    assert (r.unreviewed, r.held, r.edges[0].pmids) == ((4,), True, o.pmids)
+
+    broad = [edge(drug("treats_or_applied_or_studied_to_treat"))]
+    assert refine.would_count(broad, claims, LATTICE, CATEGORIES) == (0, 1, 2, 3)
+    (p,) = refined(broad, claims[1:2]).proposed
+    assert p.statement == AMELIORATES
+
+
+def test_with_review_support_only_a_support_only_statement_needs_review(monkeypatch):
+    """It counts only once upheld, and its missing review holds the pair; still no proposal."""
+    edges = [edge(drug())]
+    claims = [claim(AMELIORATES, pmid="PMID:1", review=None), claim(AMELIORATES, pmid="PMID:2")]
+    r = refined(edges, claims, review_support_only=True)
+    assert (r.unreviewed, r.held, r.proposed) == ((0,), True, ())
+    assert refined(edges, claims[1:], review_support_only=True).edges[0].pmids == ("PMID:2",)
+    monkeypatch.setattr(config, "REVIEW_SUPPORT_ONLY", True)
+    assert refine.would_count(edges, claims, LATTICE, CATEGORIES) == (0, 1)
+
+
 def test_a_negated_e_is_never_supported():
     r = refined([edge(st(negated=True))], [claim(st()), claim(st(), "negative")])
     assert not r.edges[0].supported
@@ -710,7 +752,7 @@ def test_a_proposal_that_becomes_an_edge_of_the_pair_is_a_link_to_it():
     "original, said",
     [
         (st(**{SPECIES: HUMAN}), expression("increased")),
-        (drug(**{SPECIES: HUMAN}), drug("ameliorates_condition")),
+        (drug(**{SPECIES: HUMAN}), drug("preventative_for_condition")),
     ],
 )
 def test_a_proposal_keeps_the_species_of_an_original_it_refines(original, said):
@@ -897,6 +939,22 @@ def counts(c: refine.Claim, require_review: bool) -> bool:
     )
 
 
+def only_supports(statement: Statement, target: Statement) -> bool:
+    """Rule 11, written out apart from refine.py's own."""
+    narrower_ = config.SUPPORT_ONLY.get(target.predicate, ())
+    return any(biolink.is_a(statement.predicate, p) for p in narrower_)
+
+
+def supports(c: refine.Claim, target: Statement, require: bool, review_only: bool) -> bool:
+    """Whether the claim supports an edge of the target: a counting claim with a statement
+    narrower than it; or, unless `review_only`, one not rejected that only supports it."""
+    below = [s for s in refine.statements_of(c, CATEGORIES) if refine.narrower(LATTICE, s, target)]
+    if counts(c, require):
+        return bool(below)
+    unreviewed_ok = not review_only and counts(c, require_review=False)
+    return unreviewed_ok and any(only_supports(s, target) for s in below)
+
+
 def mapped(r: refine.PairRefinement, origin: list[int | None]) -> refine.PairRefinement:
     """The refinement with each claim index replaced by `origin`'s for it, sorted, so that runs
     over the same claims in another order, or with others added, compare equal."""
@@ -1023,7 +1081,11 @@ def as_proposed(statement: Statement, originals: list[Statement], species: bool)
 def proposes(statement: Statement, targets: list[Statement], species: bool) -> str | None:
     """The key of the proposal the statement makes, if it makes one: it is strictly narrower
     than some of `targets`, the in-scope edges, and written `as_proposed`."""
-    originals = [t for t in targets if refine.strictly_narrower(LATTICE, statement, t)]
+    originals = [
+        t
+        for t in targets
+        if refine.strictly_narrower(LATTICE, statement, t) and not only_supports(statement, t)
+    ]
     if not originals:
         return None
     return refine.statement_key(as_proposed(statement, originals, species))
@@ -1055,15 +1117,23 @@ def test_property_5_every_proposal_is_strictly_narrower_canonical_and_valid(spec
     assert with_species > TRIALS / 30  # some keep a species, with the flag off too
 
 
+@pytest.mark.parametrize("review_only", [False, True])
 @pytest.mark.parametrize("species", [True, False])
-def test_property_6_pmids_are_exactly_those_of_the_counting_claims(species):
+def test_property_6_pmids_are_exactly_those_of_the_counting_claims(species, review_only):
     """A proposal's claims are those with a statement that proposes it: strictly narrower than
-    some original, and the same once rule 7 has taken the species out of it, if the flag is
-    off."""
+    some original, but not one it only supports (rule 11), and the same once rule 7 has taken
+    the species out of it, if the flag is off. An edge's are those that support it."""
     rng = random.Random(6)
     for _ in range(TRIALS):
         edges, others, claims, _, require = random_case(rng)
-        r = refined(edges, claims, others, species=species, require_review=require)
+        r = refined(
+            edges,
+            claims,
+            others,
+            species=species,
+            require_review=require,
+            review_support_only=review_only,
+        )
         counting = [i for i, c in enumerate(claims) if counts(c, require)]
         stated = {i: refine.statements_of(claims[i], CATEGORIES) for i in counting}
         targets = [refine.statement_of(e) for e in edges]
@@ -1078,9 +1148,7 @@ def test_property_6_pmids_are_exactly_those_of_the_counting_claims(species):
             assert p.score == len(p.pmids) == len(set(p.pmids))
         for o in r.edges:
             supporters = [
-                i
-                for i in counting
-                if any(refine.narrower(LATTICE, s, o.statement) for s in stated[i])
+                i for i, c in enumerate(claims) if supports(c, o.statement, require, review_only)
             ]
             assert o.claims == tuple(supporters)
             assert set(o.pmids) == {claims[i].pmid for i in supporters}
