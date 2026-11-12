@@ -76,7 +76,7 @@ after the step's name.
 | `review` | `--model` (gpt-5.6-terra), `--reasoning-effort E`, `--prompt FILE`, `--limit N`, `--review-support-only` (off: `config.REVIEW_SUPPORT_ONLY`) |
 | `apply` | `--no-review` (for testing only), `--species-in-proposals` (off: `config.SPECIES_IN_PROPOSALS`), `--review-support-only` (off, as review), `--model`, `--prompt-version`, `--reviewer`, `--review-prompt-version` (default: from `label_run.json`) |
 | `evaluate` | `--gold FILE` (`<work>/gold.jsonl`), `--run MODEL[@PROMPT_VERSION]` (repeatable; default the run in `label_run.json`), `--species-in-proposals` (off, as apply); or `--draw N --seed S` (0) to draw the pairs to curate |
-| (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--skip-review` |
+| (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--max-label-cost`, `--skip-review` |
 
 Environment (the repository's `.env.example` lists every variable): `AZURE_OPENAI_API_KEY`
 for labeling and review with the Azure OpenAI models (not for `--dry-run`), and

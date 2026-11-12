@@ -22,7 +22,7 @@ from urllib.parse import parse_qsl
 import httpx
 import pytest
 from conftest import FakeClient, Sent
-from pubmed_evidence import cli, config, graphio, ground, llm, records, uberon
+from pubmed_evidence import cli, config, graphio, ground, label, llm, records, uberon
 from pubmed_evidence.cache import LabelCache
 from toy import ABL1, CML, EDGES, IMATINIB, NODES, UBERON_OBO, UBERON_VERSION
 
@@ -486,3 +486,37 @@ def test_full_run_continues_the_reviews_effort(tmp_path, fakes, monkeypatch):
     assert cli.main([*common, "--review-model", "gpt-6.1-sol"]) == 0
     run = records.read_label_run(work)
     assert (run.reviewer, run.review_reasoning_effort) == ("gpt-6.1-sol", "medium")
+
+
+def test_affordable_counts_the_first_pairs_that_fit():
+    assert cli.affordable([1.0, 0.0, 2.0, 1.0], 3.0) == 3
+    assert cli.affordable([1.0, 2.0], 3.0) == 2
+    assert cli.affordable([4.0, 0.0], 3.0) == 0
+    assert cli.affordable([], 0.0) == 0
+
+
+def test_full_run_labels_only_what_the_budget_allows(tmp_path, capsys, fakes):
+    graph = tmp_path / "filter"
+    graphio.write_jsonl(graph / "nodes.jsonl", NODES)
+    graphio.write_jsonl(graph / "edges.jsonl", EDGES)
+    argv = ["--input", str(graph), "--output", str(tmp_path / "out")]
+    argv += ["--cache-dir", str(tmp_path / "cache")]
+
+    # Estimate as the full run does, then give it a budget only the first pair fits.
+    assert cli.main([*argv, "select"]) == 0 and cli.main([*argv, "pubmed"]) == 0
+    work = tmp_path / "out" / "work"
+    estimate = label.label_pairs(work, tmp_path / "cache", dry_run=True)
+    costs = estimate["estimated_cost_by_pair"]
+    assert len(costs) == 2 and all(c > 0 for c in costs)
+    capsys.readouterr()
+
+    # The run flags it, labels the first pair alone, and still writes the graph.
+    assert cli.main([*argv, "--max-label-cost", str(costs[0])]) == 0
+    assert fakes.count("label") == 1
+    assert "labeling the first 1 of 2 pairs" in capsys.readouterr().err
+    assert len(list(graphio.read_jsonl(tmp_path / "out" / "edges.jsonl"))) >= len(EDGES)
+
+    # The default budget covers this toy graph: the rerun labels the other pair, and only it.
+    assert cli.main(argv) == 0
+    assert fakes.count("label") == 2
+    assert "budget" not in capsys.readouterr().err

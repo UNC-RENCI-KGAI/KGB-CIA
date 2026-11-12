@@ -45,7 +45,10 @@ requests a second) for the PubMed search. The search, its client and its cache a
 `data/cache/pubmed.sqlite`), which every agent that reads PubMed shares. With a `label_run.json`
 in the work directory, the full run continues that run (its model, prompt, reasoning effort,
 reviewer and review effort) and reuses its cached claims and verdicts; `--reasoning-effort`
-labels at another effort (default: the model's own, low for gpt-6-luna). `--skip-review` leaves
+labels at another effort (default: the model's own, low for gpt-6-luna). The full run labels
+only as many pairs as its estimated cost allows (default $20, `--max-label-cost` to change it,
+`inf` for no cap), and flags how many it left out; the pipeline's run is capped the same way.
+`--skip-review` leaves
 out the review: step 6 then holds every pair with a claim that would count but has no review,
 and writes its edges unchanged. `kgb-augment apply --species-in-proposals` keeps the species in
 proposed edges, which `SPECIES_IN_PROPOSALS` in the skill's `config.py` leaves out by default.

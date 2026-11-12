@@ -1255,6 +1255,7 @@ def _dry_run(
     priced on its own, since a model's longer-prompt price depends on the request's prompt."""
     tokens = cached = calls = 0
     cost = 0.0
+    by_pair: dict[str, float] = {}
     example = None
     seen: set[str] = set()
     for call in _calls(plans, pubmed, qualifiers):
@@ -1265,7 +1266,9 @@ def _dry_run(
         hit = schema_text in seen and prefix_tokens >= CACHED_PREFIX_TOKENS
         read = prefix_tokens if hit else 0
         seen.add(schema_text)
-        cost += llm.cost_of(info, call_tokens - read, read, 0, ESTIMATED_OUTPUT_TOKENS)
+        call_cost = llm.cost_of(info, call_tokens - read, read, 0, ESTIMATED_OUTPUT_TOKENS)
+        cost += call_cost
+        by_pair[call.pair_id] = by_pair.get(call.pair_id, 0.0) + call_cost
         tokens, cached, calls = tokens + call_tokens, cached + read, calls + 1
         if example is None:
             example = work / REQUEST_EXAMPLE
@@ -1282,6 +1285,8 @@ def _dry_run(
         "estimated_cached_tokens": cached,
         "estimated_output_tokens": calls * ESTIMATED_OUTPUT_TOKENS,
         "estimated_cost": cost,
+        # In the pairs' order, a pair with nothing to send at 0: what each pair adds.
+        "estimated_cost_by_pair": [by_pair.get(job.pair_id, 0.0) for job, _ in plans],
         "request_example": str(example) if example else None,
     }
 

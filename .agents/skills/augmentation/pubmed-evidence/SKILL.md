@@ -218,6 +218,15 @@ model, prompt file and reasoning effort, and its reviewer and the review's effor
 every cached claim and verdict. So leave `work/label_run.json` naming the run you chose, and
 keep the tuned prompt where it says. Tuning and model choice happen here, in the skill.
 
+The full run caps what labeling costs. Before step 3 it estimates the cost with label's dry run
+(pairs already labeled cost nothing), and if every pair won't fit the budget
+(`FULL_RUN_LABEL_BUDGET` in `config.py`, $20) it labels only the first pairs that do, and prints
+a flag saying how many. Use `--max-label-cost USD` when you have agreed a different budget for
+the run (`inf` for none), and `--limit N` when you want exactly the first N pairs instead; with
+`--limit` the budget isn't checked. A rerun with a larger budget labels only the pairs not yet
+labeled. The budget covers labeling alone: review runs on those pairs' claims, so it shrinks
+with them, but its cost isn't estimated.
+
 `--skip-review` leaves out the review step. Apply then holds every pair with a claim that
 would count but has no review, and writes its edges unchanged, so the run adds nothing
 unreviewed.

@@ -55,6 +55,9 @@ REPAIR_MODEL = REVIEW_MODEL
 ABSTRACTS_PER_CALL = 20
 REVIEW_ITEMS_PER_CALL = 40
 WORKERS = 8
+# The full run (`kgb-augment` with no step, as the pipeline runs it) labels only as many pairs
+# as step 3's estimated cost, in US dollars, allows. Pairs already labeled cost nothing.
+FULL_RUN_LABEL_BUDGET = 20.0
 
 
 @dataclass(frozen=True)

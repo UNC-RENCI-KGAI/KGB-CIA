@@ -115,6 +115,14 @@ def _parser(prog: str = "kgb-augment") -> argparse.ArgumentParser:
         "--limit", dest="full_limit", type=int, help="search and label only the first N pairs"
     )
     full.add_argument(
+        "--max-label-cost",
+        dest="full_max_label_cost",
+        type=float,
+        help=f"US dollars step 3 may spend, by its estimate; a run that would cost more labels "
+        f"only the first pairs that fit, and says so (default {config.FULL_RUN_LABEL_BUDGET:g}; "
+        f"'inf' for no cap; ignored with --limit)",
+    )
+    full.add_argument(
         "--skip-review",
         action="store_true",
         help="skip the review step; step 6 holds every pair with a claim that would count but "
@@ -133,7 +141,13 @@ def _resolve(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-FULL_RUN_OPTIONS = ("full_model", "full_reasoning_effort", "full_review_model", "full_limit")
+FULL_RUN_OPTIONS = (
+    "full_model",
+    "full_reasoning_effort",
+    "full_review_model",
+    "full_limit",
+    "full_max_label_cost",
+)
 
 
 def _overrides(name: str, common: argparse.Namespace, run) -> dict:
@@ -182,13 +196,67 @@ def _step_args(name: str, common: argparse.Namespace, run=None) -> argparse.Name
     return args
 
 
+def affordable(costs: list[float], budget: float) -> int:
+    """How many of the first pairs fit the budget, given each pair's estimated cost in order."""
+    spent = 0.0
+    for n, cost in enumerate(costs):
+        spent += cost
+        if spent > budget:
+            return n
+    return len(costs)
+
+
+def _label_limit(common: argparse.Namespace, run) -> int | None:
+    """The full run's cap on step 3: None if every pair fits the budget (or --limit was given),
+    else how many of the first pairs do. Estimated with label's dry run, which sends nothing."""
+    if common.full_limit is not None:
+        return None
+    budget = common.full_max_label_cost
+    if budget is None:
+        budget = config.FULL_RUN_LABEL_BUDGET
+    label = importlib.import_module(MODULES["label"])
+    args = _step_args("label", common, run)
+    args.dry_run = True
+    s = label.label_pairs(
+        args.work,
+        args.cache_dir,
+        model=args.model,
+        prompt=args.prompt,
+        limit=args.limit,
+        abstracts_per_call=args.abstracts_per_call,
+        reasoning_effort=args.reasoning_effort,
+        dry_run=True,
+    )
+    costs = s.get("estimated_cost_by_pair", [])
+    n = affordable(costs, budget)
+    if n == len(costs):
+        return None
+    print(
+        f"[augmentation] flag: labeling every pair would cost about {label._money(sum(costs))}, "
+        f"over the {label._money(budget)} budget; labeling the first {n:,} of {len(costs):,} "
+        f"pairs. To label more, rerun with --max-label-cost or --limit; pairs already labeled "
+        f"are cached.",
+        file=sys.stderr,
+    )
+    return n
+
+
 def run_all(common: argparse.Namespace) -> int:
     run = records.read_label_run(common.work)
     steps = [s for s in FULL_RUN if not (common.skip_review and s == "review")]
     for i, name in enumerate(steps, 1):
         print(f"[augmentation] {i}/{len(steps)} {name}", file=sys.stderr)
         module = importlib.import_module(MODULES[name])
-        rc = module.run(_step_args(name, common, run))
+        args = _step_args(name, common, run)
+        if name == "label":
+            try:
+                limit = _label_limit(common, run)
+            except (FileNotFoundError, ValueError) as e:
+                print(f"label: error: {e}", file=sys.stderr)
+                return 1
+            if limit is not None:
+                args.limit = limit
+        rc = module.run(args)
         if rc:
             print(f"[augmentation] {name} failed (exit {rc}); later steps not run", file=sys.stderr)
             return rc
@@ -203,7 +271,8 @@ def main(argv: list[str] | None = None, prog: str = "kgb-augment") -> int:
     # A step's own defaults would silently win over these.
     if any(getattr(args, k) is not None for k in FULL_RUN_OPTIONS) or args.skip_review:
         parser.error(
-            "--model, --reasoning-effort, --review-model, --limit and --skip-review before a "
+            "--model, --reasoning-effort, --review-model, --limit, --max-label-cost and "
+            "--skip-review before a "
             f"step name are for the full run; put them after it ({parser.prog} {args.command} "
             "--model ...)"
         )
