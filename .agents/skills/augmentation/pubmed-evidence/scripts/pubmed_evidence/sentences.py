@@ -16,11 +16,12 @@ Qualifier values are either enum values, read with underscores as spaces, or CUR
 kept as they are: the messages also give the claim as structured data, so the LLM can resolve
 them.
 
-`sentence` reads both a work file's statement (`records.Statement`, `qualified_predicate` among
-its qualifiers) and the shared schema's (`shared.schema.Statement`, with `qualified_predicate`
-and `negated` fields). A negated statement negates the whole reading, as Biolink's `negated`
-does: "imatinib does not cause decreased activity of ABL1". `claim_sentence` reads a claim as
-the label step stores it, a negative claim as its statement negated.
+`sentence` reads both a work file's statement (`records.SelectedStatement`,
+`qualified_predicate` among its qualifiers) and the shared schema's (`shared.schema.Statement`,
+with `qualified_predicate` and `negated` fields). A negated statement negates the whole
+reading, as Biolink's `negated` does: "imatinib does not cause decreased activity of ABL1".
+`claim_sentence` reads a claim as the label step stores it, a negative claim as its statement
+negated.
 """
 
 from __future__ import annotations
@@ -192,7 +193,7 @@ def _compose(name: str, qualifiers: dict[str, Any], side: str, used: set[str]) -
     return text
 
 
-def sentence(statement: records.Statement | schema.Statement, names: dict[str, str]) -> str:
+def sentence(statement: records.SelectedStatement | schema.Statement, names: dict[str, str]) -> str:
     """The statement in English, e.g. 'imatinib causes decreased activity of ABL1', or for a
     negated one 'imatinib does not cause decreased activity of ABL1'.
 

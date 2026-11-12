@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -150,6 +150,27 @@ NegativeFindingType = Literal["demonstrated_absence", "failed_to_detect"]
 ReviewVerdict = Literal["upheld", "reject"]
 
 
+def statement_id(
+    subject: str,
+    predicate: str,
+    object: str,
+    qualifiers: dict[str, Any] | None = None,
+    negated: bool = False,
+) -> str:
+    """Stable id of a statement: the first 16 hex digits of the SHA-256 of its canonical JSON,
+    with `qualified_predicate` among the qualifiers. The one hash `Statement.id` and the
+    augmentation agent's `graphio` use."""
+    key = {
+        "subject": subject,
+        "predicate": predicate,
+        "object": object,
+        "qualifiers": dict(sorted((qualifiers or {}).items())),
+        "negated": bool(negated),
+    }
+    canonical = json.dumps(key, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
 class Statement(BaseModel):
     """What an edge or a literature claim says, without provenance: subject, predicate, object,
     qualifiers and `negated`, by their Biolink names. A `qualified_predicate` replaces the
@@ -186,21 +207,11 @@ class Statement(BaseModel):
 
     @property
     def id(self) -> str:
-        """The same for every edge that makes the statement: the first 16 hex digits of the
-        SHA-256 of its canonical JSON, with `qualified_predicate` among the qualifiers, as the
-        augmentation agent's `graphio.statement_id` computes it."""
+        """The same for every edge that makes the statement (`statement_id`)."""
         qualifiers = dict(self.qualifiers)
         if self.qualified_predicate is not None:
             qualifiers["qualified_predicate"] = self.qualified_predicate
-        key = {
-            "subject": self.subject,
-            "predicate": self.predicate,
-            "object": self.object,
-            "qualifiers": qualifiers,
-            "negated": self.negated,
-        }
-        canonical = json.dumps(key, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+        return statement_id(self.subject, self.predicate, self.object, qualifiers, self.negated)
 
 
 class ClaimContext(BaseModel):

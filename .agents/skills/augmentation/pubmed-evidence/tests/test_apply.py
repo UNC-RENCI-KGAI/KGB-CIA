@@ -826,7 +826,7 @@ def test_rerunning_on_its_own_output_writes_the_same_graph(world):
     def kept(graph: Path, work: str) -> set[str]:
         scope.select(graph, world.work.parent / work)
         path = world.work.parent / work / records.STATEMENTS
-        return {s.statement_id for s in records.read_records(path, records.Statement)}
+        return {s.statement_id for s in records.read_records(path, records.SelectedStatement)}
 
     assert kept(out, "select-out") == kept(world.graph, "select-in")
 

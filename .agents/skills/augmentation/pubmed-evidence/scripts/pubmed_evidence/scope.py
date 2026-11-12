@@ -27,8 +27,8 @@ canonical direction put it (`misdirected_edges`, by `biolink.oriented`): 'gene
 condition_associated_with_gene disease'. They're kept and checked as written, but the label
 step reads claims Biolink's way round, so claims rarely reach them.
 
-Kept edges become one `Statement` per distinct statement (`graphio.statement_id`), one `Pair`
-per unordered node pair and one `Entity` per node in a kept pair, in the work directory:
+Kept edges become one `SelectedStatement` per distinct statement (`graphio.edge_statement_id`),
+one `Pair` per unordered node pair and one `Entity` per node in a kept pair, in the work directory:
 `statements.jsonl`, `pairs.jsonl`, `entities.jsonl`, and `scope_report.json` with the counts.
 
 `--rules FILE` replaces the built-in rules with a JSON list of objects (or `{"rules": [...]}`)
@@ -77,7 +77,7 @@ from pubmed_evidence.graphio import (
     read_nodes,
     write_jsonl,
 )
-from pubmed_evidence.records import Entity, Pair, Statement
+from pubmed_evidence.records import Entity, Pair, SelectedStatement
 from shared.schema import Node
 
 STEP = "select"
@@ -488,7 +488,7 @@ def select(
             )
         )
     statement_records = [
-        Statement(
+        SelectedStatement(
             statement_id=sid,
             pair_id=acc.pair_id,
             subject=acc.subject,

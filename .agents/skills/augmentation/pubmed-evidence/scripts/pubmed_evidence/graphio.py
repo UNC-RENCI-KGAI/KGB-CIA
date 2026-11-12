@@ -22,6 +22,7 @@ from typing import IO, Any
 
 from pydantic import BaseModel
 
+from shared import schema
 from shared.schema import Edge, Node
 
 NODES = "nodes.jsonl"
@@ -104,22 +105,6 @@ def is_negated(edge: Edge) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
-def statement_key(
-    subject: str,
-    predicate: str,
-    object: str,
-    qualifiers: dict[str, Any] | None = None,
-    negated: bool = False,
-) -> dict[str, Any]:
-    return {
-        "subject": subject,
-        "predicate": predicate,
-        "object": object,
-        "qualifiers": dict(sorted((qualifiers or {}).items())),
-        "negated": bool(negated),
-    }
-
-
 def statement_id(
     subject: str,
     predicate: str,
@@ -127,10 +112,8 @@ def statement_id(
     qualifiers: dict[str, Any] | None = None,
     negated: bool = False,
 ) -> str:
-    """Stable id of a statement: the first 16 hex digits of the SHA-256 of its canonical JSON."""
-    key = statement_key(subject, predicate, object, qualifiers, negated)
-    canonical = json.dumps(key, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    """Stable id of a statement: `shared.schema.statement_id`."""
+    return schema.statement_id(subject, predicate, object, qualifiers, negated)
 
 
 def edge_id(record: dict[str, Any]) -> str:
@@ -163,10 +146,27 @@ def proposed_edge_id(statement_id: str) -> str:
     return ID_PREFIX + hashlib.sha256(statement_id.encode("utf-8")).hexdigest()[:16]
 
 
-def edge_statement_id(edge: Edge) -> str:
-    return statement_id(
-        edge.subject, edge.predicate, edge.object, qualifiers_of(edge), is_negated(edge)
+def edge_statement(edge: Edge) -> schema.Statement:
+    """What the edge says: its subject, predicate, object, qualifiers (values as strings) and
+    `negated`, with a bare `qualified_predicate` given its `biolink:` prefix."""
+    qualifiers = {k: str(v) for k, v in qualifiers_of(edge).items()}
+    qp = qualifiers.pop("qualified_predicate", None)
+    if qp is not None and not qp.startswith("biolink:"):
+        qp = "biolink:" + qp
+    return schema.Statement(
+        subject=edge.subject,
+        predicate=edge.predicate,
+        object=edge.object,
+        qualified_predicate=qp,
+        qualifiers=qualifiers,
+        negated=is_negated(edge),
     )
+
+
+def edge_statement_id(edge: Edge) -> str:
+    """The id of what the edge says: `edge_statement(edge).id`, so an edge and the statement
+    refine reads from it always share one id."""
+    return edge_statement(edge).id
 
 
 def pair_id(a: str, b: str) -> str:

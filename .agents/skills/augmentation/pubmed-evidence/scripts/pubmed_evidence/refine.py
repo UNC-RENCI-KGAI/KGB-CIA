@@ -124,20 +124,9 @@ def claims_of(evidence: Iterable[PublicationEvidence]) -> list[Claim]:
 
 
 def statement_of(edge: Edge) -> Statement:
-    """What the edge says: its subject, predicate, object, qualifiers and `negated`. Its id is
+    """What the edge says (`graphio.edge_statement`); its id is
     `graphio.edge_statement_id(edge)`."""
-    qualifiers = {k: str(v) for k, v in graphio.qualifiers_of(edge).items()}
-    qp = qualifiers.pop(QUALIFIED_PREDICATE, None)
-    if qp is not None and not qp.startswith("biolink:"):
-        qp = "biolink:" + qp
-    return Statement(
-        subject=edge.subject,
-        predicate=edge.predicate,
-        object=edge.object,
-        qualified_predicate=qp,
-        qualifiers=qualifiers,
-        negated=graphio.is_negated(edge),
-    )
+    return graphio.edge_statement(edge)
 
 
 def _turned(statement: Statement, predicate: str | None = None) -> Statement:

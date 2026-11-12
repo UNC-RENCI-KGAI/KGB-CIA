@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from pubmed_evidence import config, graphio, records, scope
 from pubmed_evidence.graphio import pair_id, write_jsonl
-from pubmed_evidence.records import Entity, Pair, Statement
+from pubmed_evidence.records import Entity, Pair, SelectedStatement
 from toy import (
     ABL1,
     ASPIRIN,
@@ -31,7 +31,7 @@ GENE_PHENOTYPE = pair_id(TP53, SEIZURE)
 
 def _run(graph: Path, work: Path, **kw):
     report = scope.select(graph, work, **kw)
-    statements = list(records.read_records(work / records.STATEMENTS, Statement))
+    statements = list(records.read_records(work / records.STATEMENTS, SelectedStatement))
     pairs = {p.pair_id: p for p in records.read_records(work / records.PAIRS, Pair)}
     entities = {e.id: e for e in records.read_records(work / records.ENTITIES, Entity)}
     return report, statements, pairs, entities

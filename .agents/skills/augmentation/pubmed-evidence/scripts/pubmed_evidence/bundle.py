@@ -252,7 +252,8 @@ def load(
     if not edges_file.exists():
         raise FileNotFoundError(f"{input_dir / graphio.EDGES} is missing: no input graph")
     scope = {
-        s.statement_id for s in records.read_records(work / records.STATEMENTS, records.Statement)
+        s.statement_id
+        for s in records.read_records(work / records.STATEMENTS, records.SelectedStatement)
     }
     searched = {r.pair_id: r for r in records.read_records(work / records.PUBMED, PubmedRecord)}
     entities = {e.id: e for e in records.read_records(work / records.ENTITIES, Entity)}

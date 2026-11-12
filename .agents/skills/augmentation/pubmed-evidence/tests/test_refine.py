@@ -222,6 +222,25 @@ def test_statement_of_an_edge():
     assert refine.statement_of(edge(drug(negated=True))).negated
 
 
+def test_an_edge_and_its_statement_share_one_id_whatever_the_qualifiers_look_like():
+    """A bare `qualified_predicate` and a qualifier that isn't a string are read the same way
+    by the id select gives the edge and by the statement refine reads from it."""
+    e = Edge.model_validate(
+        {
+            "subject": "CHEBI:45783",
+            "predicate": "biolink:affects",
+            "object": "NCBIGene:25",
+            "primary_knowledge_source": "infores:test",
+            "knowledge_level": "knowledge_assertion",
+            "agent_type": "manual_agent",
+            "qualified_predicate": "causes",
+            "object_aspect_qualifier": ["activity"],
+        }
+    )
+    assert refine.statement_of(e).qualified_predicate == "biolink:causes"
+    assert refine.statement_of(e).id == graphio.edge_statement_id(e)
+
+
 def test_statements_read_the_way_round_biolink_puts_them():
     """A predicate fits its subject and object by its domain and range. One defined the other
     way round becomes its inverse; a non-canonical one is turned round to its canonical

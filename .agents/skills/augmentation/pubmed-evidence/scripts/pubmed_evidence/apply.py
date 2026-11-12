@@ -558,7 +558,8 @@ def apply_claims(
     loaded = _load(input_dir, cache_dir, work, run)
     refined = refine_pairs(loaded, require_review, species_in_proposals, review_support_only)
     scope = {
-        s.statement_id for s in records.read_records(work / records.STATEMENTS, records.Statement)
+        s.statement_id
+        for s in records.read_records(work / records.STATEMENTS, records.SelectedStatement)
     }
     held = {*refined.held, *loaded.not_looked_up}
     graph = _Pass(refined, scope, set(loaded.unlabeled), held)

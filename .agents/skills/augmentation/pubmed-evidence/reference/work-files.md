@@ -36,7 +36,7 @@ Fields by file:
   Xenbase's `XB-GENE-865198`, is replaced by the first symbol or synonym, or dropped; MONDO's
   `obsolete ` prefix is removed); `category`; `equivalent_identifiers`; `synonyms` (the node's
   `symbol`, `synonym` and `full_name`, without the name).
-- **`statements.jsonl`** (`Statement`): `statement_id`, `pair_id`, `subject`, `predicate`,
+- **`statements.jsonl`** (`SelectedStatement`): `statement_id`, `pair_id`, `subject`, `predicate`,
   `object`, `qualifiers` (the edge's `qualified_predicate` and `*_qualifier` slots), `negated`,
   `rule`, `edge_count` (input edges making it), `sources` (their
   `primary_knowledge_source`s), `source_pmids` (PMIDs in their `publications`), `score`

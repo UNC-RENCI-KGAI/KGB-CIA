@@ -111,7 +111,7 @@ class World:
         kept = {}
         for e in edges:
             sid = graphio.edge_statement_id(e)
-            kept[sid] = records.Statement(
+            kept[sid] = records.SelectedStatement(
                 statement_id=sid,
                 pair_id=graphio.pair_id(e.subject, e.object),
                 subject=e.subject,

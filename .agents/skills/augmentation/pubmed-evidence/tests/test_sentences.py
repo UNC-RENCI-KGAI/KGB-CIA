@@ -11,8 +11,8 @@ from shared import schema
 NAMES = {IMATINIB: "imatinib", ABL1: "ABL1", CML: "chronic myeloid leukemia"}
 
 
-def statement(subject: str, predicate: str, object: str, **qualifiers) -> records.Statement:
-    return records.Statement(
+def statement(subject: str, predicate: str, object: str, **qualifiers) -> records.SelectedStatement:
+    return records.SelectedStatement(
         statement_id=graphio.statement_id(subject, predicate, object, qualifiers),
         pair_id=graphio.pair_id(subject, object),
         subject=subject,

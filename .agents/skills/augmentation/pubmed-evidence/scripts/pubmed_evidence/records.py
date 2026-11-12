@@ -7,7 +7,7 @@ rebuild.
 | File | Written by | One line per |
 | --- | --- | --- |
 | `entities.jsonl` | select (step 1) | node in a kept pair (`Entity`) |
-| `statements.jsonl` | select (step 1) | distinct statement of a kept edge (`Statement`) |
+| `statements.jsonl` | select (step 1) | distinct statement of a kept edge (`SelectedStatement`) |
 | `pairs.jsonl` | select (step 1) | kept node pair (`Pair`) |
 | `scope_report.json` | select (step 1) | counts per rule and per skipped edge type |
 | `pubmed.jsonl` | pubmed (step 2) | pair searched (`shared.pubmed.PubmedRecord`) |
@@ -50,7 +50,7 @@ class Entity(shared.pubmed.Entity):
     category: list[str] = Field(default_factory=list)
 
 
-class Statement(BaseModel):
+class SelectedStatement(BaseModel):
     """One distinct statement (subject, predicate, object, qualifiers, `negated`) among the kept
     edges."""
 
