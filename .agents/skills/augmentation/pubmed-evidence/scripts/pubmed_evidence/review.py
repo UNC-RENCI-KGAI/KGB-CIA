@@ -39,9 +39,10 @@ from typing import Any, NamedTuple, get_args
 
 from pubmed_evidence import bundle, config, llm, records, refine, repair, sentences
 from pubmed_evidence.bundle import Bundles, ClaimKey
-from pubmed_evidence.cache import Abstract, ClaimReviewRow, LabelCache, PubMedCache
+from pubmed_evidence.cache import ClaimReviewRow, LabelCache, PubMedCache
 from pubmed_evidence.graphio import chunks, pair_nodes
 from pubmed_evidence.records import Entity, LabelRun
+from shared.pubmed import MAX_SYNONYMS, Abstract, PubmedRecord
 from shared.schema import ClaimContext, ClaimRecord, ReviewVerdict
 
 # Version of the code that writes the user message. It is part of the review prompt version,
@@ -125,7 +126,7 @@ def _entity(
             seen.add(term.lower())
             others.append(term)
     category = entity.category[0].removeprefix("biolink:") if entity and entity.category else None
-    return {"name": name, "category": category, "synonyms": others[: config.MAX_SYNONYMS]}
+    return {"name": name, "category": category, "synonyms": others[:MAX_SYNONYMS]}
 
 
 def _context(context: ClaimContext) -> dict[str, str | None]:
@@ -296,7 +297,7 @@ def _load(
     wanted = {b.pair_id for b in loaded.pairs}
     synonyms = {
         r.pair_id: r.synonyms
-        for r in records.read_records(work / records.PUBMED, records.PubmedRecord)
+        for r in records.read_records(work / records.PUBMED, PubmedRecord)
         if r.pair_id in wanted
     }
     return loaded, synonyms
@@ -411,10 +412,7 @@ def review_claims(
     }
     answered: set[ClaimKey] = set()  # the claims given a verdict in this run
     total = llm.Tally()
-    with (
-        LabelCache(cache_dir / config.LABEL_CACHE) as cache,
-        PubMedCache(cache_dir / config.PUBMED_CACHE) as pubmed,
-    ):
+    with LabelCache(cache_dir / config.LABEL_CACHE) as cache, PubMedCache() as pubmed:
 
         def on_result(call: llm.Call, reply: Any, usage: llm.Usage) -> str | None:
             ids: dict[str, Item] = call.context

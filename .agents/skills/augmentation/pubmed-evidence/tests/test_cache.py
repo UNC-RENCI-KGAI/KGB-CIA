@@ -1,5 +1,6 @@
-"""The caches' tables: an older cache gets the columns added since, and rows read back as
-written."""
+"""The caches' tables: an older cache gets the columns and tables added since, and rows read
+back as written. The PubMed cache's own tables are `shared.pubmed`'s, tested in the repository's
+`tests/test_pubmed.py`; here are its groundings and the label cache."""
 
 from __future__ import annotations
 
@@ -11,7 +12,6 @@ from pathlib import Path
 
 import pytest
 from pubmed_evidence.cache import (
-    Abstract,
     AbstractClaimsRow,
     CallRow,
     ClaimCheckRow,
@@ -22,36 +22,6 @@ from pubmed_evidence.cache import (
     PubMedCache,
     claim_id,
 )
-
-# The abstracts table as the first release created it.
-OLD_ABSTRACTS = """
-CREATE TABLE abstracts (
-    pmid TEXT PRIMARY KEY, title TEXT NOT NULL, abstract TEXT NOT NULL,
-    year INTEGER, retrieved TEXT NOT NULL);
-INSERT INTO abstracts VALUES ('1', 'Old title', 'Old text.', 2001, '2026-11-01T00:00:00+00:00');
-"""
-
-
-def test_old_pubmed_cache_gains_publication_types(tmp_path: Path):
-    path = tmp_path / "pubmed.sqlite"
-    with sqlite3.connect(path) as db:
-        db.executescript(OLD_ABSTRACTS)
-    with PubMedCache(path) as cache:
-        [old] = cache.get_abstracts(["1"]).values()
-        assert (old.title, old.year, old.publication_types) == ("Old title", 2001, None)
-        assert cache.missing_abstracts(["1", "2"]) == ["1", "2"]
-        cache.put_abstracts(
-            [
-                Abstract("1", "Old title", "Old text.", 2001, publication_types=["Review"]),
-                Abstract("2", "", publication_types=[]),
-            ]
-        )
-    with PubMedCache(path) as cache:  # opening it again adds nothing twice
-        got = cache.get_abstracts(["1", "2"])
-        assert got["1"].publication_types == ["Review"] and got["1"].abstract == "Old text."
-        assert got["2"].publication_types == [] and not got["2"].has_text
-        assert cache.missing_abstracts(["1", "2"]) == []
-
 
 # The label cache's tables as the first release created them, with a row each.
 OLD_LABELS = """

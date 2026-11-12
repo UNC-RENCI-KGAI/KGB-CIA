@@ -90,6 +90,7 @@ from pubmed_evidence import (
 )
 from pubmed_evidence.cache import AbstractClaimsRow, Grounding, LabelCache, PubMedCache, claim_id
 from pubmed_evidence.label import rules_of
+from shared.pubmed import default_cache_path
 from shared.schema import ClaimRecord, Edge, Statement
 
 GOLD = "gold.jsonl"
@@ -852,7 +853,7 @@ def evaluate(
     if not runs:
         raise EvaluateError("no run to score; pass --run MODEL[@PROMPT_VERSION]")
     cache_dir = Path(cache_dir)
-    label_path, pubmed_path = cache_dir / config.LABEL_CACHE, cache_dir / config.PUBMED_CACHE
+    label_path, pubmed_path = cache_dir / config.LABEL_CACHE, default_cache_path()
     for path, step in ((label_path, "label"), (pubmed_path, "pubmed")):
         if not path.exists():
             raise EvaluateError(f"no {step} cache {path}; run `kgb-augment {step}` first")

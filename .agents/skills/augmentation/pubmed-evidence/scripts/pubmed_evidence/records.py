@@ -10,13 +10,14 @@ rebuild.
 | `statements.jsonl` | select (step 1) | distinct statement of a kept edge (`Statement`) |
 | `pairs.jsonl` | select (step 1) | kept node pair (`Pair`) |
 | `scope_report.json` | select (step 1) | counts per rule and per skipped edge type |
-| `pubmed.jsonl` | pubmed (step 2) | pair searched (`PubmedRecord`) |
+| `pubmed.jsonl` | pubmed (step 2) | pair searched (`shared.pubmed.PubmedRecord`) |
 | `label_run.json` | label (step 3), ground, review | the run step 6 applies (`LabelRun`) |
 | `refinements.jsonl` | apply (step 6) | refined pair: its edges' support, its proposals and links |
 | `apply_report.json` | apply (step 6) | counts of what step 6 checked, added and held, and why |
 
-PMIDs are bare digits ('12345') everywhere in the work files and caches, and 'PMID:12345' in
-the graph's `publications`.
+`Entity` and `Pair` are `shared.pubmed`'s, with the fields step 1 adds; step 2's records are
+`shared.pubmed`'s own. PMIDs are bare digits ('12345') everywhere in the work files and caches,
+and 'PMID:12345' in the graph's `publications`.
 """
 
 from __future__ import annotations
@@ -24,10 +25,11 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
+import shared.pubmed
 from pubmed_evidence.graphio import read_jsonl
 
 ENTITIES = "entities.jsonl"
@@ -40,18 +42,12 @@ REFINEMENTS = "refinements.jsonl"
 APPLY_REPORT = "apply_report.json"
 
 
-class Entity(BaseModel):
-    """A node in a kept pair, with what step 2 needs to search for it and step 3 to name it."""
+class Entity(shared.pubmed.Entity):
+    """A node in a kept pair, with what step 2 needs to search for it and step 3 to name it.
+    Its `synonyms` are the node's own `symbol`, `synonym` and `full_name` slots; step 2 adds
+    NodeNorm's labels and records the final list in `PubmedRecord.synonyms`."""
 
-    id: str
-    name: str | None = None
     category: list[str] = Field(default_factory=list)
-    equivalent_identifiers: list[str] = Field(default_factory=list)
-    synonyms: list[str] = Field(
-        default_factory=list,
-        description="From the node's own `symbol`, `synonym` and `full_name` slots. Step 2 adds "
-        "NodeNorm's labels and records the final list in PubmedRecord.synonyms",
-    )
 
 
 class Statement(BaseModel):
@@ -82,41 +78,11 @@ class Statement(BaseModel):
     )
 
 
-class Pair(BaseModel):
-    pair_id: str
-    nodes: tuple[str, str] = Field(description="The pair's node ids, sorted")
+class Pair(shared.pubmed.Pair):
+    """A kept node pair, with its statements; its `source_pmids` are the union of theirs."""
+
     statement_ids: list[str]
-    source_pmids: list[str] = Field(
-        default_factory=list, description="Union of its statements' source PMIDs"
-    )
     rules: list[str] = Field(default_factory=list)
-
-
-class FetchedPmid(BaseModel):
-    pmid: str
-    origin: Literal["search", "source", "source+search"]
-    rank: int | None = Field(default=None, description="1-based relevance rank in the search")
-
-
-class PubmedRecord(BaseModel):
-    """What step 2 found for one pair. Titles and abstracts are in the PubMed cache."""
-
-    pair_id: str
-    query: str
-    retrieved: str = Field(description="ISO date of the search, e.g. '2026-11-02'")
-    total: int = Field(description="ESearch's total hit count")
-    synonyms: dict[str, list[str]] = Field(
-        default_factory=dict, description="Node id -> the [tiab] terms used in the query"
-    )
-    mesh: dict[str, list[str]] = Field(
-        default_factory=dict, description="Node id -> the [mh] headings used in the query"
-    )
-    pmids: list[FetchedPmid] = Field(
-        default_factory=list, description="Fetched PMIDs that have an abstract, search ones first"
-    )
-    no_abstract: list[str] = Field(
-        default_factory=list, description="Fetched PMIDs PubMed has no abstract for"
-    )
 
 
 class LabelRun(BaseModel):

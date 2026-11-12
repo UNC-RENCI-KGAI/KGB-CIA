@@ -47,6 +47,7 @@ from test_refine import ACTIVITY, ANATOMY, CATEGORIES, LATTICE, LIVER, X, Y, cla
 from test_refine import edge as refine_edge
 from toy import ABL1, CML, IMATINIB, MDM2, TP53, UBERON_VERSION
 
+from shared.pubmed import default_cache_path
 from shared.schema import AugmentedEdge, Edge, PublicationEvidence, Statement
 
 REVIEWER, REVIEW_PV = "review-model", "review@00000000"
@@ -117,7 +118,7 @@ def scene(w: World, *extra: Edge) -> None:
     w.answer(GENE_PAIR, "207", misquoted, design="in_vitro", sentence_valid=False)
     liver = stored(INHIBITS, sentence=INHIBITED, species=None, anatomy="liver")
     w.answer(GENE_PAIR, "208", liver, design="in_vitro")
-    with PubMedCache(w.cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         cache.put_groundings([Grounding("liver", "anatomy", LIVER, "liver", "test")])
     repairer, version = repair.current()
     with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
@@ -434,7 +435,7 @@ def test_a_pair_with_a_name_never_looked_up_is_held(world, capsys):
         assert "1 pairs have a claim naming anatomy the ground step never looked up" in err
         assert "kgb-augment ground" in err and "aren't fully labeled" not in err
 
-    with PubMedCache(world.cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         cache.put_groundings([Grounding("bone marrow", "anatomy", None, None, "test")])
     report, edges = run_apply(world)
     assert edges[0]["lit_supporting_publications"] == ["PMID:101", "PMID:102"]
@@ -887,7 +888,7 @@ def test_missing_caches_and_work_files_fail(world, capsys):
         (world.cache_dir / config.UBERON_FILE, "run `kgb-augment ground` first"),
         (world.work / records.PUBMED, "run `kgb-augment pubmed` first"),
         (world.work / records.STATEMENTS, "run `kgb-augment select` first"),
-        (world.cache_dir / config.PUBMED_CACHE, "no pubmed cache"),
+        (default_cache_path(), "no pubmed cache"),
         (world.cache_dir / config.LABEL_CACHE, "no label cache"),
     ):
         path.unlink()

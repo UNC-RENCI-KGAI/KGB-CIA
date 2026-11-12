@@ -238,7 +238,7 @@ def three_runs(tmp_path) -> tuple[World, Path]:
     for pmid in GOLD_CLAIMS:
         types = ["Journal Article", *(["Retracted Publication"] if pmid == "4" else [])]
         w.abstract(pair_of(pmid), pmid, "Imatinib.", types=types)
-    with PubMedCache(w.cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         cache.put_groundings([Grounding("liver", "anatomy", LIVER, "liver", "test")])
     gold = write_lines(
         w.work / evaluate.GOLD,
@@ -576,7 +576,7 @@ def test_gold_anatomy_is_a_curie_or_a_name_grounded_as_the_runs_are(tmp_path):
     down in the kidney; a name nothing grounds narrows nothing, and is counted."""
     w = new_world(tmp_path)
     fakes = Fakes()
-    with PubMedCache(w.cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         cache.put_groundings([Grounding("kidney", "anatomy", KIDNEY, "kidney", "test")])
 
     def evaluated(kidney: str) -> dict:

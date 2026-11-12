@@ -2,7 +2,8 @@
 
 `kgb-augment` must run with no arguments (the pipeline calls `main([])`), so every path, model
 and cap has a default here. The CLI overrides any of them; a few also read an environment
-variable so a shared setup (the RENCI drive, an NCBI key) needs no flags.
+variable so a shared setup (the RENCI drive, another model endpoint) needs no flags. PubMed's
+settings (the cache file, the NCBI key and email) are `shared.pubmed`'s.
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ DEFAULT_INPUT = Path(os.environ.get("KGB_AUGMENT_INPUT", "data/filter"))
 DEFAULT_OUTPUT = Path(os.environ.get("KGB_AUGMENT_OUTPUT", "data/augmentation"))
 # Intermediate files of each step: `<output>/work` unless given.
 WORK_SUBDIR = "work"
-# The PubMed and label caches. Point this at the shared RENCI drive to share them.
+# The label cache and the UBERON release. Point this at the shared RENCI drive to share them.
+# The PubMed cache is shared.pubmed's: KGB_PUBMED_CACHE, or data/cache/pubmed.sqlite.
 DEFAULT_CACHE_DIR = Path(os.environ.get("KGB_AUGMENT_CACHE_DIR", "data/augmentation/cache"))
-PUBMED_CACHE = "pubmed.sqlite"
 LABEL_CACHE = "labels.sqlite"
 # UBERON's release, whose is_a/part_of closure decides whether one anatomical context is at or
 # below another. The ground step fetches the release UBERON_URL pins into the cache directory
@@ -39,14 +40,6 @@ UBERON_URL = "http://purl.obolibrary.org/obo/uberon/releases/2026-11-05/uberon-b
 
 # Step 1: pairs kept per capped rule (gene-gene, gene-phenotype), best-scored first.
 CAPPED_LIMIT = 10_000
-
-# Step 2: abstracts per pair from the search, by relevance. Source PMIDs come on top.
-MAX_ABSTRACTS = 20
-MAX_SYNONYMS = 8
-NCBI_API_KEY = "NCBI_API_KEY"
-NCBI_EMAIL = "NCBI_EMAIL"
-NCBI_TOOL = "kgb-cia"
-EUTILS_URL = os.environ.get("EUTILS_URL", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils")
 
 # Step 4: the RENCI Name Resolver, which grounds the anatomy claims name.
 NAMERES_URL = os.environ.get("NAMERES_URL", "https://name-resolution-sri.renci.org")

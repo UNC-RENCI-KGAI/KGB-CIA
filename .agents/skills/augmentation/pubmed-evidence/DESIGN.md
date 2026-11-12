@@ -119,6 +119,11 @@ Group the kept edges by unordered node pair, since one search serves edges in bo
 
 ## Step 2: PubMed query
 
+The search (`search_pairs`), the E-utilities client and the PubMed cache are `shared.pubmed`'s,
+which every agent that reads PubMed shares (the repository's `shared/AGENTS.md`). Step 2 hands
+the search the pairs and entities step 1 wrote, and writes what it found for each pair to
+`pubmed.jsonl`. What follows is how that search works, and why.
+
 ### Source PMIDs
 
 Every in-scope pair is searched, even when its edges arrive with PMIDs in `publications`
@@ -166,8 +171,8 @@ sort=relevance, retmax=20
 ```
 
 - **Rate limits:** 3 requests a second without an API key and 10 with one (one key per NCBI
-  account). Send `tool` and `email` with every request; read them from `NCBI_API_KEY` and
-  `NCBI_EMAIL`.
+  account). The client sends `tool` and `email` with every request, and reads the key and
+  email from `NCBI_API_KEY` and `NCBI_EMAIL`.
 - **Throughput:** one ESearch per pair plus one EFetch per ~200 deduplicated PMIDs, so roughly
   30,000 pairs an hour with a key. ESearch returns at most 10,000 IDs per query.
 - **Off-peak:** NCBI asks that large jobs run on weekends or between 9pm and 5am ET on weekdays.
@@ -688,17 +693,19 @@ abstracts, and each candidate model labels the same pairs. Two gold tools serve 
 
 Two SQLite caches under `data/`, shared on the RENCI drive since data stays out of git:
 
-- **PubMed:** ESearch results keyed by query string, with the retrieval date; abstracts keyed by
-  PMID, so an abstract shared by several pairs is fetched once and reruns make no requests;
-  NodeNorm entries; and the anatomy groundings, by name. PubMed changes over time, so the query
-  string and retrieval date stay with the evidence. The pinned `uberon-basic.obo` sits beside
-  the caches.
-- **Claims:** each abstract's answer for a pair, keyed by (pair, PMID, prompt version, model),
-  with its design and claims; each claim's checks; the review's verdicts and the sentence
-  repairs, keyed by the claim's id and their own model and prompt version; and a log of every
-  call's tokens and cost. A rerun asks only for what has no answer yet, and a new prompt
-  version starts fresh. Step 6 reads this cache, the publication types in the PubMed cache and
-  the work files, so the graph can be rebuilt without calling a model.
+- **PubMed:** `shared.pubmed`'s cache, the file `KGB_PUBMED_CACHE` names (default
+  `data/cache/pubmed.sqlite`), which every agent that reads PubMed shares: ESearch results
+  keyed by query string, with the retrieval date; abstracts keyed by PMID, so an abstract
+  shared by several pairs is fetched once and reruns make no requests; and NodeNorm entries.
+  The skill adds one table of its own, the anatomy groundings, by name. PubMed changes over
+  time, so the query string and retrieval date stay with the evidence.
+- **Claims:** in the cache directory (`--cache-dir`, default `data/augmentation/cache`), with
+  the pinned `uberon-basic.obo` beside it. Each abstract's answer for a pair, keyed by (pair,
+  PMID, prompt version, model), with its design and claims; each claim's checks; the review's
+  verdicts and the sentence repairs, keyed by the claim's id and their own model and prompt
+  version; and a log of every call's tokens and cost. A rerun asks only for what has no answer
+  yet, and a new prompt version starts fresh. Step 6 reads this cache, the publication types in
+  the PubMed cache and the work files, so the graph can be rebuilt without calling a model.
 - **Prompt versions** hash the prompt file's text with the files it includes, the step's
   `FORMAT_VERSION` (the version of the request layout), its reply schema or schemas and the
   reasoning effort sent. Any edit to a prompt or a schema, or another effort, starts fresh

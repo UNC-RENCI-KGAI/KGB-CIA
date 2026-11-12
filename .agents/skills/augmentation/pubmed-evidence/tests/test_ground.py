@@ -13,10 +13,11 @@ import pytest
 from pubmed_evidence import config, ground, records, refine, uberon
 from pubmed_evidence.cache import AbstractClaimsRow, LabelCache, PubMedCache
 from pubmed_evidence.graphio import write_jsonl
-from pubmed_evidence.records import PUBMED, LabelRun, PubmedRecord
+from pubmed_evidence.records import PUBMED, LabelRun
 from toy import UBERON_OBO, UBERON_VERSION
 
 from shared import nodenorm
+from shared.pubmed import PubmedRecord
 
 SYSTEM, ORGAN, DIGESTIVE, RENAL = (
     "UBERON:0000467",
@@ -174,7 +175,7 @@ def test_anatomy_key():
 def test_names_ground_to_the_first_exact_match_with_an_uberon_term(tmp_path):
     fakes = Fakes()
     names = ["Liver", " liver ", "kidneys", "lymph nodes", "skin", "hepatocytes", "tumour margin"]
-    with PubMedCache(tmp_path / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         s = ground.ground_anatomy(
             [*names, "plasma", ""], cache, lookup=fakes.lookup, nodenorm=fakes.nodenorm
         )
@@ -215,7 +216,7 @@ def test_names_ground_to_the_first_exact_match_with_an_uberon_term(tmp_path):
 
 def test_cached_names_are_not_asked_again_unless_refreshed(tmp_path):
     fakes = Fakes()
-    with PubMedCache(tmp_path / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         ground.ground_anatomy(
             ["liver", "hepatocytes"], cache, lookup=fakes.lookup, nodenorm=fakes.nodenorm
         )
@@ -246,7 +247,7 @@ def test_failed_lookups_are_not_cached(tmp_path, monkeypatch, capsys):
         raise httpx.ReadTimeout("slow")
 
     names = ["liver", "skin", "kidneys"]
-    with PubMedCache(tmp_path / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         s = ground.ground_anatomy(names, cache, lookup=flaky, nodenorm=fakes.nodenorm)
         assert (s["failed"], s["failed_names"], s["grounded"]) == (1, ["kidneys"], 2)
         assert "lookup of 1 names failed (ConnectError: refused)" in capsys.readouterr().err
@@ -401,7 +402,7 @@ def test_run_fails_when_uberon_cant_be_fetched(tmp_path, fakes, monkeypatch, cap
     assert "couldn't fetch UBERON" in capsys.readouterr().err
     # The names are grounded and cached all the same; the run names no release.
     assert records.read_label_run(args.work).uberon_version is None
-    with PubMedCache(args.cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         assert set(ground.groundings(cache, ["liver", "kidneys"])) == {"liver", "kidneys"}
 
 

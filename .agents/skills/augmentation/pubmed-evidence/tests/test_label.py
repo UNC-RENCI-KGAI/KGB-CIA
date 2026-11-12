@@ -14,7 +14,6 @@ import pytest
 from conftest import FakeClient, Sent
 from pubmed_evidence import biolink, config, label, llm, records, repair, scope
 from pubmed_evidence.cache import (
-    Abstract,
     AbstractClaimsRow,
     ClaimCheckRow,
     LabelCache,
@@ -22,7 +21,9 @@ from pubmed_evidence.cache import (
     claim_id,
 )
 from pubmed_evidence.graphio import pair_id, read_jsonl, write_jsonl
-from pubmed_evidence.records import Entity, FetchedPmid, Pair, PubmedRecord
+from pubmed_evidence.records import Entity, Pair
+
+from shared.pubmed import Abstract, FetchedPmid, PubmedRecord
 
 IMATINIB = "CHEBI:45783"
 ABL1 = "NCBIGene:25"
@@ -92,7 +93,7 @@ class Work:
         write_jsonl(self.work / records.PUBMED, recs)
 
     def add_abstracts(self, abstracts) -> None:
-        with PubMedCache(self.cache_dir / config.PUBMED_CACHE) as cache:
+        with PubMedCache() as cache:
             cache.put_abstracts(abstracts)
 
     def answers(self, version: str | None = None, model: str = MODEL) -> dict:

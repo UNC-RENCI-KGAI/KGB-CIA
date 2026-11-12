@@ -22,12 +22,15 @@ from urllib.parse import parse_qsl
 import httpx
 import pytest
 from conftest import FakeClient, Sent
-from pubmed_evidence import cli, config, graphio, ground, llm, pubmed, records, uberon
+from pubmed_evidence import cli, config, graphio, ground, llm, records, uberon
 from pubmed_evidence.cache import LabelCache
 from toy import ABL1, CML, EDGES, IMATINIB, NODES, UBERON_OBO, UBERON_VERSION
 
 from agents.augmentation import cli as stage
 from shared import nodenorm
+from shared.pubmed import EUtils, default_cache_path
+from shared.pubmed import eutils as eutils_module
+from shared.pubmed import pairs as pairs_module
 from shared.schema import AugmentedEdge, Edge
 
 ABSTRACTS = {
@@ -151,11 +154,10 @@ def fakes(monkeypatch):
     """Route NCBI, NodeNorm, the Name Resolver, UBERON's download and the models to fakes;
     return the list of calls they saw."""
     calls: list[str] = []
-    real = pubmed.EUtils
 
     def eutils(*args, **kw):
         client = httpx.Client(transport=httpx.MockTransport(fake_ncbi(calls)))
-        return real(client, email="test@example.org", rate=0, sleep=lambda s: None)
+        return EUtils(client, email="test@example.org", rate=0, sleep=lambda s: None)
 
     def name_lookup(names, **kw):
         calls.append("nameres")
@@ -166,12 +168,12 @@ def fakes(monkeypatch):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(UBERON_OBO)
 
-    monkeypatch.setattr(pubmed, "EUtils", eutils)
+    monkeypatch.setattr(pairs_module, "EUtils", eutils)
     monkeypatch.setattr(nodenorm, "normalize", lambda curies, **kw: {})
     monkeypatch.setattr(ground, "name_lookup", name_lookup)
     monkeypatch.setattr(uberon, "fetch", fetch_uberon)
     monkeypatch.setattr(llm, "client_for", lambda model, **kw: fake_model(calls))
-    for name in (config.AZURE_OPENAI_API_KEY, config.NCBI_API_KEY, config.NCBI_EMAIL):
+    for name in (config.AZURE_OPENAI_API_KEY, eutils_module.NCBI_API_KEY, eutils_module.NCBI_EMAIL):
         monkeypatch.delenv(name, raising=False)
     return calls
 
@@ -365,7 +367,7 @@ def test_steps_run_alone_with_options_before_or_after(tmp_path, fakes):
     assert cli.main([*common, "select"]) == 0
     assert cli.main(["pubmed", *common, "--no-nodenorm"]) == 0
     assert (tmp_path / "out" / "work" / "pubmed.jsonl").exists()
-    assert (tmp_path / "cache" / config.PUBMED_CACHE).exists()
+    assert default_cache_path().exists()
     assert "esearch.fcgi" in fakes
 
 

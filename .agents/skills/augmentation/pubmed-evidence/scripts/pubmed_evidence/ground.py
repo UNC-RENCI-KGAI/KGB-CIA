@@ -9,10 +9,10 @@ that isn't grounded stays on its claim as text, for `lit_context_notes`; a groun
 the claim's statements as `anatomical_context_qualifier`, which can make them narrower than an
 edge (`refine.statements_of`).
 
-Groundings are cached by name in the PubMed cache, misses too, so a rerun asks nothing. Names
-are cached in their `anatomy_key` form, so "Liver" and "liver " share a row; `groundings` reads
-them back for the names as claims give them. A lookup that fails isn't cached, and a rerun
-retries it.
+Groundings are cached by name in the PubMed cache, misses too, and NodeNorm's answers in its
+`nodenorm` table, so a rerun asks nothing. Names are cached in their `anatomy_key` form, so
+"Liver" and "liver " share a row; `groundings` reads them back for the names as claims give
+them. A lookup that fails isn't cached, and a rerun retries it.
 
 The step also makes sure the cache directory has the UBERON release config.UBERON_URL pins,
 whose is_a/part_of closure step 6 uses (`uberon.py`), and records its `data-version` in
@@ -32,9 +32,8 @@ import httpx
 from pubmed_evidence import config, records, uberon
 from pubmed_evidence.cache import Grounding, LabelCache, PubMedCache
 from pubmed_evidence.graphio import chunks
-from pubmed_evidence.pubmed import MAX_FAILED_SHARE, NODENORM_BATCH
-from pubmed_evidence.records import PUBMED, PubmedRecord, read_records
-from shared import nodenorm as nodenorm_api
+from pubmed_evidence.records import PUBMED, read_records
+from shared.pubmed import MAX_FAILED_SHARE, PubmedRecord, nodenorm_entries
 
 # What grounds a name, or fails to (`Grounding.source`).
 SOURCE = "nameres+nodenorm"
@@ -109,21 +108,6 @@ def _uberon_term(entry: dict | None) -> tuple[str, str | None] | None:
     return None
 
 
-def _normalize(
-    curies: list[str], cache: PubMedCache, nodenorm: Callable[[list[str]], dict]
-) -> dict[str, dict | None]:
-    """NodeNorm's entries for `curies` (None for unknown ones), through the PubMed cache's
-    `nodenorm` table as step 2 uses it. Raises what `nodenorm` raises; batches it answered
-    before that stay cached."""
-    entries = cache.get_nodenorm(curies)
-    for chunk in chunks([c for c in dict.fromkeys(curies) if c not in entries], NODENORM_BATCH):
-        response = nodenorm(list(chunk))
-        got = {c: response.get(c) or None for c in chunk}
-        cache.put_nodenorm(got)
-        entries.update(got)
-    return entries
-
-
 def ground_anatomy(
     names: Iterable[str],
     cache: PubMedCache,
@@ -136,7 +120,6 @@ def ground_anatomy(
     answers, and return counts: distinct names, from the cache, looked up, grounded and not
     (of all of them, cached or new), and the names whose lookup failed, which aren't cached."""
     lookup = lookup or name_lookup
-    nodenorm = nodenorm or nodenorm_api.normalize
     keys = list(dict.fromkeys(k for k in map(anatomy_key, names) if k))
     cached = {} if refresh else cache.get_groundings("anatomy", keys)
     todo = [k for k in keys if k not in cached]
@@ -148,7 +131,8 @@ def ground_anatomy(
                 k: [m["curie"] for m in matches.get(k) or [] if m.get("curie") and _names(k, m)]
                 for k in chunk
             }
-            entries = _normalize([c for cs in candidates.values() for c in cs], cache, nodenorm)
+            curies = [c for cs in candidates.values() for c in cs]
+            entries = nodenorm_entries(curies, cache, nodenorm)
         except (httpx.HTTPError, ValueError, OSError) as e:
             _warn(f"lookup of {len(chunk)} names failed ({type(e).__name__}: {e})")
             failed += chunk
@@ -195,7 +179,7 @@ def ground(
     with LabelCache(cache_dir / config.LABEL_CACHE) as labels:
         answers = labels.abstract_claims(run.prompt_version, run.model, pair_ids)
     claims = [c for a in answers for c in a.claims]
-    with PubMedCache(cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         names = filter(None, map(claim_anatomy, claims))
         summary = ground_anatomy(names, cache, refresh=refresh, lookup=lookup, nodenorm=nodenorm)
     return {"claims": len(claims), **summary}

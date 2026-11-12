@@ -73,6 +73,7 @@ from pydantic import ValidationError
 
 from pubmed_evidence import bundle, cache, config, graphio, records, refine, repair
 from pubmed_evidence.bundle import Bundle, Bundles
+from shared.pubmed import default_cache_path
 from shared.schema import AugmentedEdge, Edge, Statement
 
 APPLY_REPORT = records.APPLY_REPORT
@@ -459,7 +460,7 @@ def _load(input_dir: Path, cache_dir: Path, work: Path, run: records.LabelRun) -
     """The run's bundled pairs, with its review's verdicts; ApplyError for a missing input, an
     invalid edge in scope, or a run with no claims where some are needed."""
     label_path = cache_dir / config.LABEL_CACHE
-    for path, step in ((label_path, "label"), (cache_dir / config.PUBMED_CACHE, "pubmed")):
+    for path, step in ((label_path, "label"), (default_cache_path(), "pubmed")):
         if not path.exists():
             raise ApplyError(f"no {step} cache at {path}; run `kgb-augment {step}` first")
     try:

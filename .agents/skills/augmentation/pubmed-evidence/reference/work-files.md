@@ -2,9 +2,12 @@
 
 Each step reads the files of the steps before it in the work directory (`--work`, default
 `<output>/work`) and writes its own, so any step can be rerun alone. What costs requests or
-tokens is in the two caches (`--cache-dir`, default `data/augmentation/cache`); the work files
-are cheap to rebuild. The record types are in `scripts/pubmed_evidence/records.py`, the caches
-in `cache.py`, and the graph's records in the repository's `shared/schema.py`.
+tokens is in the two caches (the PubMed cache, `KGB_PUBMED_CACHE`, default
+`data/cache/pubmed.sqlite`, and the label cache in `--cache-dir`, default
+`data/augmentation/cache`); the work files are cheap to rebuild. The record types are in
+`scripts/pubmed_evidence/records.py` (`Entity` and `Pair` extend `shared.pubmed`'s, and
+`PubmedRecord` is `shared.pubmed`'s own), the caches in `cache.py`, and the graph's records in
+the repository's `shared/schema.py`.
 
 PMIDs are bare digits (`"12345"`) in work files and caches, and `PMID:12345` in the graph's
 `publications` and in `lit_*` fields.
@@ -146,13 +149,15 @@ before took: the 5% rule takes the failed calls as a share of them), `failed_cal
 
 ## Caches
 
-Two SQLite files under `--cache-dir` (`KGB_AUGMENT_CACHE_DIR`), meant to be shared on the
-RENCI drive. They use SQLite's rollback journal, not WAL (unsafe on network filesystems), so
-only one process should write to a cache at a time. Never delete them: they hold paid claims.
-Beside them sits `uberon-basic.obo`, the UBERON release step 4 pins (`config.UBERON_URL`);
-delete it only to fetch another release after changing the pin.
+Two SQLite files, meant to be shared on the RENCI drive: the PubMed cache, the file
+`KGB_PUBMED_CACHE` names (default `data/cache/pubmed.sqlite`), which every agent that reads
+PubMed shares, and `labels.sqlite` under `--cache-dir` (`KGB_AUGMENT_CACHE_DIR`). They use
+SQLite's rollback journal, not WAL (unsafe on network filesystems), so only one process should
+write to a cache at a time. Never delete them: they hold paid claims. Beside the label cache
+sits `uberon-basic.obo`, the UBERON release step 4 pins (`config.UBERON_URL`); delete it only
+to fetch another release after changing the pin.
 
-**`pubmed.sqlite`** (`PubMedCache`):
+**`pubmed.sqlite`** (`PubMedCache`: `shared.pubmed`'s tables, and the skill's `groundings`):
 
 | Table | Key | Columns |
 | --- | --- | --- |

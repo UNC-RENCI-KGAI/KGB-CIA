@@ -54,7 +54,6 @@ from typing import Any, get_args
 from pubmed_evidence import biolink, config, llm, records, refine, repair, scope, sentences
 from pubmed_evidence.biolink import QualifierSpec
 from pubmed_evidence.cache import (
-    Abstract,
     AbstractClaimsRow,
     ClaimCheckRow,
     LabelCache,
@@ -64,9 +63,10 @@ from pubmed_evidence.cache import (
 )
 from pubmed_evidence.graphio import chunks, pair_id, pair_nodes, read_jsonl, write_jsonl
 from pubmed_evidence.quotes import quote_found
-from pubmed_evidence.records import Entity, Pair, PubmedRecord
+from pubmed_evidence.records import Entity, Pair
 from pubmed_evidence.scope import Rule
 from shared import schema
+from shared.pubmed import Abstract, PubmedRecord, default_cache_path
 from shared.schema import ClaimRole, NegativeFindingType, Polarity, StudyDesign
 
 # Bump when the user message changes shape: it is part of the prompt version.
@@ -1094,7 +1094,7 @@ def label_pairs(
     if wanted is not None:
         selected = {p.pair_id for p in inputs.pairs}
         inputs.pairs = [p for p in inputs.pairs if p.pair_id in set(wanted)]
-    pubmed_path = cache_dir / config.PUBMED_CACHE
+    pubmed_path = default_cache_path()
     if not pubmed_path.exists():
         raise FileNotFoundError(f"{pubmed_path} is missing: run `kgb-augment pubmed` first")
     info = llm.model(model)

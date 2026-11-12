@@ -26,14 +26,9 @@ from pathlib import Path
 from typing import Any
 
 from pubmed_evidence import config, llm, records, sentences
-from pubmed_evidence.cache import (
-    Abstract,
-    ClaimRepairRow,
-    LabelCache,
-    PubMedCache,
-    claim_id,
-)
+from pubmed_evidence.cache import ClaimRepairRow, LabelCache, PubMedCache, claim_id
 from pubmed_evidence.quotes import quote_found
+from shared.pubmed import Abstract
 
 # Version of the code that writes the user message; with the reply schema, part of the repair
 # prompt version.

@@ -1,23 +1,24 @@
-"""The two SQLite caches: PubMed responses, and LLM labels.
+"""The augmentation agent's SQLite caches: the PubMed cache with a table of its own, and the
+label cache.
 
-- `PubMedCache` keeps ESearch results by query string with their retrieval date, abstracts by
-  PMID (so an abstract shared by several pairs is fetched once), NodeNorm entries by CURIE, and
-  the groundings of the anatomy names claims give, by name. A rerun makes no requests for
-  anything already here.
+- `PubMedCache` is `shared.pubmed`'s cache (ESearch results by query string, abstracts by PMID,
+  NodeNorm entries by CURIE), with the groundings of the anatomy names claims give, by name. It
+  is the file `shared.pubmed.default_cache_path()` names: KGB_PUBMED_CACHE, or
+  data/cache/pubmed.sqlite. A rerun makes no requests for anything already there.
 - `LabelCache` keeps each abstract's answer for a pair by (pair, PMID, prompt version, model):
   the study design and the claims. Code's checks of a claim, the review's verdicts and the
   sentence repairs are keyed by that and the claim's `claim_id`, and a verdict or repair by its
   own model and prompt version too. Each prompt version (label, review and repair) covers its
   prompt, message format, reply schema and reasoning effort, so a change to any of them asks
-  again. It also logs each call's token use. Step 6 reads it, with the article types here and
-  the work files, so the graph can be rebuilt without calling a model.
+  again. It also logs each call's token use. Step 6 reads it, with the article types in the
+  PubMed cache and the work files, so the graph can be rebuilt without calling a model. It lives
+  in the cache directory (`config.DEFAULT_CACHE_DIR`, shared on the RENCI drive).
 - An older label cache also has the tables of the statement labels that came before the claims
   (`labels`, `proposals`, `reviews`, `repairs`). No code reads or writes them any more, and they
   stay as they are.
 
-Both live under `config.DEFAULT_CACHE_DIR` (shared on the RENCI drive). They use SQLite's
-default rollback journal rather than WAL, which is unsafe on network filesystems. Write from one
-process at a time.
+Both use SQLite's default rollback journal rather than WAL, which is unsafe on network
+filesystems. Write from one process at a time.
 """
 
 from __future__ import annotations
@@ -31,16 +32,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+import shared.pubmed
 from pubmed_evidence.graphio import chunks
 from shared.schema import ReviewVerdict, StudyDesign
 
 
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def today() -> str:
-    return datetime.now(UTC).date().isoformat()
 
 
 def canonical(data: dict[str, Any] | None) -> str:
@@ -66,67 +64,7 @@ def claim_id(claim: dict[str, Any]) -> str:
 QUERY_CHUNK = 500
 
 
-class _Cache:
-    SCHEMA = ""
-    # Columns added to a table after it was first released, {table: {column: declaration}}.
-    # Opening a cache adds those it lacks, so an older cache gets them with NULL in its rows.
-    ADDED: dict[str, dict[str, str]] = {}
-
-    def __init__(self, path: Path | str):
-        self.path = Path(path)
-        if str(path) != ":memory:":
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path))
-        self.db.row_factory = sqlite3.Row
-        self.db.executescript(self.SCHEMA)
-        self._add_columns()
-        self.db.commit()
-
-    def _add_columns(self) -> None:
-        for table, columns in self.ADDED.items():
-            have = {row["name"] for row in self.db.execute(f"PRAGMA table_info({table})")}
-            for column, declaration in columns.items():
-                if column not in have:
-                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
-
-    def close(self) -> None:
-        self.db.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-
 # --- PubMed ---------------------------------------------------------------------------------
-
-
-@dataclass
-class Search:
-    query: str
-    retrieved: str
-    total: int
-    pmids: list[str]
-
-
-@dataclass
-class Abstract:
-    """A PMID's title and abstract (`""` when PubMed has none) and its PubMed publication types
-    (`["Journal Article", "Review"]`); `publication_types` is None for an abstract cached before
-    they were recorded, which step 2 fetches again."""
-
-    pmid: str
-    title: str
-    abstract: str = ""
-    year: int | None = None
-    retrieved: str = ""
-    publication_types: list[str] | None = None
-
-    @property
-    def has_text(self) -> bool:
-        return bool(self.abstract.strip())
-
 
 # What a grounded name names: anatomy grounds to UBERON. (Species come from the reply schema's
 # enum, mapped in code, so they need no grounding.)
@@ -147,110 +85,18 @@ class Grounding:
     created: str = ""
 
 
-class PubMedCache(_Cache):
-    SCHEMA = """
-    CREATE TABLE IF NOT EXISTS searches (
-        query TEXT PRIMARY KEY, retrieved TEXT NOT NULL, total INTEGER NOT NULL,
-        pmids TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS abstracts (
-        pmid TEXT PRIMARY KEY, title TEXT NOT NULL, abstract TEXT NOT NULL,
-        year INTEGER, retrieved TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS nodenorm (
-        curie TEXT PRIMARY KEY, entry TEXT, retrieved TEXT NOT NULL);
+class PubMedCache(shared.pubmed.PubMedCache):
+    """`shared.pubmed.PubMedCache`, with the ground step's `groundings` table."""
+
+    SCHEMA = (
+        shared.pubmed.PubMedCache.SCHEMA
+        + """
     CREATE TABLE IF NOT EXISTS groundings (
         text TEXT NOT NULL, kind TEXT NOT NULL, curie TEXT, label TEXT, source TEXT,
         created TEXT NOT NULL,
         PRIMARY KEY (text, kind));
     """
-    ADDED = {"abstracts": {"publication_types": "TEXT"}}
-
-    def get_search(self, query: str) -> Search | None:
-        row = self.db.execute("SELECT * FROM searches WHERE query = ?", (query,)).fetchone()
-        if row is None:
-            return None
-        return Search(row["query"], row["retrieved"], row["total"], json.loads(row["pmids"]))
-
-    def put_search(self, search: Search) -> None:
-        self.db.execute(
-            "INSERT OR REPLACE INTO searches VALUES (?, ?, ?, ?)",
-            (search.query, search.retrieved, search.total, json.dumps(search.pmids)),
-        )
-        self.db.commit()
-
-    def get_abstracts(self, pmids: Iterable[str]) -> dict[str, Abstract]:
-        """Cached abstracts by PMID. A PMID PubMed has no abstract for is here with abstract ''."""
-        out: dict[str, Abstract] = {}
-        for chunk in chunks(list(dict.fromkeys(pmids)), QUERY_CHUNK):
-            marks = ",".join("?" * len(chunk))
-            for row in self.db.execute(
-                f"SELECT * FROM abstracts WHERE pmid IN ({marks})", tuple(chunk)
-            ):
-                types = row["publication_types"]
-                out[row["pmid"]] = Abstract(
-                    row["pmid"],
-                    row["title"],
-                    row["abstract"],
-                    row["year"],
-                    row["retrieved"],
-                    json.loads(types) if types is not None else None,
-                )
-        return out
-
-    def articles(self, pmids: Iterable[str]) -> dict[str, tuple[int | None, list[str] | None]]:
-        """(year, publication types) of the cached PMIDs, without their text."""
-        out: dict[str, tuple[int | None, list[str] | None]] = {}
-        for chunk in chunks(list(dict.fromkeys(pmids)), QUERY_CHUNK):
-            marks = ",".join("?" * len(chunk))
-            for row in self.db.execute(
-                f"SELECT pmid, year, publication_types FROM abstracts WHERE pmid IN ({marks})",
-                tuple(chunk),
-            ):
-                types = row["publication_types"]
-                out[row["pmid"]] = (row["year"], json.loads(types) if types is not None else None)
-        return out
-
-    def missing_abstracts(self, pmids: Iterable[str]) -> list[str]:
-        """The PMIDs to fetch: those not cached, and those cached without publication types."""
-        wanted = list(dict.fromkeys(pmids))
-        have = self.get_abstracts(wanted)
-        return [p for p in wanted if p not in have or have[p].publication_types is None]
-
-    def put_abstracts(self, abstracts: Iterable[Abstract]) -> None:
-        self.db.executemany(
-            "INSERT OR REPLACE INTO abstracts (pmid, title, abstract, year, retrieved, "
-            "publication_types) VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    a.pmid,
-                    a.title,
-                    a.abstract,
-                    a.year,
-                    a.retrieved or now(),
-                    json.dumps(a.publication_types) if a.publication_types is not None else None,
-                )
-                for a in abstracts
-            ],
-        )
-        self.db.commit()
-
-    def get_nodenorm(self, curies: Iterable[str]) -> dict[str, dict | None]:
-        """Cached NodeNorm entries by CURIE; None for a CURIE NodeNorm doesn't know."""
-        out: dict[str, dict | None] = {}
-        for chunk in chunks(list(dict.fromkeys(curies)), QUERY_CHUNK):
-            marks = ",".join("?" * len(chunk))
-            for row in self.db.execute(
-                f"SELECT curie, entry FROM nodenorm WHERE curie IN ({marks})", tuple(chunk)
-            ):
-                out[row["curie"]] = json.loads(row["entry"]) if row["entry"] else None
-        return out
-
-    def put_nodenorm(self, entries: dict[str, dict | None]) -> None:
-        stamp = now()
-        self.db.executemany(
-            "INSERT OR REPLACE INTO nodenorm VALUES (?, ?, ?)",
-            [(c, json.dumps(e) if e else None, stamp) for c, e in entries.items()],
-        )
-        self.db.commit()
+    )
 
     def get_groundings(self, kind: GroundingKind, texts: Iterable[str]) -> dict[str, Grounding]:
         """Cached groundings of the names, by name, exactly as given; a name that couldn't be
@@ -385,7 +231,7 @@ def _int(value: bool | None) -> int | None:
     return None if value is None else int(value)
 
 
-class LabelCache(_Cache):
+class LabelCache:
     SCHEMA = """
     CREATE TABLE IF NOT EXISTS calls (
         id INTEGER PRIMARY KEY AUTOINCREMENT, step TEXT NOT NULL, pair_id TEXT NOT NULL,
@@ -419,6 +265,8 @@ class LabelCache(_Cache):
     CREATE INDEX IF NOT EXISTS abstract_claims_run ON abstract_claims (prompt_version, model);
     CREATE INDEX IF NOT EXISTS claim_checks_run ON claim_checks (prompt_version, model);
     """
+    # Columns added to a table after it was first released, {table: {column: declaration}}.
+    # Opening a cache adds those it lacks, so an older cache gets them with NULL in its rows.
     ADDED = {
         "calls": {
             "cache_read_tokens": "INTEGER",
@@ -426,6 +274,32 @@ class LabelCache(_Cache):
             "answered_by": "TEXT",
         },
     }
+
+    def __init__(self, path: Path | str):
+        self.path = Path(path)
+        if str(path) != ":memory:":
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(str(path))
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript(self.SCHEMA)
+        self._add_columns()
+        self.db.commit()
+
+    def _add_columns(self) -> None:
+        for table, columns in self.ADDED.items():
+            have = {row["name"] for row in self.db.execute(f"PRAGMA table_info({table})")}
+            for column, declaration in columns.items():
+                if column not in have:
+                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+    def close(self) -> None:
+        self.db.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     # claims
 

@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from pubmed_evidence import bundle, config, graphio, records, refine, repair, scope
 from pubmed_evidence.cache import (
-    Abstract,
     AbstractClaimsRow,
     ClaimCheckRow,
     ClaimRepairRow,
@@ -20,9 +19,10 @@ from pubmed_evidence.cache import (
     PubMedCache,
     claim_id,
 )
-from pubmed_evidence.records import FetchedPmid, LabelRun, PubmedRecord
+from pubmed_evidence.records import LabelRun
 from toy import ABL1, CML, IMATINIB, LIVER, NODES, UBERON_OBO
 
+from shared.pubmed import Abstract, FetchedPmid, PubmedRecord
 from shared.schema import Edge
 
 MODEL = "gpt-6-luna"
@@ -96,7 +96,8 @@ def edge(subject: str, predicate: str, object: str, **kw) -> Edge:
 
 @dataclass
 class World:
-    """A work directory, its caches and an input graph, written as a test adds to them."""
+    """A work directory, its caches and an input graph, written as a test adds to them. The
+    PubMed cache is the test's own (conftest), not one in `cache_dir`."""
 
     work: Path
     cache_dir: Path
@@ -143,7 +144,7 @@ class World:
         self.search(pair_id)
         self.searched[pair_id].pmids.append(FetchedPmid(pmid=pmid, origin=origin))
         graphio.write_jsonl(self.work / records.PUBMED, self.searched.values())
-        with PubMedCache(self.cache_dir / config.PUBMED_CACHE) as cache:
+        with PubMedCache() as cache:
             cache.put_abstracts([Abstract(pmid, f"Title {pmid}", text, year, "", types)])
 
     def answer(
@@ -184,7 +185,7 @@ def new_world(tmp_path: Path) -> World:
     w.cache_dir.mkdir(parents=True)
     (w.cache_dir / config.UBERON_FILE).write_text(UBERON_OBO)
     LabelCache(w.cache_dir / config.LABEL_CACHE).close()
-    PubMedCache(w.cache_dir / config.PUBMED_CACHE).close()
+    PubMedCache().close()
     w.search(TREATS_PAIR)
     return w
 
@@ -351,7 +352,7 @@ def test_records_carry_grounded_anatomy_species_and_who_answered(world):
     in_liver = stored(TREATS, sentence="x", anatomy="Liver", notes="45 mg", species=None)
     in_margin = stored(TREATS, sentence="x", anatomy="tumour margin")
     world.answer(TREATS_PAIR, "1", in_liver, in_margin)
-    with PubMedCache(world.cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         cache.put_groundings(
             [
                 Grounding("liver", "anatomy", LIVER, "liver", "test"),
@@ -381,7 +382,7 @@ def test_a_pair_with_a_name_the_ground_step_never_looked_up_is_not_bundled(world
     assert loaded.pairs == [] and loaded.unlabeled == []
     assert loaded.not_looked_up == [TREATS_PAIR]
     assert loaded.counts["pairs with anatomy names never grounded"] == 1
-    with PubMedCache(world.cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         cache.put_groundings([Grounding("bone marrow", "anatomy", None, None, "test")])
     loaded = world.load()
     [b] = loaded.pairs

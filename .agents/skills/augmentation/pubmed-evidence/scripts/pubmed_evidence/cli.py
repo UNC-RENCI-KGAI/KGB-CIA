@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from pubmed_evidence import config, records
+from shared.pubmed import CACHE_ENV, DEFAULT_CACHE_PATH
 
 DESCRIPTION = (
     "Enrich the baseline graph with extra datasets, and with PubMed evidence for its edges and "
@@ -80,8 +81,9 @@ def _add_common(parser: argparse.ArgumentParser, *, top: bool) -> None:
         "--cache-dir",
         type=Path,
         default=default(config.DEFAULT_CACHE_DIR),
-        help=f"the PubMed and label caches (default {config.DEFAULT_CACHE_DIR}; "
-        "env KGB_AUGMENT_CACHE_DIR)",
+        help=f"the label cache and the UBERON release (default {config.DEFAULT_CACHE_DIR}; "
+        f"env KGB_AUGMENT_CACHE_DIR). The PubMed cache is the file env {CACHE_ENV} names "
+        f"(default {DEFAULT_CACHE_PATH})",
     )
 
 

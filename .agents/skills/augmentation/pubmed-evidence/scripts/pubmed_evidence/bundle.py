@@ -65,7 +65,8 @@ from pubmed_evidence.cache import (
     canonical,
     claim_id,
 )
-from pubmed_evidence.records import Entity, LabelRun, PubmedRecord
+from pubmed_evidence.records import Entity, LabelRun
+from shared.pubmed import PubmedRecord, default_cache_path
 from shared.schema import (
     ClaimContext,
     ClaimRecord,
@@ -86,11 +87,6 @@ _WORK_FILES = {
     records.STATEMENTS: "select",
     records.ENTITIES: "select",
     records.PUBMED: "pubmed",
-}
-_CACHE_FILES = {
-    config.LABEL_CACHE: "label",
-    config.PUBMED_CACHE: "pubmed",
-    config.UBERON_FILE: "ground",
 }
 
 
@@ -245,11 +241,13 @@ def load(
     for name, step in _WORK_FILES.items():
         if not (work / name).exists():
             raise FileNotFoundError(f"{work / name} is missing: run `kgb-augment {step}` first")
-    for name, step in _CACHE_FILES.items():
-        if not (cache_dir / name).exists():
-            raise FileNotFoundError(
-                f"{cache_dir / name} is missing: run `kgb-augment {step}` first"
-            )
+    for path, step in (
+        (cache_dir / config.LABEL_CACHE, "label"),
+        (default_cache_path(), "pubmed"),
+        (cache_dir / config.UBERON_FILE, "ground"),
+    ):
+        if not path.exists():
+            raise FileNotFoundError(f"{path} is missing: run `kgb-augment {step}` first")
     edges_file = graphio.graph_file(input_dir, graphio.EDGES)
     if not edges_file.exists():
         raise FileNotFoundError(f"{input_dir / graphio.EDGES} is missing: no input graph")
@@ -267,10 +265,7 @@ def load(
     if limit is not None:
         pair_ids = pair_ids[: max(0, limit)]
     review = (reviewer, review_prompt_version) if reviewer and review_prompt_version else None
-    with (
-        LabelCache(cache_dir / config.LABEL_CACHE) as labels,
-        PubMedCache(cache_dir / config.PUBMED_CACHE) as cache,
-    ):
+    with LabelCache(cache_dir / config.LABEL_CACHE) as labels, PubMedCache() as cache:
         for chunk in graphio.chunks(pair_ids, CHUNK):
             records_ = {p: searched[p] for p in chunk}
             _load_chunk(list(chunk), records_, edges, others, labels, cache, run, review, out)

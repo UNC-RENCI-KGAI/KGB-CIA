@@ -328,7 +328,7 @@ def test_a_pair_with_anatomy_never_looked_up_is_counted_and_not_sent(scene):
     assert sent_pmids(client) == [set(TRIALS_PMIDS)]
     assert (s["pairs"], s["pairs_not_looked_up"]) == (1, 1)
 
-    with PubMedCache(scene.cache_dir / config.PUBMED_CACHE) as cache:
+    with PubMedCache() as cache:
         cache.put_groundings([Grounding("liver", "anatomy", None, None, "test")])
     again = reviewer()
     s = run_review(scene, again)

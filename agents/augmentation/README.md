@@ -38,7 +38,9 @@ uv run kgb-augment STEP --help    # STEP: select, pubmed, label, ground, review,
 The skill's `scripts/augment.py` takes the same arguments; the skill's README lists each
 step's options. Set `AZURE_OPENAI_API_KEY` for labeling and review with the RENCI models
 (`ANTHROPIC_API_KEY`, or an `ant auth login` profile, with Claude models), and `NCBI_EMAIL`
-(plus `NCBI_API_KEY` for 10 requests a second) for the PubMed search. With a `label_run.json`
+(plus `NCBI_API_KEY` for 10 requests a second) for the PubMed search. The search, its client and
+its cache are `shared.pubmed`'s; `KGB_PUBMED_CACHE` names the cache file (default
+`data/cache/pubmed.sqlite`), which every agent that reads PubMed shares. With a `label_run.json`
 in the work directory, the full run continues that run (its model, prompt, reasoning effort,
 reviewer and review effort) and reuses its cached claims and verdicts; `--reasoning-effort`
 labels at another effort (default: the model's own, low for gpt-6-luna). `--skip-review` leaves
@@ -76,8 +78,9 @@ Uses the KGX records in `shared/schema.py`.
     ground step never looked up) are written unchanged, and counted.
 - **Work directory** (`--work`, default `<output>/work`): among each step's files,
   `refinements.jsonl` (each refined pair's edges, proposed edges and links) and
-  `apply_report.json`. These and the **caches** (`--cache-dir`, default
-  `data/augmentation/cache`) are described in the skill's
+  `apply_report.json`. These and the **caches** (the PubMed cache, `KGB_PUBMED_CACHE`, default
+  `data/cache/pubmed.sqlite`; the label cache, `--cache-dir`, default `data/augmentation/cache`)
+  are described in the skill's
   [`reference/work-files.md`](../../.agents/skills/augmentation/pubmed-evidence/reference/work-files.md).
 
 ## Status
