@@ -57,6 +57,14 @@ Prefer, in this order:
    names don't contain the word. Deliver it anyway, but say plainly that it is approximate and
    in which direction, and offer once that an exact list would sharpen it.
 
+**Seed a gene and its protein together.** The graph keeps genes (`NCBIGene:`, named by symbol)
+and proteins (`UniProtKB:`, named `<SYMBOL>_HUMAN ...`) as separate nodes, and the sources
+split between them: drug–target edges (ChEMBL, DrugCentral) and pathway participants reach the
+protein; gene–disease, GWAS and expression edges reach the gene. One hop from ABL1's gene alone
+gave 5,109 edges and no drugs; its protein has the drug edges. So when a request names genes
+or proteins ("kinases and the drugs that target them"), seed both: put both ids in an `ids`
+rule, or leave `category` off a name rule, or add a second rule for the other kind.
+
 **A small known family without a list** (nuclear receptors, a class of ion channels: up to
 about 100 members): a name search misses members whose names don't contain the family word
 (ESR1, AR, GR and PPARG for "nuclear receptor"). Propose the members from your own knowledge
