@@ -205,6 +205,8 @@ def link_or_copy(source: Path, target: Path) -> None:
 
 def whole_graph(input_dir: Path, output_dir: Path) -> dict:
     """No focus: the user's graph is the whole graph. Link it rather than copying 100M edges."""
+    if output_dir.resolve() == input_dir.resolve():
+        raise FocusError(f"the output directory {output_dir} is the input graph; choose another")
     output_dir.mkdir(parents=True, exist_ok=True)
     for name in ("nodes.jsonl", "edges.jsonl"):
         link_or_copy(input_dir / name, output_dir / name)
@@ -219,10 +221,16 @@ def extract(focus: dict, input_dir: Path, output_dir: Path) -> dict:
     seeds, seed_report = find_seeds(focus, nodes_path, edges_path)
     keep, expansion = expand(focus, seeds, edges_path)
 
+    if output_dir.resolve() == input_dir.resolve():
+        raise FocusError(f"the output directory {output_dir} is the input graph; choose another")
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Written under temporary names and renamed into place: a rename replaces a symlink left by
+    # a whole-graph run instead of writing through it into the input graph, and a failed run
+    # leaves the previous subgraph whole.
+    edges_tmp, nodes_tmp = output_dir / "edges.jsonl.tmp", output_dir / "nodes.jsonl.tmp"
     by_source, by_predicate = Counter(), Counter()
     used: set[str] = set()
-    with open(output_dir / "edges.jsonl", "w") as out:
+    with open(edges_tmp, "w") as out:
         for edge in read_jsonl(edges_path):
             if edge["subject"] in keep and edge["object"] in keep and _edge_allowed(focus, edge):
                 out.write(json.dumps(edge) + "\n")
@@ -230,12 +238,14 @@ def extract(focus: dict, input_dir: Path, output_dir: Path) -> dict:
                 by_source[edge.get("primary_knowledge_source")] += 1
                 by_predicate[edge.get("predicate")] += 1
     nodes_out = 0
-    with open(output_dir / "nodes.jsonl", "w") as out:
+    with open(nodes_tmp, "w") as out:
         for node in read_jsonl(nodes_path):
             # Seeds stay even without edges, so the user sees what their request matched
             if node.get("id") in used or node.get("id") in seeds:
                 out.write(json.dumps(node) + "\n")
                 nodes_out += 1
+    os.replace(edges_tmp, output_dir / "edges.jsonl")
+    os.replace(nodes_tmp, output_dir / "nodes.jsonl")
 
     report = {
         "request": focus["request"],

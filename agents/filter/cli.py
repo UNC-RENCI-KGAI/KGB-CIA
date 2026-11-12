@@ -44,8 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        help="where to write the subgraph (default: data/filter/<focus name>, or "
-        "data/filter/whole)",
+        help="where to write the subgraph (default: data/filter, where augmentation reads it)",
     )
     args = parser.parse_args(argv)
 
@@ -57,10 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.focus:
             focus = subgraph.load_focus(args.focus)
-            output = args.output or DEFAULT_OUTPUT / focus["name"]
+            output = args.output or DEFAULT_OUTPUT
             report = subgraph.extract(focus, input_dir, output)
         else:
-            output = args.output or DEFAULT_OUTPUT / "whole"
+            output = args.output or DEFAULT_OUTPUT
             report = subgraph.whole_graph(input_dir, output)
     except subgraph.FocusError as e:
         print(f"Filter: {e}")

@@ -28,10 +28,12 @@ uv run kgb-filter --focus data/filter/<name>.json   # the subgraph for one reque
 graph (`data/cleaning`) when cleaning has run, else the merged one
 (`data/transformation/merged`). So the filter runs on the cleaned full graph, once per request.
 
-**Output:** `data/filter/<focus name>/` with `nodes.jsonl`, `edges.jsonl` (records unchanged)
-and `focus_report.json`: the request, each seed rule with how many nodes it matched and
-examples, the subgraph's size, and its edges by source and predicate. With no focus,
-`data/filter/whole/` links to the input graph.
+**Output:** `data/filter/`, where augmentation reads it, with `nodes.jsonl`, `edges.jsonl`
+(records unchanged) and `focus_report.json`: the request, each seed rule with how many nodes it
+matched and examples, the subgraph's size, and its edges by source and predicate. With no focus,
+`nodes.jsonl` and `edges.jsonl` link to the input graph. Each run replaces the last; to keep a
+cut beside the current one (a demo subgraph, say), pass `--output data/filter/<name>` and give
+augmentation the same folder with `--input`.
 
 ## How a subgraph is cut
 

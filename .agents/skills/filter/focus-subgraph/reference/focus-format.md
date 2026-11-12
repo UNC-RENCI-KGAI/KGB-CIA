@@ -5,7 +5,7 @@ problem it finds.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `name` | yes | Lowercase letters, digits and `_`. Names the output, `data/filter/<name>/`. |
+| `name` | yes | Lowercase letters, digits and `_`. Names the request; it is in `focus_report.json`, and the focus file is `data/filter/<name>.json`. |
 | `request` | yes | The user's request, in their words. Kept in the report. |
 | `seeds` | yes | One or more seed rules (below). The seeds are the union of what they match. |
 | `hops` | no | How many steps out from the seeds, 0 to 3. Default 1. |

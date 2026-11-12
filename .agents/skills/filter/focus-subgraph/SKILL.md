@@ -112,7 +112,8 @@ uv run kgb-filter --focus data/filter/<name>.json
 ```
 
 It reads the cleaned graph (`data/cleaning`), or the merged one if cleaning hasn't run, and
-writes `nodes.jsonl`, `edges.jsonl` and `focus_report.json` to `data/filter/<name>/`. The report
+writes `nodes.jsonl`, `edges.jsonl` and `focus_report.json` to `data/filter/`, where augmentation
+reads them, replacing the last subgraph. The report
 lists each seed rule with how many nodes it matched and examples, the subgraph's size, and its
 edges by source and predicate.
 

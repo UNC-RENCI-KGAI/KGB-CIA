@@ -159,8 +159,31 @@ def test_cli_prefers_the_cleaned_graph(graph, tmp_path, monkeypatch, capsys):
         (cleaning / name).write_text((graph / name).read_text())
     focus = _focus(tmp_path, seeds=[{"ids": ["C:1"]}], hops=0)
     assert main(["--focus", str(focus)]) == 0
-    report = json.loads((tmp_path / "data/filter/test/focus_report.json").read_text())
+    report = json.loads((tmp_path / "data/filter/focus_report.json").read_text())
     assert report["input"] == str(cleaning.resolve())
+
+
+def test_a_cut_after_a_whole_graph_run_leaves_the_input_alone(graph, tmp_path):
+    # The whole-graph run links data/filter's files to the input; a later cut into the same
+    # folder must replace the links, not write through them into the cleaned graph.
+    before = {n: (graph / n).read_text() for n in ("nodes.jsonl", "edges.jsonl")}
+    out = tmp_path / "filter"
+    assert main(["--input", str(graph), "--output", str(out)]) == 0
+    assert (out / "edges.jsonl").is_symlink()
+    focus = _focus(tmp_path, seeds=[{"ids": ["C:1"]}], hops=0)
+    assert main(["--input", str(graph), "--output", str(out), "--focus", str(focus)]) == 0
+    assert not (out / "edges.jsonl").is_symlink()
+    assert _ids(out) == {"C:1"}
+    assert {n: (graph / n).read_text() for n in before} == before
+    assert not list(out.glob("*.tmp"))
+
+
+def test_the_output_cannot_be_the_input(graph, tmp_path, capsys):
+    focus = _focus(tmp_path, seeds=[{"ids": ["C:1"]}], hops=0)
+    assert main(["--input", str(graph), "--output", str(graph), "--focus", str(focus)]) == 2
+    assert main(["--input", str(graph), "--output", str(graph)]) == 2
+    assert "is the input graph" in capsys.readouterr().out
+    assert len((graph / "edges.jsonl").read_text().splitlines()) == len(EDGES)
 
 
 def test_cli_without_a_graph(tmp_path, monkeypatch, capsys):
