@@ -13,26 +13,27 @@ against a Pharos baseline.
 
 Key dates: progress report **Oct 27, 2026**, final submission **Nov 17, 2026**.
 
-## Status (as of Nov 10, 2026)
+## Status (as of Nov 12, 2026)
 
 **The graph is frozen** at the Nov 9 transformation run. Changes we'd like to make to the graph or
 the metadata now go into a report (what, which source, why) instead of code, so the remaining
-time goes to the user-facing steps, the demo and the submission.
+time goes to the user-facing steps, the demo and the submission. The cleaned Nov 9 graph is on
+the shared RENCI drive.
 
 | Stage | On `main` | In progress |
 | --- | --- | --- |
 | 1. Metadata (`agents/metadata/`) | The `croissant-semantics` skill adds Biolink semantics to RoboCroissant's Croissant files, run per source. `kgb-metadata` is still a stub. | [#41](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/41): `kgb-metadata` (closed until after the challenge) |
 | 2. Transformation (`agents/transformation/`) | **Working.** `kgb-transform` generates an ORION parser per source, builds each one, and merges them into one graph with ORION's merge rules. | [#42](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/42): skip unchanged builds (closed until after the challenge) |
-| 3. Filter (`agents/filter/`) | The `describe-graph` skill gives a plain-language overview of the graph and recommends which sources to focus on. `kgb-filter` is still a stub. | [#50](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/50): cut the subgraph a user asks for |
-| 4. Augmentation (`agents/augmentation/`) | Stub. Shared PubMed search, fetch and cache are in `shared/pubmed/`. | [#22](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/22): PubMed evidence agent |
-| 5. Cleaning (`agents/cleaning/`) | **Working.** `kgb-clean` drops edges that can't be right (no provenance, missing nodes, both ends unresolved by NodeNorm, drop lists, `treats` edges to a category that can't be treated), keeps an edge with one unresolved end but flags it, flags other suspicious ones (Biolink type violations, rare category combinations, opposing predicates) and reports both. | [#49](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/49): evidence check; [#62](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/62): write each flag and its reason onto the edge |
-| 6. MCP interface (`agents/mcp_interface/`) | Stub. | A Neo4j-backed MCP server on the `mcp-interface/neo4j-server` branch, being deployed on AWS for the hosted demo |
+| 3. Cleaning (`agents/cleaning/`) | **Working.** `kgb-clean` drops edges that can't be right (no provenance, missing nodes, both ends unresolved by NodeNorm, drop lists, `treats` edges to a category that can't be treated), keeps an edge with one unresolved end but flags it, flags other suspicious ones (Biolink type violations, rare category combinations, self-loops, opposing predicates), writes each flag and its reason onto the edge, and reports both. | [#49](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/49): evidence check |
+| 4. Filter (`agents/filter/`) | **Working.** The `describe-graph` skill gives a plain-language overview of the graph and recommends which sources to focus on. The `focus-subgraph` skill turns a request into a focus file, and `kgb-filter` cuts that subgraph from the cleaned graph into `data/filter`; with no request, the whole graph. | [#76](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/76): checks from the #50 review; [#65](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/65): list other sources that have a croissant |
+| 5. Augmentation (`agents/augmentation/`) | Stub. Shared PubMed search, fetch and cache are in `shared/pubmed/`. | [#22](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/22): PubMed evidence agent, reading `data/filter` |
+| 6. Final cleaning | The same `kgb-clean`, run on augmentation's output, applying the drop lists and flag lists the evidence check wrote. | |
+| 7. MCP interface (`agents/mcp_interface/`) | Stub. | [#64](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/64): a Neo4j-backed MCP server, being deployed on AWS for the hosted demo |
 | Evaluation (`evaluation/`) | Not started. | [#54](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/54): link-prediction protocol |
 
-The order of the stages is still being settled:
-[#23](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/23) (filter before or after
-transformation) and [#24](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/24) (cleaning before or
-after augmentation). The diagram below is the order in `STAGES` today.
+The order was settled in [#23](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/23) and [#24](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/24): cleaning runs first, so the
+paid steps never spend on edges it would drop; the filter runs before augmentation, so those steps
+only see what the user asked for; and cleaning runs again at the end.
 
 ## Pipeline
 
@@ -46,19 +47,22 @@ Pharos / TCRD files
 2. Transformation agent  agents/transformation/  one ORION parser per source, built and NodeNorm'd, then merged into one graph
         |
         v
-3. Filter                agents/filter/          the subgraph the user asks for; with no request, the whole graph
+3. Cleaning agent        agents/cleaning/        drops edges that can't be right; flags suspicious ones, with the reason on the edge
         |
         v
-4. Augmentation agent    agents/augmentation/    PubMed evidence for edges, and more specific edges it supports
+4. Filter                agents/filter/          the subgraph the user asks for; with no request, the whole graph
         |
         v
-5. Cleaning agent        agents/cleaning/        drops edges that can't be right or that an evidence check rejects
+5. Augmentation agent    agents/augmentation/    PubMed evidence for edges, and more specific edges it supports
         |
         v
-6. MCP interface         agents/mcp_interface/   lets any local agent query the graph (OKN MCP pattern)
+6. Final cleaning        agents/cleaning/        the same kgb-clean, applying the evidence check's drop and flag lists
+        |
+        v
+7. MCP interface         agents/mcp_interface/   lets any local agent query the graph (OKN MCP pattern)
 
 Evaluation pipeline      evaluation/             GNN link prediction vs. Pharos baseline (not an agent)
-Shared code              shared/                 record schema, NodeNorm client, pipeline runner
+Shared code              shared/                 record schema, NodeNorm client, PubMed cache, pipeline runner
 ```
 
 [`docs/KG_AI_plandraft.png`](docs/KG_AI_plandraft.png) (source:

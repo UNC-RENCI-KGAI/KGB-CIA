@@ -36,6 +36,7 @@ alone" and "Input / output").
 
 ## What each stage does and does not do
 
+In pipeline order (`STAGES` in `shared/pipeline.py`).
 The original reasoning is in `docs/agent_plan.md`; where this list differs, this list is current.
 
 - **metadata**: Croissant metadata per source file and column, building on RoboCroissant.
@@ -46,19 +47,22 @@ The original reasoning is in `docs/agent_plan.md`; where this list differs, this
   metadata, builds each source, and merges them into one graph with ORION's merge rules
   (`merged/`). Wrapping ORION by hand as the whole stage was ruled out; the agent writes the
   parsers.
+- **cleaning**: `kgb-clean` drops edges that can't be right (no provenance, a node NodeNorm
+  couldn't resolve or that doesn't exist, or listed in a drop list) and flags suspicious ones
+  without removing them (Biolink type violations, rare category combinations, opposing
+  predicates, self-loops), writing each flag and its reason onto the edge (`kgbcia_flags`,
+  `kgbcia_flag_reasons`) and listing flagged edges in `flagged_edges.jsonl`. It runs twice: on the
+  merged graph before the filter, and as `final_cleaning` on augmentation's output, applying the
+  drop lists and flag lists the evidence check wrote. An edge isn't dropped just because no
+  abstract supports it. See `agents/cleaning/README.md`.
 - **filter**: the only stage that talks to the user. It turns what the user asks for ("human
-  kinases and the drugs that target them", or their own dataset) into a subgraph of the merged
+  kinases and the drugs that target them", or their own dataset) into a subgraph of the cleaned
   graph; with no request, the whole graph. Every question has a default. It doesn't merge:
   transformation already did.
 - **augmentation**: PubMed evidence for edges: adds the papers that support an edge to its
   `publications`, and proposes more specific edges where the papers support them. Proposed
   edges are added beside the originals, never in place of them, with the augmentation agent as
   their primary knowledge source.
-- **cleaning**: `kgb-clean` drops edges that can't be right (no provenance, a node NodeNorm
-  couldn't resolve or that doesn't exist, or listed in a drop list) and flags suspicious ones
-  without removing them (Biolink type violations, rare category combinations, opposing
-  predicates), listing them in `flagged_edges.jsonl`. An evidence check writes drop lists; an edge isn't dropped just
-  because no abstract supports it. See `agents/cleaning/README.md`.
 - **mcp_interface**: an MCP server modeled on the OKN MCP that lets any local agent query the
   final graph: neighbors, paths, and edge lineage from the edge's knowledge
   sources and publications and the `TransformReport`.

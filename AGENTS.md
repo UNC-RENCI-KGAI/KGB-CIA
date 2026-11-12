@@ -38,9 +38,14 @@ stays in sync.
 ## Architecture
 
 - **Stages are packages under `agents/`, run in the order listed in `STAGES` in
-  `shared/pipeline.py`:** metadata → transformation → filter → augmentation → cleaning →
-  mcp_interface. The runner imports each `agents.<stage>.cli` module, prints its `DESCRIPTION`,
-  and (without `--dry-run`) calls `main([])`; a nonzero return stops the pipeline.
+  `shared/pipeline.py`:** metadata → transformation → cleaning → filter → augmentation →
+  final_cleaning → mcp_interface (settled in #23 and #24). The runner imports each
+  `agents.<stage>.cli` module, prints its `DESCRIPTION`, and (without `--dry-run`) calls `main`
+  with that stage's arguments from `STAGES`; a nonzero return stops the pipeline. The two
+  cleaning passes are the same `kgb-clean`: the first cleans the merged graph, the last applies
+  the evidence check's drop lists (`data/cleaning/drop_lists`) to augmentation's output and
+  writes `data/final`, which the MCP interface is then given with `--input` (on its own,
+  `kgb-mcp` would fall back to `data/cleaning`).
 - **Each stage is also a console script** (`kgb-metadata`, `kgb-transform`, `kgb-filter`,
   `kgb-augment`, `kgb-clean`, `kgb-mcp`, `kgb-pipeline`) declared in `pyproject.toml`.
 - **Handoffs between stages use the pydantic records in `shared/schema.py`** (`Node`, `Edge`,
@@ -54,12 +59,13 @@ stays in sync.
 - **Every node ID goes through NodeNorm** via `shared/nodenorm.py`.
 - **`evaluation/` is deliberately not a stage** and is not in `STAGES`.
 
-`kgb-transform` and `kgb-clean` are the stage commands implemented on `main`; the other stages'
-`main` are stubs that print "not implemented yet". `kgb-transform` builds every source and
-merges them into one graph (`data/transformation/merged/`), and `kgb-clean` reads that merged
-graph by default. Semantic metadata comes from the `croissant-semantics` skill in
-`.agents/skills/metadata/`, run per source rather than through `kgb-metadata`. `make demo` only
-prints stage descriptions.
+`kgb-transform`, `kgb-clean` and `kgb-filter` are the stage commands implemented on `main`; the
+other stages' `main` are stubs that print "not implemented yet". `kgb-transform` builds every source
+and merges them into one graph (`data/transformation/merged/`), `kgb-clean` reads that merged graph
+by default and writes `data/cleaning`, and `kgb-filter` cuts the user's subgraph from
+`data/cleaning` into `data/filter`, where augmentation reads it. Semantic metadata comes from the
+`croissant-semantics` skill in `.agents/skills/metadata/`, run per source rather than through `kgb-
+metadata`. `make demo` only prints stage descriptions.
 
 ## Design rules agreed by the team
 
