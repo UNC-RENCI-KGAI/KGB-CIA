@@ -42,6 +42,29 @@ dependencies). Use `--help` on any of them.
 | `apply_plan.py CROISSANT PLAN OUT` | Write the plan into a new croissant |
 | `check.py CROISSANT PLAN OUT --report R --load-records` | `--plan-only` first: terms, prefixes, dialects and units in seconds. Then the full check: checks terms, prefixes, codes and dialects against Biolink and sampled data, runs the MLCommons validator, reads a few records through mlcroissant (from the first lines of each file, not whole downloads), and reports coverage |
 
+The defaults are right for a first pass. The options below are for one situation each; the
+workflow brings in the rest where they're needed.
+
+- `inventory.py --layout ID --all`: the layout spans more than the 15 record sets the listing
+  shows, and you need every one (to find the newest release, or a file that differs).
+- `sample.py --examples N`: a column's 8 example values don't show its pattern (mixed id forms,
+  rare codes). For a whole-file view use `--profile`.
+- `sample.py --dump FILE --out PATH`: the file is binary or too long to print (a PDF data
+  dictionary); write it under `OUT/work/` and read it from there.
+- `vocab.py ... --limit N`: the term you expect isn't in the first results of `class`, `search`,
+  `identify`, `infores`, `associations` or `ols`.
+- `vocab.py names --file F`: more names than fit on a command line, such as a profiled column's
+  distinct values, one per line.
+- `vocab.py names --type biolink:Class`: a name could match more than one kind of thing
+  ("heart" as anatomy or as a phenotype); give the class the column holds. Repeatable.
+- `check.py --no-data`: the data files can't be fetched from here (licence, size, network) and
+  you want the plan and validator checks anyway. Say in `notes.md` that the data check didn't run.
+- `check.py --load-layouts N`: record loading over every layout would take too long on a
+  croissant with hundreds of layouts; load records for the first N, then run the full check at
+  the end.
+- `check.py --load-json-mb N`: the report says a layout's records weren't loaded because its JSON
+  is over 20 MB (JSON is read whole); raise it to that file's size if the machine has memory.
+
 ## Workflow
 
 1. **Survey.** If there's a `semantics_answers.json` next to the croissant, read it first: it
