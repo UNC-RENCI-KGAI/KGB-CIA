@@ -120,9 +120,7 @@ def format_check_result(result: CheckResult) -> str:
         lines.extend(
             [
                 "ready for Neo4j dump preparation",
-                f"next: orion-neo4j-dump {result.input_dir / 'nodes.jsonl'} "
-                f"{result.input_dir / 'edges.jsonl'} <orion-dump-output>",
-                "then: agents/mcp_interface/deploy/prepare_dump.sh <arguments>",
+                "next: agents/mcp_interface/deploy/prepare_dump.sh <arguments>",
             ]
         )
     else:
