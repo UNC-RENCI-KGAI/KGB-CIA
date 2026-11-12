@@ -85,6 +85,22 @@ make demo         # dry run of every stage on the toy data in tests/fixtures
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). `make setup` falls back to `pip` if
 uv is not installed.
 
+## API keys
+
+You need no key to build, clean or filter the graph, or to serve it over MCP. Keys are only for
+the two steps that call a paid model:
+
+- **Augmentation** needs a language model: an Anthropic key for Claude models, or an Azure
+  OpenAI key and endpoint.
+- **The evidence check** needs a TypeSafe AI key for its Jev model.
+- **PubMed** works without a key; a free NCBI key makes searches faster (10 requests a second
+  instead of 3).
+
+[`.env.example`](.env.example) lists every variable and the step that reads it. Copy it to `.env`
+(gitignored), fill in what you have, and run with `uv run --env-file .env <command>`. The scripts
+only read environment variables, so exporting them from your shell or a secrets manager works
+too. To use the models from the Pi agent harness, see [`.pi/README.md`](.pi/README.md).
+
 ## Working on the repo
 
 **Never push to `main`. Every change, however small, goes through a pull request.** That is what
