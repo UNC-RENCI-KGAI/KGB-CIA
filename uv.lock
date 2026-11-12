@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 
 [[package]]
@@ -549,12 +549,16 @@ name = "kgb-cia"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "anthropic" },
     { name = "biolink-model" },
     { name = "bmt" },
     { name = "httpx" },
-    { name = "openai" },
     { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+augmentation = [
+    { name = "anthropic" },
+    { name = "openai" },
 ]
 
 [package.dev-dependencies]
@@ -565,13 +569,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=2.4" },
+    { name = "anthropic", marker = "extra == 'augmentation'", specifier = ">=2.4" },
     { name = "biolink-model", specifier = "==4.4.6" },
     { name = "bmt", specifier = ">=1.5.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "openai", specifier = ">=3.44" },
+    { name = "openai", marker = "extra == 'augmentation'", specifier = ">=3.44" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
+provides-extras = ["augmentation"]
 
 [package.metadata.requires-dev]
 dev = [

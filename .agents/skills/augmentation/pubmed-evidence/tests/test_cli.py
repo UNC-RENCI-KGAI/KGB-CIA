@@ -520,3 +520,18 @@ def test_full_run_labels_only_what_the_budget_allows(tmp_path, capsys, fakes):
     assert cli.main(argv) == 0
     assert fakes.count("label") == 2
     assert "budget" not in capsys.readouterr().err
+
+
+def test_script_header_lists_the_projects_dependencies():
+    """`scripts/augment.py` runs alone under `uv run --script`, so its PEP 723 header repeats
+    the project's dependencies and the `augmentation` extra; they must not drift apart."""
+    import tomllib
+
+    root = Path(__file__).resolve().parents[5]
+    project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
+    wanted = project["dependencies"] + project["optional-dependencies"]["augmentation"]
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "augment.py").read_text()
+    header = re.search(r"^# /// script\n(.*?)^# ///$", script, re.M | re.S)
+    assert header is not None
+    meta = tomllib.loads("\n".join(line[2:] for line in header[1].splitlines()))
+    assert sorted(meta["dependencies"]) == sorted(wanted)

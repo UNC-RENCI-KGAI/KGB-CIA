@@ -10,6 +10,11 @@ dependencies = [
     "httpx>=0.27",
     "bmt>=1.5.0",
     "biolink-model==4.4.6",
+]
+
+[project.optional-dependencies]
+# The model SDKs only the augmentation agent calls (its scripts/augment.py lists them too).
+augmentation = [
     "openai>=3.44",
     "anthropic>=2.4",
 ]

@@ -37,7 +37,9 @@ uv run kgb-augment STEP --help    # STEP: select, pubmed, label, ground, review,
 ```
 
 The skill's `scripts/augment.py` takes the same arguments; the skill's README lists each
-step's options. Set `AZURE_OPENAI_API_KEY` (and `AZURE_OPENAI_BASE_URL` for your own
+step's options. The model SDKs (`openai`, `anthropic`) are the project's `augmentation`
+extra: `make setup` installs them, or `uv sync --extra augmentation`; the other stages don't
+need them. Set `AZURE_OPENAI_API_KEY` (and `AZURE_OPENAI_BASE_URL` for your own
 endpoint) for labeling and review with the Azure OpenAI models (`ANTHROPIC_API_KEY`, or an
 `ant auth login` profile, with Claude models), and `NCBI_EMAIL` (plus `NCBI_API_KEY` for 10
 requests a second) for the PubMed search. The search, its client and its cache are

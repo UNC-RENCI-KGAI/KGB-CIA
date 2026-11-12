@@ -26,6 +26,7 @@ Responses API, which Azure OpenAI serves, through the `openai` SDK, and
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -35,13 +36,14 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-
-import openai
-from openai.types.responses import Response
+from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 from pubmed_evidence import config
 from pubmed_evidence.cache import CallRow, LabelCache
+
+if TYPE_CHECKING:
+    from openai.types.responses import Response
 
 # Anthropic's strict output allows at most this many parameters with union types (`anyOf`, as
 # `nullable` makes, or a type array) across a request's schemas, and rejects every call over it.
@@ -147,6 +149,18 @@ class Usage:
         """USD over the attempts; None if any attempt's cost is unknown."""
         costs = [a.cost for a in self.attempts]
         return None if None in costs else sum(costs)
+
+
+def _import_sdk(name: str) -> ModuleType:
+    """The model SDK `name` (openai or anthropic), imported only when a client is built: they are
+    the project's `augmentation` extra, so the other stages don't need them."""
+    try:
+        return importlib.import_module(name)
+    except ImportError as e:
+        raise LLMError(
+            f"the {name} package isn't installed: run `uv sync --extra augmentation` "
+            f"(or `pip install -e '.[augmentation]'`)"
+        ) from e
 
 
 class LLMError(RuntimeError):
@@ -343,6 +357,8 @@ class OpenAIClient:
         self.model = model
         self.max_output_tokens = max_output_tokens or model.max_output_tokens
         self.effort = sent_effort(model, reasoning_effort)
+        openai = _import_sdk("openai")
+        self._errors = openai.APIError
         self._sdk = openai.OpenAI(
             base_url=model.base_url,
             api_key=key,
@@ -391,7 +407,7 @@ class OpenAIClient:
         try:
             try:
                 response = self._sdk.responses.create(**self._body(system, user, schema))
-            except openai.APIError as e:
+            except self._errors as e:
                 raise LLMError(f"{self.model.id}: {type(e).__name__}: {e}") from e
             usage.attempts.append(_attempt(self.model.id, response))
             reply = _reply_object(self.model.id, response_text(response))
@@ -431,8 +447,7 @@ class AnthropicClient:
         max_retries: int = 4,
         http_client: Any = None,
     ):
-        import anthropic
-
+        anthropic = _import_sdk("anthropic")
         self._errors = anthropic.APIError
         self.model = model
         self.max_output_tokens = max_output_tokens or model.max_output_tokens
