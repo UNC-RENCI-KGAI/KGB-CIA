@@ -89,9 +89,11 @@ before downloading source files. Optional `--infores` supplies missing source id
 Leave `--strict` and `--conflation` off for pipeline builds:
 
 - `--strict` drops unresolved nodes during normalization, before anyone sees which ids failed.
-  Cleaning (`kgb-clean`) drops them after the merge instead and reports them by source and CURIE
-  prefix, which is what the metadata fix needs. Use `--strict` only for a one-off look at a
-  single source as cleaning will leave it.
+  Cleaning (`kgb-clean`) decides after the merge instead: an edge with one unresolved end is
+  kept and flagged `unresolved_node`, since its other end is a resolved gene or protein; only
+  edges with both ends unresolved, or a broken id, are dropped. It reports every unresolved id
+  by source and CURIE prefix, which is what the metadata fix needs. With `--strict` the graph
+  would lose the 1.9M edges cleaning keeps. Use it only for a one-off look at a single source.
 - `--conflation` opts into gene/protein and other NodeNorm conflations, which change node ids
   (a protein becomes its gene). Graphs built with and without it don't join on those ids, so it
   is a decision for the whole graph, not one source: use it only when every source is rebuilt
@@ -166,8 +168,9 @@ ORION merges nodes on `id`, and edges on subject, predicate, object, primary kno
 qualifiers, so the same triple from two primary sources stays two edges. Lists such as
 `publications` and `kgbcia_source_records` are combined. Scalars that conflict keep the first
 value, in sorted source order, and `merge_warnings.dropped_properties` counts those lost. Unresolved
-nodes are kept, as in lenient normalization; cleaning drops them after the merge. A source with no
-stable graph is left out and listed in `sources_not_merged`.
+nodes are kept, as in lenient normalization; cleaning keeps them flagged where an edge joins them
+to a resolved node, and drops the rest. A source with no stable graph is left out and listed in
+`sources_not_merged`.
 
 `--sources Kgbcia_A Kgbcia_B` merges only those sources, for a quick look at how a few of them
 join without merging the whole graph. Write it to a directory other than `merged/`; the pipeline
