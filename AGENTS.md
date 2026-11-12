@@ -44,7 +44,8 @@ stays in sync.
   with that stage's arguments from `STAGES`; a nonzero return stops the pipeline. The two
   cleaning passes are the same `kgb-clean`: the first cleans the merged graph, the last applies
   the evidence check's drop lists (`data/cleaning/drop_lists`) to augmentation's output and
-  writes `data/final`.
+  writes `data/final`, which the MCP interface is then given with `--input` (on its own,
+  `kgb-mcp` would fall back to `data/cleaning`).
 - **Each stage is also a console script** (`kgb-metadata`, `kgb-transform`, `kgb-filter`,
   `kgb-augment`, `kgb-clean`, `kgb-mcp`, `kgb-pipeline`) declared in `pyproject.toml`.
 - **Handoffs between stages use the pydantic records in `shared/schema.py`** (`Node`, `Edge`,

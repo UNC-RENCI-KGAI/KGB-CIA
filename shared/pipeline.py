@@ -34,7 +34,8 @@ STAGES: list[tuple[str, str, list[str]]] = [
             "data/cleaning/drop_lists",
         ],
     ),
-    ("mcp_interface", "agents.mcp_interface.cli", []),
+    # serves the final pass's output, not data/cleaning, which kgb-mcp would pick on its own
+    ("mcp_interface", "agents.mcp_interface.cli", ["--input", "data/final"]),
 ]
 
 

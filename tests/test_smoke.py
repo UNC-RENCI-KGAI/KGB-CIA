@@ -20,6 +20,10 @@ def test_stage_order():
     assert (
         names.index("augmentation") < names.index("final_cleaning") < names.index("mcp_interface")
     )
+    # the MCP serves the final pass's output; on its own kgb-mcp would pick data/cleaning
+    stage_args = {name: args for name, _, args in STAGES}
+    assert "data/final" in stage_args["final_cleaning"]
+    assert stage_args["mcp_interface"] == ["--input", "data/final"]
 
 
 def _edge(**kw):
