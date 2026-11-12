@@ -347,10 +347,22 @@ def test_the_score_counts_pmids_e_cites_and_added_leaves_them_out():
     assert o.added == ("PMID:9", "PMID:10")
 
 
-@pytest.mark.parametrize("cited", ["PMID:9", "pmid:9", "PmId:9", "PMID: 9", " pmid:9 "])
-def test_a_pmid_the_edge_cites_is_recognised_in_any_case(cited):
-    """A source's PMID, however its prefix is cased or spaced, is the same PMID: it counts
-    toward the score and is never added again."""
+@pytest.mark.parametrize(
+    "cited",
+    [
+        "PMID:9",
+        "pmid:9",
+        "PmId:9",
+        "PMID: 9",
+        " pmid:9 ",
+        "https://pubmed.ncbi.nlm.nih.gov/9",
+        "http://www.ncbi.nlm.nih.gov/pubmed/9/",
+    ],
+)
+def test_a_pmid_the_edge_cites_is_recognised_however_written(cited):
+    """A source's PMID, however its prefix is cased or spaced, or as a PubMed URL (as DrugCentral
+    and GtoPdb write them), is the same PMID: it counts toward the score and is never added
+    again."""
     e = edge(st(), publications=(cited,))
     (o,) = refined([e], [claim(st(), pmid="PMID:9"), claim(st(), pmid="PMID:10")]).edges
     assert o.pmids == ("PMID:9", "PMID:10")

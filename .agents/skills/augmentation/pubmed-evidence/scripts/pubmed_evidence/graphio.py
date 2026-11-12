@@ -182,8 +182,9 @@ def pair_nodes(pid: str) -> tuple[str, str]:
 
 def pmid_of(publication: str) -> str | None:
     """'PMID:12345' -> '12345'; anything that isn't a PubMed id -> None. The prefix is matched in
-    any case ('pmid:', 'PmId:'), with spaces allowed around its parts: `shared.pubmed.pmid_of`,
-    so this agent and the cleaning stage's evidence check read citations the same way."""
+    any case ('pmid:', 'PmId:'), with spaces allowed around its parts, and a PubMed article URL
+    gives its id: `shared.pubmed.pmid_of`, so this agent and the cleaning stage's evidence check
+    read citations the same way."""
     return shared_pmid_of(publication)
 
 
