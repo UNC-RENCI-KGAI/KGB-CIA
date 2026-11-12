@@ -11,7 +11,7 @@ import dataclasses
 import random
 
 import pytest
-from pubmed_evidence import biolink, config, graphio, refine
+from pubmed_evidence import apply, biolink, config, graphio, refine
 
 from shared.schema import ClaimContext, ClaimRecord, Edge, PublicationEvidence, Statement
 
@@ -345,6 +345,17 @@ def test_the_score_counts_pmids_e_cites_and_added_leaves_them_out():
     assert o.pmids == ("PMID:2", "PMID:9", "PMID:10")  # by number
     assert o.score == 3
     assert o.added == ("PMID:9", "PMID:10")
+
+
+@pytest.mark.parametrize("cited", ["PMID:9", "pmid:9", "PmId:9", "PMID: 9", " pmid:9 "])
+def test_a_pmid_the_edge_cites_is_recognised_in_any_case(cited):
+    """A source's PMID, however its prefix is cased or spaced, is the same PMID: it counts
+    toward the score and is never added again."""
+    e = edge(st(), publications=(cited,))
+    (o,) = refined([e], [claim(st(), pmid="PMID:9"), claim(st(), pmid="PMID:10")]).edges
+    assert o.pmids == ("PMID:9", "PMID:10")
+    assert o.added == ("PMID:10",)
+    assert apply._cited([cited]) == {"PMID:9"}
 
 
 def test_one_pmid_with_two_claims_counts_once():
