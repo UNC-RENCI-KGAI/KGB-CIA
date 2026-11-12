@@ -2,8 +2,9 @@
 
 **Team:** @UNC-RENCI-KGAI/augmentation · **Existing asset:** PubMed; Bagel / LitCoin for text
 
-Enrich the baseline graph with extra datasets, and with PubMed evidence for its edges and more
-specific edges.
+Find PubMed evidence for edges: add the papers that support an edge to its `publications`, and
+propose more specific edges where the papers support them. Proposed edges sit beside the
+originals, never in place of them.
 
 The agent is the **pubmed-evidence** skill,
 [`.agents/skills/augmentation/pubmed-evidence/`](../../.agents/skills/augmentation/pubmed-evidence/):
@@ -95,3 +96,5 @@ Uses the KGX records in `shared/schema.py`.
 - No gold set yet, so the models are still unvalidated defaults.
 - Open items (scope with the filter team, `negated` handling team-wide, what's not built yet)
   are in the skill's `DESIGN.md`.
+- PubMed search, fetch and cache are in `shared/pubmed/`, shared with the cleaning stage's
+  evidence check.

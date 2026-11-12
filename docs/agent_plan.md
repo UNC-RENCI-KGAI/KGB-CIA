@@ -1,5 +1,11 @@
 # Agent Plan: Subagents for the KG Construction Challenge
 
+> **This is the plan as of Oct 10, 2026, kept as a record of the original reasoning.** What has
+> been built since differs in places: transformation now merges the sources itself, filter cuts
+> the subgraph a user asks for rather than merging, cleaning has a design, and cleaning runs
+> before the filter and again at the end (#61). For the current
+> state see [`README.md`](../README.md) and [`agents/AGENTS.md`](../agents/AGENTS.md).
+
 **Sources.** The kickoff meeting of Oct 6, 2026 (team meeting notes, not in this repo) and Chris Bizon's nine comments of Oct 10, 2026 on the simplified meeting summary (shared with the team on Slack). Chris's guidance is quoted or closely paraphrased and marked "Chris:". Everything else is from the meeting. Nothing here comes from outside those two sources, except acronym expansions in parentheses.
 
 ## Design assumptions

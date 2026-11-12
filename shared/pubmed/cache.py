@@ -6,7 +6,7 @@ CURIE. A rerun makes no requests for anything already there, so agents that shar
 file share what each fetched: whichever runs first fills it.
 
 The file is `data/cache/pubmed.sqlite` (relative to where the command runs) unless
-KGB_PUBMED_CACHE names another; point it at the shared RENCI drive to share it between people.
+KGB_PUBMED_CACHE names another; point it at a shared directory to share it between people.
 It uses SQLite's default rollback journal rather than WAL, which is unsafe on network
 filesystems. Write from one process at a time.
 
