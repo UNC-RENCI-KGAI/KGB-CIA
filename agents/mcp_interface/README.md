@@ -95,7 +95,10 @@ rejection against the 200-abstract development graph.
 The package pins FastMCP 3.4.11 (released October 20, 2026). Pi registration is configured for
 local stdio use; source the ignored deployment environment before launching Pi.
 
-AWS build-order step 4 is prepared but not yet executed: `deploy/aws/` contains the read-only
-host verification, LitCoin-sized `LoadBalancer` overlay, interactive-secret installer, and
-operator runbook. AWS deployment and laptop verification results will be recorded here after
-the maintainer runs them.
+AWS build-order step 4 was completed on November 12, 2026 against the LitCoin development
+sample on the prepared arm64 k3s host. The checksum-marker retry path preserved the loaded PVC
+after an interrupted Helm client, and the account hook was corrected to treat Neo4j's
+unchanged-password response as idempotent success. Laptop verification confirmed Bolt login as
+`kgbcia`, raw graph-write rejection, the AWS integration smoke suite, and a local-stdio
+`kgbcia-mcp serve` answer with edge lineage. `kgbcia` can create and drop system users on AWS,
+confirming the Neo4j Community security risk documented above and in the runbook.

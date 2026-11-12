@@ -159,8 +159,9 @@ three values files.
 
 ## Proposed build-order step 4 (AWS development-sample deployment)
 
-**Status: proposed — awaiting maintainer approval before implementation.** This is a
-maintainer-operated test deployment only. It uses the existing single-node arm64 k3s host,
+**Status: completed November 12, 2026.** The LitCoin development-sample deployment and laptop
+verification passed on the prepared host. This was a maintainer-operated test deployment only;
+it used the existing single-node arm64 k3s host,
 the LitCoin development-sample `kgb.dump`, and the public artifacts bundle. It does not
 publish the package to PyPI, deploy the optional MCP HTTP service, change AWS resources,
 or reconfigure k3s or Helm.

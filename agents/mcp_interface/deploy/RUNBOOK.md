@@ -77,12 +77,12 @@ Passwords traverse plain Bolt in this initial deployment. Treat the network path
 trusted; TLS is intentionally out of scope. Neo4j Community has no role-based access
 control, so the database-level read-only setting and resource limits are the protections.
 
-**Confirmed on local k8s (November 2026):** the separate `kgbcia` account can create and
-drop users in `system` even while graph writes are rejected by the read-only database setting.
-This is an accepted risk only if the maintainer explicitly approves it before public exposure.
-Otherwise use the alternative `NEO4J_AUTH=none` deployment pattern with read-only and resource
-limits; it avoids sending a reusable Bolt password over plain text but also removes password
-authentication entirely.
+**Confirmed on local k8s and the AWS development-sample deployment (November 2026):** the
+separate `kgbcia` account can create and drop users in `system` even while graph writes are
+rejected by the read-only database setting. This is an accepted risk only if the maintainer
+explicitly approves it before public exposure. Otherwise use the alternative `NEO4J_AUTH=none`
+deployment pattern with read-only and resource limits; it avoids sending a reusable Bolt
+password over plain text but also removes password authentication entirely.
 
 ## 5. Install or upgrade the local cluster deployment
 
