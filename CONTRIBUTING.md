@@ -42,6 +42,9 @@ the rule, decline.
   doing what. Team leads move their cards before each Code Burst and post a two-line status in
   Slack.
 - Something you cannot resolve? Label it `open question` and, if it stops you, `blocked`.
+- Link children to their tracking issue with a task-list row and a sub-issue, and PRs with
+  `Closes #<child>` plus `Part of #<tracking>`. The commands are in `AGENTS.md`, "Working in
+  the repo".
 
 ## Code
 

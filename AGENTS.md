@@ -88,9 +88,24 @@ metadata`. `make demo` only prints stage descriptions.
   `shared/`, `.github/` and root files belong to the leads.
 - The PR template's checklist: `make test` passes, new edges carry provenance, and the agent's
   `README.md` is updated if its CLI changed.
-- The graph is frozen at the Nov 9, 2026 transformation run. Don't change metadata or
-  transformation code to fix the graph before the Nov 17 submission; write the fix into a report
-  (what, which source, why) instead. Work on the later stages, the demo and evaluation goes on.
+- Fixes are welcome on `main` at any stage, metadata and transformation included, but the
+  submission graph stays the Nov 9, 2026 transformation run. A fix that would change the graph
+  is still recorded in a report (what, which source, why) so the submission can say what it
+  does not contain.
+- Link every piece of work to its tracking issue. A tracking issue lists its children as a
+  task list, one per line (`- [ ] #123`), which gives the parent a progress bar and each child
+  a "Tracked by" link, and each child is also attached as a sub-issue so the tree shows in the
+  sidebar and on the Project board. From the CLI, with the child's id (not its number):
+
+  ```sh
+  id=$(gh api repos/UNC-RENCI-KGAI/KGB-CIA/issues/<child> --jq .id)
+  gh api -X POST repos/UNC-RENCI-KGAI/KGB-CIA/issues/<parent>/sub_issues -F sub_issue_id="$id"
+  ```
+
+  Every PR body carries `Closes #<child>` (the child closes on merge) and
+  `Part of #<tracking>` (the PR shows in the tracking issue's timeline). A finding with no code
+  change yet, such as a defect from a run, stays a row in the tracking issue until someone opens
+  a child for it.
 - No data in git. Source dumps and generated graphs go in `data/` (gitignored except its
   README) or on the shared RENCI drive; record each source's version and download date in
   `data/README.md`. `.gitignore` also blocks `*.jsonl`, `*.parquet`, `*.db`, `outputs/` and
