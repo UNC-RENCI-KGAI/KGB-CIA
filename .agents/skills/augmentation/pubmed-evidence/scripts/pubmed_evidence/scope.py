@@ -4,7 +4,8 @@ them by node pair.
 An edge is checked when abstracts state its relationship as a claim that a paper could
 contradict (DESIGN.md, "Step 1: Which edges to query"). Rules pick edges by (subject category,
 predicate, object category), matching on Biolink ancestry so the child predicates and
-categories the transform picks are covered. The first rule that matches an edge decides:
+categories the transform picks are covered, and by how the edge was made (its
+`knowledge_level` and `agent_type`). The first rule that matches an edge decides:
 
 - `query` rules keep every matching edge.
 - `capped` rules (gene-gene, gene-phenotype) keep only their best-scored `--capped-limit` pairs,
@@ -14,7 +15,11 @@ categories the transform picks are covered. The first rule that matches an edge 
 
 A rule matches an edge in its own direction, and also reversed when the rule is `symmetric` or
 Biolink marks the edge's predicate symmetric (`interacts_with`, `binds`, ...), since a source
-may write either "A binds B" or "B binds A".
+may write either "A binds B" or "B binds A". A rule that lists knowledge levels or agent types
+matches only an edge whose own is among them: so edges mined from the literature
+(`text_co_occurrence`, `text_mining_agent`) are skipped whatever their predicate, since eRAM
+writes a co-mention as `gene_associated_with_condition`, and checking it against PubMed would be
+as circular as checking `occurs_together_in_literature_with`.
 
 A negated source edge (`negated: true`) is kept like any other, as its own statement apart from
 the positive one. Nothing is narrower than a negated statement (`refine.Lattice.entails`), so
@@ -34,14 +39,17 @@ one `Pair` per unordered node pair and one `Entity` per node in a kept pair, in 
 `--rules FILE` replaces the built-in rules with a JSON list of objects (or `{"rules": [...]}`)
 with the same fields as `Rule`, in order of precedence:
 
-    [{"id": "gene-disease", "tier": "query",
+    [{"id": "text-mined", "tier": "skip", "agent_type": ["text_mining_agent"]},
+     {"id": "gene-disease", "tier": "query",
       "subject": ["biolink:GeneOrGeneProduct"],
       "predicates": ["biolink:gene_associated_with_condition", "biolink:causes"],
       "object": ["biolink:Disease"],
       "symmetric": false}]
 
 `subject` and `object` list Biolink categories (empty or left out: any node); `tier` is
-`query`, `capped` or `skip`; `symmetric` defaults to false.
+`query`, `capped` or `skip`; `symmetric` defaults to false; `knowledge_level` and `agent_type`
+list the Biolink values the edge's may take (empty or left out: any). `predicates` may be left
+out only in a rule that lists a knowledge level or an agent type.
 """
 
 from __future__ import annotations
@@ -56,7 +64,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from pubmed_evidence import biolink, config, records
 from pubmed_evidence.graphio import (
@@ -79,7 +87,7 @@ from pubmed_evidence.graphio import (
     write_jsonl,
 )
 from pubmed_evidence.records import Entity, Pair, SelectedStatement
-from shared.schema import Node
+from shared.schema import AgentType, KnowledgeLevel, Node
 
 STEP = "select"
 
@@ -106,19 +114,45 @@ PROGRESS_EVERY = 1_000_000
 
 
 class Rule(BaseModel):
-    """Which edges to keep (or name as skipped), by category and predicate ancestry."""
+    """Which edges to keep (or name as skipped), by category and predicate ancestry, and by the
+    edge's knowledge level and agent type."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str = Field(min_length=1)
     tier: Literal["query", "capped", "skip"]
     subject: tuple[str, ...] = Field(default=(), description="Categories; empty: any node")
-    predicates: tuple[str, ...] = Field(min_length=1)
+    predicates: tuple[str, ...] = Field(
+        default=(), description="Empty: any predicate; only with a knowledge_level or agent_type"
+    )
     object: tuple[str, ...] = Field(default=(), description="Categories; empty: any node")
     symmetric: bool = False
+    knowledge_level: tuple[KnowledgeLevel, ...] = Field(
+        default=(), description="The edge's knowledge_level is one of these; empty: any"
+    )
+    agent_type: tuple[AgentType, ...] = Field(
+        default=(), description="The edge's agent_type is one of these; empty: any"
+    )
+
+    @model_validator(mode="after")
+    def _names_something(self) -> Rule:
+        if not (self.predicates or self.knowledge_level or self.agent_type):
+            raise ValueError("a rule needs predicates, a knowledge_level or an agent_type")
+        return self
+
+    @property
+    def by_provenance(self) -> bool:
+        """Whether the rule matches on how the edge was made, not on its statement alone."""
+        return bool(self.knowledge_level or self.agent_type)
 
 
 DEFAULT_RULES: tuple[Rule, ...] = (
+    # An edge mined from the literature isn't a claim a paper could contradict: a co-mention,
+    # or a text-mining pipeline's reading of one, whatever predicate the source writes it as
+    # (eRAM: `gene_associated_with_condition` on text co-occurrence). Checking it against
+    # PubMed would be circular, so these come before every rule on the statement.
+    Rule(id="text-co-occurrence", tier="skip", knowledge_level=("text_co_occurrence",)),
+    Rule(id="text-mined", tier="skip", agent_type=("text_mining_agent",)),
     # Two entities mentioned together isn't a claim, and checking co-mention against PubMed
     # would be circular. It is under `associated_with`, so it is skipped before the rules below.
     Rule(
@@ -228,7 +262,7 @@ def load_rules(path: Path) -> tuple[Rule, ...]:
         rules = tuple(Rule.model_validate(r) for r in data)
     except ValidationError as e:
         first = e.errors()[0]
-        where = ".".join(str(x) for x in first["loc"])
+        where = ".".join(str(x) for x in first["loc"]) or "(whole)"
         raise RulesError(f"rules file {path}: rule {where}: {first['msg']}") from e
     ids = [r.id for r in rules]
     if len(set(ids)) != len(ids):
@@ -250,10 +284,17 @@ def match_rule(
     subject_categories: tuple[str, ...],
     predicate: str,
     object_categories: tuple[str, ...],
+    knowledge_level: str | None = None,
+    agent_type: str | None = None,
 ) -> Rule | None:
-    """The first rule that matches the edge, in either direction where that is allowed."""
+    """The first rule that matches the edge, in either direction where that is allowed. A rule
+    that lists knowledge levels or agent types matches only an edge whose own is among them."""
     for rule in rules:
-        if not biolink.is_a(predicate, list(rule.predicates)):
+        if rule.knowledge_level and knowledge_level not in rule.knowledge_level:
+            continue
+        if rule.agent_type and agent_type not in rule.agent_type:
+            continue
+        if rule.predicates and not biolink.is_a(predicate, list(rule.predicates)):
             continue
         if _side(subject_categories, rule.subject) and _side(object_categories, rule.object):
             return rule
@@ -455,9 +496,9 @@ def select(
         if s_cats is None or o_cats is None:
             missing += 1
             continue
-        key = (s_cats, edge.predicate, o_cats)
+        key = (s_cats, edge.predicate, o_cats, edge.knowledge_level, edge.agent_type)
         if key not in matches:
-            matches[key] = match_rule(rules, s_cats, edge.predicate, o_cats)
+            matches[key] = match_rule(rules, *key)
         rule = matches[key]
         if rule is None or rule.tier == "skip":
             label = f"skip:{rule.id}" if rule else "unmatched"

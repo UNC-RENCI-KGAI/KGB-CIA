@@ -251,6 +251,95 @@ def test_symmetric_predicate_matches_reversed_and_missing_nodes(tmp_path):
     ]
 
 
+def test_text_mined_edges_are_skipped_whatever_their_predicate(tmp_path):
+    """eRAM writes a co-mention as `gene_associated_with_condition`, under the gene-disease
+    rule's `associated_with`; its knowledge level and agent type say what it is."""
+    nodes = [
+        Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
+        Node(id="MONDO:1", category=["biolink:Disease"], name="d"),
+        Node(id="CHEBI:1", category=["biolink:SmallMolecule"], name="c"),
+    ]
+    mined = dict(knowledge_level="text_co_occurrence", agent_type="text_mining_agent")
+    edges = [
+        _edge("NCBIGene:1", "biolink:gene_associated_with_condition", "MONDO:1", **mined),
+        _edge(
+            "NCBIGene:1",
+            "biolink:gene_associated_with_condition",
+            "MONDO:1",
+            knowledge_level="statistical_association",
+            agent_type="text_mining_agent",
+        ),
+        _edge(
+            "NCBIGene:1",
+            "biolink:gene_associated_with_condition",
+            "MONDO:1",
+            knowledge_level="knowledge_assertion",
+            agent_type="manual_agent",
+        ),
+        _edge("CHEBI:1", "biolink:treats", "MONDO:1", **mined),
+    ]
+    graph = _graph(tmp_path / "g", nodes, edges)
+    report, statements, _, _ = _run(graph, tmp_path / "work")
+    # Only the curated assertion is checked; the statement counts it alone.
+    [kept] = statements
+    assert (kept.rule, kept.edge_count, kept.sources) == ("gene-disease", 1, ["infores:string"])
+    assert report["rules"]["text-co-occurrence"] == {"tier": "skip", "skipped_edges": 2}
+    assert report["rules"]["text-mined"] == {"tier": "skip", "skipped_edges": 1}
+    assert report["rules"]["gene-disease"]["matched_edges"] == 1
+    assert {(e["predicate"], e["rule"], e["edges"]) for e in report["skipped"]} == {
+        ("biolink:gene_associated_with_condition", "skip:text-co-occurrence", 1),
+        ("biolink:gene_associated_with_condition", "skip:text-mined", 1),
+        ("biolink:treats", "skip:text-co-occurrence", 1),
+    }
+    assert "3 by skip rules" in scope.summary(report)[-1]
+
+
+def test_match_rule_honours_knowledge_level_and_agent_type():
+    rules = (
+        scope.Rule(
+            id="curated",
+            tier="query",
+            predicates=("biolink:treats",),
+            knowledge_level=("knowledge_assertion",),
+            agent_type=("manual_agent",),
+        ),
+        scope.Rule(id="rest", tier="skip", predicates=("biolink:treats",)),
+    )
+    chem, disease = ("biolink:SmallMolecule",), ("biolink:Disease",)
+
+    def match(level, agent):
+        return scope.match_rule(rules, chem, "biolink:treats", disease, level, agent).id
+
+    assert match("knowledge_assertion", "manual_agent") == "curated"
+    # Both must hold: a rule's fields are all conditions, like its categories.
+    assert match("knowledge_assertion", "text_mining_agent") == "rest"
+    assert match("prediction", "manual_agent") == "rest"
+    assert match(None, None) == "rest"
+
+
+def test_rules_file_can_match_on_provenance(toy_graph, tmp_path):
+    rules = tmp_path / "rules.json"
+    rules.write_text(
+        json.dumps(
+            [
+                {"id": "automated", "tier": "skip", "agent_type": ["automated_agent"]},
+                {
+                    "id": "gene-disease",
+                    "tier": "query",
+                    "subject": ["biolink:GeneOrGeneProduct"],
+                    "predicates": ["biolink:associated_with"],
+                    "object": ["biolink:Disease"],
+                },
+            ]
+        )
+    )
+    report, statements, _, _ = _run(toy_graph, tmp_path / "work", rules_file=rules)
+    # The toy gene-disease edge is DisGeNET's, by an automated agent.
+    assert statements == []
+    assert report["rules"]["automated"] == {"tier": "skip", "skipped_edges": 1}
+    assert report["rules"]["gene-disease"]["matched_edges"] == 0
+
+
 def test_misdirected_edges_are_kept_and_counted(tmp_path, capsys):
     """Claims are read in the subject and object order Biolink's domain and range give; a
     source edge that isn't is reported, not dropped."""
@@ -322,6 +411,9 @@ def test_rules_file_replaces_the_defaults(toy_graph, tmp_path):
         ("[]", "non-empty JSON list"),
         ('[{"id": "x", "tier": "maybe", "predicates": ["biolink:treats"]}]', "tier"),
         ('[{"id": "x", "tier": "query", "predicates": ["biolink:cures"]}]', "not in Biolink"),
+        ('[{"id": "x", "tier": "skip", "knowledge_level": ["text_mined"]}]', "knowledge_level"),
+        ('[{"id": "x", "tier": "skip", "agent_type": ["robot"]}]', "agent_type"),
+        ('[{"id": "x", "tier": "skip"}]', "needs predicates"),
     ],
 )
 def test_bad_rules_file(tmp_path, content, problem):

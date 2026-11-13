@@ -370,6 +370,12 @@ def test_predicates_come_from_the_rules_biolink_and_opposites():
     both = label.predicates_of(rules, ["chemical-treats-disease", "chemical-affects-gene"])
     assert set(both) == set(treats) | set(label.predicates_of(rules, ["chemical-affects-gene"]))
     assert label.predicates_of(rules, ["literature-co-occurrence"]) == ()
+    # A skip rule on the edge's provenance drops nothing: a text-mined `treats` edge is skipped,
+    # but a paper can still claim `treats`.
+    mined = scope.Rule(
+        id="mined", tier="skip", predicates=("biolink:treats",), agent_type=("text_mining_agent",)
+    )
+    assert set(label.predicates_of((mined, *rules), ["chemical-treats-disease"])) == set(treats)
 
 
 def test_predicates_read_from_the_rules_subject_to_its_object():

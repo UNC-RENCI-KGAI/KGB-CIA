@@ -131,8 +131,9 @@ def predicates_of(rules: Sequence[Rule], ids: Iterable[str]) -> tuple[str, ...]:
     """The predicates a claim may use for a pair the rules `ids` matched, as CURIEs, sorted:
     each rule's predicates, every predicate Biolink puts below them (mixins included), and their
     `opposite_of` partners, each as Biolink reads it from the rule's subject to its object
-    (`rule_predicate`). Predicates a skip rule drops whatever the categories (literature
-    co-occurrence, which is under `associated_with`) are left out: they never make a claim."""
+    (`rule_predicate`). Predicates a skip rule drops whatever the categories and the edge's
+    provenance (literature co-occurrence, which is under `associated_with`) are left out: they
+    never make a claim."""
     wanted = set(ids)
     found: set[str] = set()
     for rule in rules:
@@ -144,7 +145,7 @@ def predicates_of(rules: Sequence[Rule], ids: Iterable[str]) -> tuple[str, ...]:
             found |= {p for n in named if (p := rule_predicate(rule, n))}
     dropped: set[str] = set()
     for rule in rules:
-        if rule.tier == "skip" and not rule.subject and not rule.object:
+        if rule.tier == "skip" and not (rule.subject or rule.object or rule.by_provenance):
             for predicate in rule.predicates:
                 dropped |= biolink.descendants(predicate)
     return tuple(sorted(found - dropped))

@@ -2,8 +2,9 @@
 
 `augment.py select` (`kgb-augment select`) keeps the edges worth checking in the literature:
 those whose relationship abstracts state as a claim that a paper could contradict. Rules choose them
-by (subject category, predicate, object category). The rules are data: the built-in ones are
-`DEFAULT_RULES` in `scripts/pubmed_evidence/scope.py`, and `--rules FILE` replaces them.
+by (subject category, predicate, object category), and by how the edge was made (its
+`knowledge_level` and `agent_type`). The rules are data: the built-in ones are `DEFAULT_RULES`
+in `scripts/pubmed_evidence/scope.py`, and `--rules FILE` replaces them.
 
 ## How a rule matches an edge
 
@@ -20,6 +21,11 @@ by (subject category, predicate, object category). The rules are data: the built
   when the rule is `symmetric` or Biolink marks the edge's predicate symmetric (`binds`,
   `interacts_with`, `physically_interacts_with`, ...). So Protein `binds` chemical is kept by
   `chemical-affects-gene`.
+- **Provenance.** A rule that lists `knowledge_level` or `agent_type` values matches only an
+  edge whose own is among them; a rule that lists both needs both, as it needs its subject and
+  object. Such a rule may leave `predicates` out, to match any predicate. A skip rule on
+  provenance alone drops nothing from the predicates a claim may use (below): a text-mined
+  `treats` edge is skipped, but a paper can still claim `treats`.
 - **Negated edges** (`negated: true`) are matched like any other, as their own statement. Step
   6 checks them, and never supports them: nothing is narrower than a negated statement
   (DESIGN.md, step 6).
@@ -33,17 +39,19 @@ while an edge type no rule covers shows as `unmatched`.
 
 ## Built-in rules, in order
 
-| id | tier | subject | predicates (with descendants) | object | sym. |
-| --- | --- | --- | --- | --- | --- |
-| `literature-co-occurrence` | skip | any | `occurs_together_in_literature_with` | any | yes |
-| `chemical-treats-disease` | query | ChemicalEntity | `treats`, `contraindicated_in`, `treats_or_applied_or_studied_to_treat` | Disease | |
-| `chemical-affects-gene` | query | ChemicalEntity | `affects`, `directly_physically_interacts_with`, `binds` | GeneOrGeneProduct | |
-| `gene-disease` | query | GeneOrGeneProduct | `associated_with`, `contributes_to` | Disease | |
-| `gene-gene` | capped | GeneOrGeneProduct | `physically_interacts_with`, `interacts_with` | GeneOrGeneProduct | yes |
-| `gene-phenotype` | capped | GeneOrGeneProduct | `has_phenotype` | PhenotypicFeature | |
-| `pathway-go` | skip | GeneOrGeneProduct | `participates_in`, `enables`, `located_in` | BiologicalProcessOrActivity, CellularComponent | |
-| `expression` | skip | GeneOrGeneProduct | `expressed_in` | AnatomicalEntity | |
-| `by-construction` | skip | any | `orthologous_to`, `has_part`, `part_of`, `subclass_of`, `superclass_of`, `member_of`, `has_member` | any | yes |
+| id | tier | subject | predicates (with descendants) | object | sym. | provenance |
+| --- | --- | --- | --- | --- | --- | --- |
+| `text-co-occurrence` | skip | any | any | any | | `knowledge_level: text_co_occurrence` |
+| `text-mined` | skip | any | any | any | | `agent_type: text_mining_agent` |
+| `literature-co-occurrence` | skip | any | `occurs_together_in_literature_with` | any | yes | |
+| `chemical-treats-disease` | query | ChemicalEntity | `treats`, `contraindicated_in`, `treats_or_applied_or_studied_to_treat` | Disease | | |
+| `chemical-affects-gene` | query | ChemicalEntity | `affects`, `directly_physically_interacts_with`, `binds` | GeneOrGeneProduct | | |
+| `gene-disease` | query | GeneOrGeneProduct | `associated_with`, `contributes_to` | Disease | | |
+| `gene-gene` | capped | GeneOrGeneProduct | `physically_interacts_with`, `interacts_with` | GeneOrGeneProduct | yes | |
+| `gene-phenotype` | capped | GeneOrGeneProduct | `has_phenotype` | PhenotypicFeature | | |
+| `pathway-go` | skip | GeneOrGeneProduct | `participates_in`, `enables`, `located_in` | BiologicalProcessOrActivity, CellularComponent | | |
+| `expression` | skip | GeneOrGeneProduct | `expressed_in` | AnatomicalEntity | | |
+| `by-construction` | skip | any | `orthologous_to`, `has_part`, `part_of`, `subclass_of`, `superclass_of`, `member_of`, `has_member` | any | yes | |
 
 All CURIEs are `biolink:`. Notes:
 
@@ -52,7 +60,13 @@ All CURIEs are `biolink:`. Notes:
   (`associated_with_increased_likelihood_of` is how Monarch writes ClinGen's "Likely
   Pathogenic"; "Pathogenic" is `causes`), `correlated_with` and its positive and negative
   forms, and `biomarker_for`. `contributes_to` covers `causes`.
-- **`literature-co-occurrence`** comes first because its predicate is also below
+- **`text-co-occurrence`** and **`text-mined`** come first, before any rule on the statement:
+  an edge mined from the literature (a co-mention, or a text-mining pipeline's reading of one)
+  isn't a claim a paper could contradict, whatever predicate its source writes it as (eRAM
+  writes `gene_associated_with_condition`, under `gene-disease`'s `associated_with`, on 113,706
+  text co-occurrence edges), and checking it against PubMed would be circular. The Nov 12 2026
+  run, without these rules, put 127,774 of its 131,195 pairs in the query tier that way.
+- **`literature-co-occurrence`** comes next because its predicate is also below
   `associated_with`: two entities mentioned together is not a claim, and checking co-mention
   against PubMed would be circular.
 - **Skips:** pathway and GO names rarely appear verbatim in abstracts, and GO annotations
@@ -87,6 +101,8 @@ built-in rules entirely, so copy the ones you keep.
 
 ```json
 {"rules": [
+  {"id": "text-co-occurrence", "tier": "skip", "knowledge_level": ["text_co_occurrence"]},
+  {"id": "text-mined", "tier": "skip", "agent_type": ["text_mining_agent"]},
   {"id": "literature-co-occurrence", "tier": "skip",
    "predicates": ["biolink:occurs_together_in_literature_with"], "symmetric": true},
   {"id": "gene-disease", "tier": "query",
@@ -103,13 +119,17 @@ built-in rules entirely, so copy the ones you keep.
 | --- | --- | --- |
 | `id` | yes | Unique, non-empty; recorded on every statement it keeps (`Statement.rule`) |
 | `tier` | yes | `query`, `capped` or `skip` |
-| `predicates` | yes | One or more Biolink predicate CURIEs |
+| `predicates` | unless `knowledge_level` or `agent_type` is given | Biolink predicate CURIEs; empty or left out: any predicate |
 | `subject`, `object` | no | Biolink class CURIEs; empty or left out: any node |
 | `symmetric` | no | Also match reversed edges; default false |
+| `knowledge_level` | no | Biolink `KnowledgeLevelEnum` values the edge's `knowledge_level` may have; empty or left out: any |
+| `agent_type` | no | Biolink `AgentTypeEnum` values the edge's `agent_type` may have; empty or left out: any |
 
 The file is checked before anything runs: valid JSON, a non-empty list, no unknown fields,
-unique ids, and every CURIE a Biolink element (`bmt`, Biolink 4.4.6). A bad file stops the
-step with a one-line message. Record why you changed the scope in `notes.md`.
+unique ids, every CURIE a Biolink element (`bmt`, Biolink 4.4.6), every knowledge level and
+agent type a value of its enum (`shared.schema`), and each rule naming predicates, a knowledge
+level or an agent type. A bad file stops the step with a one-line message. Record why you
+changed the scope in `notes.md`.
 
 The rules also set what the label step asks for. A pair's claims may use the predicates of the
 rules it matched (`pairs.jsonl`'s `rules`), their descendants and their `opposite_of`

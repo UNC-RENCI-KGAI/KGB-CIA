@@ -86,9 +86,12 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    pairs dropped by the gene–gene and gene–phenotype caps, the negated edges kept, and the
    `skipped` list of edge types with the skip rule that covered them or `unmatched`. Look at the
    largest `unmatched` types: one that states a claim a paper could contradict (a predicate or
-   category the rules don't cover) may deserve a rule. To change the scope, write
-   `work/rules.json` (`reference/rules.md`) and rerun with `--rules work/rules.json`; say why in
-   `notes.md`. If `kept.misdirected_edges` isn't 0, note those edges for the transformation
+   category the rules don't cover) may deserve a rule. Edges mined from the literature
+   (`knowledge_level: text_co_occurrence`, `agent_type: text_mining_agent`) are skipped
+   whatever their predicate (`text-co-occurrence`, `text-mined`): checking them against PubMed
+   would be circular. To change the scope, write `work/rules.json` (`reference/rules.md`: rules
+   match on categories, predicates, knowledge level and agent type) and rerun with
+   `--rules work/rules.json`; say why in `notes.md`. If `kept.misdirected_edges` isn't 0, note those edges for the transformation
    team: claims rarely reach them. Record the pair count per rule in `notes.md`: it sets the
    cost.
 
