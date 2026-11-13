@@ -1,0 +1,21 @@
+{
+ "rows": [
+  {
+   "release": "kgb-e2e",
+   "namespace": "kgb-e2e",
+   "service": "ClusterIP 7687",
+   "nodes": 1435,
+   "relationships": 4681,
+   "proposed_relationships": 82,
+   "write_rejected": "yes",
+   "dump_mb": 3.6,
+   "loaded_at": "2026-11-12T22:38:45Z"
+  }
+ ],
+ "meta": [
+  {
+   "label": "Source",
+   "value": "cypher-shell counts in pod kgb-e2e-kgb-mcp-neo4j-0 on the kgb-graph host, 2026-11-12 22:40 UTC"
+  }
+ ]
+}
