@@ -37,8 +37,10 @@ in `config.MODELS`: the Azure OpenAI deployments Pi uses, and Claude models on A
 `kgb-augment` (`agents/augmentation/cli.py`) runs the same library. With no subcommand it runs
 every step with its defaults, which is what `shared/pipeline.py` does: it estimates labeling
 with the dry run first (`--budget` stops it there, `--max-label-cost` trims it to the pairs
-that fit), runs label a second time when the first leaves pairs not fully labeled, and stops
-with exit 1 when they still are, since step 6 would otherwise write their edges unchecked.
+that fit), and runs label a second time when the first leaves pairs not fully labeled. When
+they still are, it warns and goes on: step 6 writes their edges unchecked and its report counts
+them, and a call that fails the same way every time can't stop every run. Label's own limit on
+failed calls (`llm.MAX_FAILED_SHARE`, 5%) still stops the run.
 
 - **Bulk extraction:** step 3 calls a cheap model directly rather than through subagents. A
   subagent carries the harness's system prompt and tool definitions and re-sends its context

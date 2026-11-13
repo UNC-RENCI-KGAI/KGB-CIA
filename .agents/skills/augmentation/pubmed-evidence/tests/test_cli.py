@@ -559,15 +559,53 @@ def test_full_run_labels_again_when_a_reply_left_an_abstract_out(
     assert report["edges_checked"] == 9
 
 
-def test_full_run_stops_when_pairs_stay_not_fully_labeled(tmp_path, capsys, fakes, monkeypatch):
+def test_full_run_warns_and_goes_on_when_pairs_stay_not_fully_labeled(
+    tmp_path, capsys, fakes, monkeypatch
+):
+    # A reply that always leaves the same abstract out can't stop every full run at label.
     monkeypatch.setattr(llm, "client_for", lambda model, **kw: leaving_one_out(fakes))
+    argv = common_args(tmp_path)
+    assert cli.main(argv) == 0
+    err = capsys.readouterr().err
+    assert "running label again" in err
+    assert "warning: 1 pairs still aren't fully labeled after a second label run" in err
+    assert "later steps not run" not in err
+    # One run, one retry, then the later steps; apply leaves the pair's 2 treats edges
+    # unchecked and counts them, and checks the other 7.
+    assert fakes.count("label") == 3 and fakes.count("review") == 1
+    assert (tmp_path / "out" / "edges.jsonl").exists()
+    report = json.loads((tmp_path / "out" / "work" / "apply_report.json").read_text())
+    assert report["unchecked"]["pairs_not_fully_labeled"] == 1
+    assert report["unchecked"]["edges_not_fully_labeled"] == 2
+    assert report["edges_checked"] == 7
+
+
+def test_full_run_stops_when_the_second_label_run_fails(tmp_path, capsys, fakes, monkeypatch):
+    """The first label run leaves an abstract out; the retry's call fails, more than label's
+    share of failed calls allows, so the step fails and nothing after it runs."""
+    inner = fake_model(fakes)
+    asked = 0
+
+    def answer(sent: Sent):
+        nonlocal asked
+        position = dict(re.findall(r"^## (A\d+) \(PMID:(\d+)", sent.user, re.M))
+        if "101" not in position.values():
+            return inner.answer(sent)
+        asked += 1
+        if asked > 1:
+            fakes.append("label")
+            return llm.LLMError("boom")
+        body = inner.answer(sent)
+        body["abstracts"] = [a for a in body["abstracts"] if position[a["abstract"]] != "101"]
+        return body
+
+    monkeypatch.setattr(llm, "client_for", lambda model, **kw: FakeClient(answer))
     argv = common_args(tmp_path)
     assert cli.main(argv) == 1
     err = capsys.readouterr().err
-    assert "running label again" in err
-    assert "1 pairs still aren't fully labeled after a second label run" in err
+    assert "running label again" in err and "calls these pairs need failed" in err
+    assert "still aren't fully labeled" not in err
     assert "label failed (exit 1); later steps not run" in err
-    # One run, one retry, and nothing after: no review, no graph written unchecked.
     assert fakes.count("label") == 3 and "review" not in fakes
     assert not (tmp_path / "out" / "edges.jsonl").exists()
 

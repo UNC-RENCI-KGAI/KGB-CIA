@@ -279,8 +279,11 @@ def _label_limit(common: argparse.Namespace, estimate: dict) -> int | None:
 def _finish_labeling(common: argparse.Namespace, run, label, args: argparse.Namespace) -> int:
     """After a label run that returned 0: if pairs are still not fully labeled (a call failed,
     or a reply left an abstract out), run label once more, since answers already made are
-    cached; if pairs still are, stop with 1 instead of going on to write their edges
-    unchecked. The count is the dry run's `pairs_to_call` on the same pairs."""
+    cached. If pairs still are, warn and return 0, so ground, review and apply go on: apply
+    writes their edges unchecked and counts them, and a call that fails the same way every
+    time would otherwise stop every full run here. Label's own share of failed calls
+    (`llm.too_many_failed`) still fails the step. The count is the dry run's `pairs_to_call`
+    on the same pairs."""
     left = _label_estimate(common, run, args.limit)["pairs_to_call"]
     if not left:
         return 0
@@ -295,12 +298,11 @@ def _finish_labeling(common: argparse.Namespace, run, label, args: argparse.Name
     left = _label_estimate(common, run, args.limit)["pairs_to_call"]
     if left:
         print(
-            f"[augmentation] error: {left:,} pairs still aren't fully labeled after a second "
-            "label run, so their edges can't be checked; stopping before ground, review and "
-            "apply. Rerun to retry; answers already made are cached.",
+            f"[augmentation] warning: {left:,} pairs still aren't fully labeled after a second "
+            "label run, so their edges stay unchecked; apply's report counts them as pairs not "
+            "fully labeled. Rerun to retry them; answers already made are cached.",
             file=sys.stderr,
         )
-        return 1
     return 0
 
 

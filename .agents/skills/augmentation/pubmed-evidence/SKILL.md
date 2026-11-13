@@ -241,9 +241,11 @@ exit 1 before any model call and says so, instead of labeling what fits.
 
 When the label step ends with pairs not fully labeled (a call failed, or a reply left an
 abstract out; its summary warns), the full run runs label once more, since the answers already
-made are cached. If pairs are still not fully labeled after that, it stops with exit 1 before
-ground, review and apply, rather than writing their edges unchecked with exit 0; rerun it to
-retry.
+made are cached. If pairs are still not fully labeled after that, it warns with their count and
+goes on to ground, review and apply: their edges are written unchecked, and apply's report
+counts them as pairs not fully labeled. Rerun it to retry them. It doesn't stop there, since a
+call that fails the same way every time would stop every run; label's own rule still fails the
+step (exit 1) when more than 5% of the calls the pairs need failed.
 
 `--skip-review` leaves out the review step. Apply then holds every pair with a claim that
 would count but has no review, and writes its edges unchanged, so the run adds nothing
