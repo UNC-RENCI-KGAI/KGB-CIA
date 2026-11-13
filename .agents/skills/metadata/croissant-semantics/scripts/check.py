@@ -630,8 +630,9 @@ def spread(rows: list, n: int = ROWS_CHECKED) -> list:
     return rows if len(rows) <= n else [rows[i * len(rows) // n] for i in range(n)]
 
 
-def _values(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
-    """(value, row) pairs for a column: lists split, empties, nulls and true-values dropped."""
+def _items(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
+    """(item, row) pairs for a column before item_pattern: lists split, empties, nulls and
+    true-values dropped."""
     skip = set(as_list(spec.get("null_values"))) | set(as_list(spec.get("true_values")))
     out = []
     for r in rows:
@@ -645,18 +646,58 @@ def _values(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
                 parts = str(x).split(spec["list_separator"])
             else:
                 parts = [str(x)]
-            parts = [p.strip() for p in parts if p.strip() and p.strip() not in skip]
-            if spec.get("item_pattern"):
-                # compound items (`HP:0001250|Seizure`, `TP53|7157|SRC`): the id is the first group;
-                # an item the pattern doesn't fit is kept whole, so it shows as a misfit, unless
-                # drop_unmatched says those rows are left out on purpose
-                pat = re.compile(spec["item_pattern"])
-                if spec.get("drop_unmatched"):
-                    parts = [m.group(1) for p in parts if (m := pat.fullmatch(p))]
-                else:
-                    parts = [m.group(1) if (m := pat.match(p)) and m.group(1) else p for p in parts]
-            out += [(p, r) for p in parts]
+            out += [(p.strip(), r) for p in parts if p.strip() and p.strip() not in skip]
     return out
+
+
+def _values(rows: list[dict], col: str, spec: dict) -> list[tuple[str, dict]]:
+    """(value, row) pairs for a column: lists split, empties, nulls and true-values dropped, and
+    item_pattern applied the way the transformation runtime applies it (orion_runtime.py: the
+    whole item must fit, re.fullmatch, and the id is the first group)."""
+    pairs = _items(rows, col, spec)
+    if not spec.get("item_pattern"):
+        return pairs
+    # compound items (`HP:0001250|Seizure`, `TP53|7157|SRC`): the id is the first group; an item
+    # the pattern doesn't fit is kept whole, so it shows as a misfit, unless drop_unmatched says
+    # those rows are left out on purpose
+    pat = re.compile(spec["item_pattern"])
+    if spec.get("drop_unmatched"):
+        return [(m.group(1), r) for p, r in pairs if (m := pat.fullmatch(p))]
+    return [(m.group(1) if (m := pat.fullmatch(p)) and m.group(1) else p, r) for p, r in pairs]
+
+
+def prefix_only_matches(rows: list[dict], col: str, spec: dict) -> list[str]:
+    """Items an item_pattern fits at their start (re.match) but not as a whole (re.fullmatch):
+    `^(C\\d{7})\\|` on `C0012345|Fever`. The runtime drops every such item, so a pattern
+    written and tested with re.match semantics builds nothing. One entry per item, in file
+    order."""
+    if not spec.get("item_pattern"):
+        return []
+    pat = re.compile(spec["item_pattern"])
+    return [p for p, _ in _items(rows, col, spec) if pat.match(p) and not pat.fullmatch(p)]
+
+
+def anchored(pattern: str) -> str:
+    """The pattern extended to the end of the item, for the message that says what to change."""
+    return pattern if pattern.endswith("$") else pattern + ".*$"
+
+
+def check_item_pattern(rows: list[dict], col: str, spec: dict, where: str, f: Findings) -> None:
+    """An item_pattern that fits sampled items only at their start is an error: the runtime
+    matches whole items (re.fullmatch) and drops every item that doesn't fit, so the layout would
+    build nothing from this column (eRAM's symptom column: `^(C\\d{7})\\|` on 1,663 rows wrote 0).
+    """
+    partial = prefix_only_matches(rows, col, spec)
+    if not partial:
+        return
+    total = len(_items(rows, col, spec))
+    f.error(
+        where,
+        f"item_pattern `{spec['item_pattern']}` fits {len(partial)} of {total} sampled items "
+        f"only at their start (e.g. {list(dict.fromkeys(partial))[:3]}); the transformation "
+        f"matches the whole item (re.fullmatch), so every one of them would drop. Anchor the "
+        f"pattern to the end of the item: `{anchored(spec['item_pattern'])}`",
+    )
 
 
 def _strings(obj, path=""):
@@ -1411,6 +1452,7 @@ def check_data(
             for d in spec.get("derived") or []
         ]
         for col, spec, where in checks:
+            check_item_pattern(rows, col, spec, where, f)
             pairs = _values(rows, col, spec)
             values = [v for v, _ in pairs]
             if col in entity_ids and spec in specs.values():

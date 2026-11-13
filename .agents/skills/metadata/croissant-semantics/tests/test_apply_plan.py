@@ -1116,6 +1116,10 @@ def test_encoding_format_and_item_pattern():
     assert out["distribution"][0]["encodingFormat"] == ["text/tab-separated-values"]
     rows = [{"genes": "TP53|7157|SRC;BRCA1|672|SRC;odd"}]
     spec = plan["layouts"][0]["columns"]["genes"]
+    # the pattern stops before `|SRC`, so (as in the runtime, which matches whole items) it fits
+    # nothing: every item is kept whole and shows as a misfit
+    assert [v for v, _ in _values(rows, "genes", spec)] == ["TP53|7157|SRC", "BRCA1|672|SRC", "odd"]
+    spec["item_pattern"] = r"^[^|]*\|(\d+)\|.*$"
     assert [v for v, _ in _values(rows, "genes", spec)] == ["7157", "672", "odd"]
 
 

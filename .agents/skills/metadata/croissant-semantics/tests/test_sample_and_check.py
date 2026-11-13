@@ -1489,3 +1489,40 @@ def test_a_plans_own_proposed_id_may_appear_in_layouts():
     f = Findings()
     check.check_infores(plan, f, {})
     assert not [m for level, _, m in f.items if level == "error"]
+
+
+def test_item_pattern_is_matched_whole_like_the_runtime():
+    """orion_runtime.py applies item_pattern with re.fullmatch and drops every item that doesn't
+    fit; the check must judge items the same way, and say so when a pattern only fits at the
+    start (eRAM's symptom column: `^(C\\d{7})\\|` passed the check and wrote 0 of 1,663 rows)."""
+    from check import _values, check_item_pattern
+
+    rows = [{"symptom": "C0012345|Fever;C0027497|Nausea"}, {"symptom": "C0030193|Pain"}]
+    spec = {"list_separator": ";", "item_pattern": r"^(C\d{7})\|", "id_prefix": "UMLS"}
+    # an item the pattern fits only at its start is kept whole, so it shows as a misfit
+    assert [v for v, _ in _values(rows, "symptom", spec)] == [
+        "C0012345|Fever",
+        "C0027497|Nausea",
+        "C0030193|Pain",
+    ]
+    f = Findings()
+    check_item_pattern(rows, "symptom", spec, "l symptom", f)
+    assert f.count("error") == 1
+    msg = f.items[0][2]
+    assert "3 of 3 sampled items" in msg and "C0012345|Fever" in msg
+    assert "fullmatch" in msg and r"`^(C\d{7})\|.*$`" in msg
+    # anchored to the end of the item, it fits whole items: ids come out, nothing is reported
+    spec["item_pattern"] = r"^(C\d{7})\|.*$"
+    assert [v for v, _ in _values(rows, "symptom", spec)] == ["C0012345", "C0027497", "C0030193"]
+    f = Findings()
+    check_item_pattern(rows, "symptom", spec, "l symptom", f)
+    assert f.items == []
+    # with drop_unmatched the unanchored pattern drops every item, as the runtime would
+    spec = {"list_separator": ";", "item_pattern": r"^(C\d{7})\|", "drop_unmatched": "on purpose"}
+    assert _values(rows, "symptom", spec) == []
+    # a tag-stripping pattern that already reaches the end of the item is fine as it is
+    spec = {"item_pattern": r"ko:(.+)", "id_prefix": "KEGG.ORTHOLOGY"}
+    assert [v for v, _ in _values([{"k": "ko:K00001"}], "k", spec)] == ["K00001"]
+    f = Findings()
+    check_item_pattern([{"k": "ko:K00001"}], "k", spec, "l k", f)
+    assert f.items == []
