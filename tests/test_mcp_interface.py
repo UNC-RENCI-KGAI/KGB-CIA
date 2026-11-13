@@ -1354,3 +1354,64 @@ def test_dump_scripts_pin_images_and_create_idempotent_indexes():
     assert "kgbcia_relationship_id_" in preparation
     assert "CREATE FULLTEXT INDEX kgbcia_node_fulltext IF NOT EXISTS" in indexes
     assert "CALL db.awaitIndexes()" in indexes
+
+
+def test_check_accepts_augmentor_edges_without_source_records(toy_graph):
+    graph_dir, report_path, _, edges = toy_graph
+    values = [edge.model_dump(exclude_none=True) for edge in edges]
+    proposed = {
+        "id": "kgbcia-augmentation:0123456789abcdef",
+        "subject": "CHEBI:1",
+        "predicate": "biolink:directly_physically_interacts_with",
+        "object": "NCBIGene:100",
+        "primary_knowledge_source": "infores:kgbcia-augmentor",
+        "knowledge_level": "knowledge_assertion",
+        "agent_type": "text_mining_agent",
+        "publications": ["PMID:12345"],
+        "original_edge_ids": ["edge-0"],
+    }
+    # Each of these lacks one condition, so it must still fail as missing lineage.
+    no_publications = {**proposed, "id": "kgbcia-augmentation:1", "publications": []}
+    no_originals = {**proposed, "id": "kgbcia-augmentation:2"}
+    no_originals.pop("original_edge_ids")
+    other_source = {
+        **proposed,
+        "id": "kgbcia-augmentation:3",
+        "primary_knowledge_source": "infores:chembl",
+    }
+    values += [proposed, no_publications, no_originals, other_source]
+    (graph_dir / "edges.jsonl").write_text("".join(f"{json.dumps(value)}\n" for value in values))
+
+    result = check_graph(graph_dir, [report_path])
+
+    assert result.augmentor_edges_without_records == 1
+    assert result.error_counts["missing_source_records"] == 3
+    assert result.missing_source_records_by_primary_source == {
+        "infores:chembl": 1,
+        "infores:kgbcia-augmentor": 2,
+    }
+    assert not result.ok
+    assert "augmentor edges without kgbcia_source_records" in format_check_result(result)
+
+
+def test_check_passes_graph_whose_only_unrecorded_edges_are_augmentor_proposals(toy_graph):
+    graph_dir, report_path, _, edges = toy_graph
+    values = [edge.model_dump(exclude_none=True) for edge in edges]
+    values.append(
+        {
+            "id": "kgbcia-augmentation:fedcba9876543210",
+            "subject": "CHEBI:2",
+            "predicate": "biolink:directly_physically_interacts_with",
+            "object": "NCBIGene:101",
+            "primary_knowledge_source": "infores:kgbcia-augmentor",
+            "publications": ["PMID:67890"],
+            "original_edge_ids": ["edge-1"],
+        }
+    )
+    (graph_dir / "edges.jsonl").write_text("".join(f"{json.dumps(value)}\n" for value in values))
+
+    result = check_graph(graph_dir, [report_path])
+
+    assert result.ok
+    assert result.edge_count == 16
+    assert result.augmentor_edges_without_records == 1

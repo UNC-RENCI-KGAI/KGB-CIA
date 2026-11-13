@@ -160,6 +160,10 @@ call `sys.exit`.
   `data/transformation/**/transform_report.json`. The check works offline and returns 0 only if
   the graph is ready for `orion-neo4j-dump`:
   - **every edge has an `id`**;
+  - every edge has `kgbcia_source_records`, except an augmentation-proposed edge
+    (`primary_knowledge_source: infores:kgbcia-augmentor`) that cites `publications` and names
+    its `original_edge_ids`: it has no transformation record, so it is accepted without one and
+    counted separately;
   - every `kgbcia_source_records` value is a list whose entries parse;
   - every referenced `Mapping.id` exists in some report.
 

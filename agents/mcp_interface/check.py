@@ -15,6 +15,10 @@ from shared.schema import TransformReport
 DEFAULT_INPUTS = (Path("data/cleaning"), Path("data/transformation/merged"))
 DEFAULT_REPORT_ROOT = Path("data/transformation")
 _MAX_ERROR_SAMPLES = 20
+# Edges the augmentation stage proposes from literature carry no transformation record; they
+# cite PubMed instead (``publications``) and name the originals they refine
+# (``original_edge_ids``). They are accepted without ``kgbcia_source_records``.
+AUGMENTOR_SOURCES = frozenset({"infores:kgbcia-augmentor"})
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,7 @@ class CheckResult:
     mapping_count: int = 0
     error_counts: dict[str, int] = field(default_factory=dict)
     missing_source_records_by_primary_source: dict[str, int] = field(default_factory=dict)
+    augmentor_edges_without_records: int = 0
     unknown_mapping_ids: dict[str, int] = field(default_factory=dict)
     error_samples: tuple[str, ...] = ()
 
@@ -63,6 +68,7 @@ def check_graph(
     errors: Counter[str] = Counter()
     missing_by_source: Counter[str] = Counter()
     unknown_mapping_ids: Counter[str] = Counter()
+    augmentor_counter: Counter[str] = Counter()
     samples: list[str] = []
     mapping_ids: set[str] = set()
     report_count = 0
@@ -86,6 +92,7 @@ def check_graph(
         errors,
         missing_by_source,
         unknown_mapping_ids,
+        augmentor_counter,
         samples,
     )
     return CheckResult(
@@ -96,6 +103,7 @@ def check_graph(
         mapping_count=mapping_count,
         error_counts=dict(sorted(errors.items())),
         missing_source_records_by_primary_source=dict(sorted(missing_by_source.items())),
+        augmentor_edges_without_records=augmentor_counter["edges"],
         unknown_mapping_ids=dict(sorted(unknown_mapping_ids.items())),
         error_samples=tuple(samples),
     )
@@ -113,6 +121,11 @@ def format_check_result(result: CheckResult) -> str:
     ]
     for source, count in result.missing_source_records_by_primary_source.items():
         lines.append(f"missing kgbcia_source_records [{source}]: {count}")
+    if result.augmentor_edges_without_records:
+        lines.append(
+            "augmentor edges without kgbcia_source_records (cite publications instead): "
+            f"{result.augmentor_edges_without_records}"
+        )
     for name, count in result.error_counts.items():
         lines.append(f"error {name}: {count}")
     lines.extend(f"  {sample}" for sample in result.error_samples)
@@ -153,6 +166,7 @@ def _stream_edges(
     errors: Counter[str],
     missing_by_source: Counter[str],
     unknown_mapping_ids: Counter[str],
+    augmentor_counter: Counter[str],
     samples: list[str],
 ) -> int:
     if not path.is_file():
@@ -180,6 +194,14 @@ def _stream_edges(
             source = value.get("primary_knowledge_source")
             source_name = source if isinstance(source, str) and source else "<unknown>"
             references = value.get("kgbcia_source_records")
+            if (
+                references is None
+                and source in AUGMENTOR_SOURCES
+                and value.get("publications")
+                and value.get("original_edge_ids")
+            ):
+                augmentor_counter["edges"] += 1
+                continue
             if references is None:
                 errors["missing_source_records"] += 1
                 missing_by_source[source_name] += 1

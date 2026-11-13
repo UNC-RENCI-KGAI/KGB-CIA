@@ -82,8 +82,11 @@ only Neo4j from the same chart with the LitCoin test overlay and keeps `mcp.enab
 
 **Input:** `nodes.jsonl` and `edges.jsonl` in ORION KGX format (`shared.schema.Node` / `Edge`),
 from the cleaning stage or, until that exists, `data/transformation/merged/`. Every edge must
-have an `id` and a `kgbcia_source_records` list. Plus the per-source `transform_report.json`
-files under `data/transformation/`.
+have an `id` and a `kgbcia_source_records` list, except an edge the augmentation stage proposed
+from the literature (`primary_knowledge_source: infores:kgbcia-augmentor`): it has no
+transformation record, so it is accepted without one when it cites `publications` and names the
+edges it refines in `original_edge_ids`, and `check` counts it on a line of its own. Plus the
+per-source `transform_report.json` files under `data/transformation/`.
 
 **Output:** `check` writes no graph files. `kgbcia-mcp hubs` writes `hubs.json`; the server
 returns JSON-serializable, read-only query results. `deploy/prepare_dump.sh` produces the
