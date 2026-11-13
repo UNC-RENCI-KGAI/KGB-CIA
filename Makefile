@@ -4,9 +4,9 @@ UV := $(shell command -v uv 2>/dev/null)
 
 setup:  ## create .venv and install in editable mode
 ifdef UV
-	uv sync --dev
+	uv sync --dev --all-extras
 else
-	python3 -m venv .venv && .venv/bin/pip install -e . pytest ruff
+	python3 -m venv .venv && .venv/bin/pip install -e '.[augmentation]' pytest ruff
 endif
 
 lint:

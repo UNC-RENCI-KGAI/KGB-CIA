@@ -14,13 +14,25 @@ Provenance lives on the edge in Biolink terms: `primary_knowledge_source`,
 file and columns produced a node or edge is not Biolink, so it is kept out of the graph, in the
 `TransformReport` the transformation agent writes next to it, which points into the source's
 Croissant metadata.
+
+`AugmentedEdge` is an `Edge` the augmentation agent checked against the PubMed literature: an
+input edge, or a more specific edge the literature states, proposed from the originals it names.
+Its `lit_*` fields carry the support score (how many PubMed abstracts support the edge), their
+PMIDs, the more specific edges that refine it and, in `lit_evidence`, one `PublicationEvidence`
+per abstract read for the edge's node pair, with the `ClaimRecord`s found in it. An input edge's
+`publications` gain the supporting PMIDs its source didn't cite, appended after the source's own
+and listed again in `lit_added_publications`; a proposed edge's `publications` are the PMIDs that
+support it. Its fields are top-level keys like any other slot, so a stage that reads `Edge` still
+reads it.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+import hashlib
+import json
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Biolink 4.4.6 KnowledgeLevelEnum and AgentTypeEnum.
 KnowledgeLevel = Literal[
@@ -114,6 +126,264 @@ class Edge(BaseModel):
     @classmethod
     def _infores_aggregators(cls, v: list[str]) -> list[str]:
         return [_require_prefix(s, "infores:") for s in v]
+
+
+# The augmentation agent's literature vocabulary.
+ArticleType = Literal["research", "review", "opinion", "guideline", "case_report", "other"]
+Origin = Literal["source", "search", "pubtator"]
+StudyDesign = Literal[
+    "meta_analysis",
+    "systematic_review",
+    "rct",
+    "cohort",
+    "case_control",
+    "cross_sectional",
+    "animal",
+    "in_vitro",
+    "case_report",
+    "narrative_review",
+    "computational",
+]
+Polarity = Literal["positive", "negative"]
+ClaimRole = Literal["primary_finding", "background", "hypothesis"]
+NegativeFindingType = Literal["demonstrated_absence", "failed_to_detect"]
+ReviewVerdict = Literal["upheld", "reject"]
+
+
+def statement_id(
+    subject: str,
+    predicate: str,
+    object: str,
+    qualifiers: dict[str, Any] | None = None,
+    negated: bool = False,
+) -> str:
+    """Stable id of a statement: the first 16 hex digits of the SHA-256 of its canonical JSON,
+    with `qualified_predicate` among the qualifiers. The one hash `Statement.id` and the
+    augmentation agent's `graphio` use."""
+    key = {
+        "subject": subject,
+        "predicate": predicate,
+        "object": object,
+        "qualifiers": dict(sorted((qualifiers or {}).items())),
+        "negated": bool(negated),
+    }
+    canonical = json.dumps(key, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+class Statement(BaseModel):
+    """What an edge or a literature claim says, without provenance: subject, predicate, object,
+    qualifiers and `negated`, by their Biolink names. A `qualified_predicate` replaces the
+    predicate in the full reading, and `negated` negates the full statement."""
+
+    subject: str = Field(description="Node.id")
+    predicate: str = Field(description="Biolink predicate, e.g. 'biolink:affects'")
+    object: str = Field(description="Node.id")
+    qualified_predicate: str | None = Field(default=None, description="e.g. 'biolink:causes'")
+    qualifiers: dict[str, str] = Field(
+        default_factory=dict,
+        description="Every other qualifier slot set, e.g. "
+        "{'object_aspect_qualifier': 'expression'}",
+    )
+    negated: bool = False
+
+    @field_validator("predicate")
+    @classmethod
+    def _biolink_predicate(cls, v: str) -> str:
+        return _require_prefix(v, "biolink:")
+
+    @field_validator("qualified_predicate")
+    @classmethod
+    def _biolink_qualified_predicate(cls, v: str | None) -> str | None:
+        return None if v is None else _require_prefix(v, "biolink:")
+
+    @field_validator("qualifiers")
+    @classmethod
+    def _qualifier_slots(cls, v: dict[str, str]) -> dict[str, str]:
+        for slot in v:
+            if not slot.endswith("_qualifier"):
+                raise ValueError(f"expected a '*_qualifier' slot, got {slot!r}")
+        return v
+
+    @property
+    def id(self) -> str:
+        """The same for every edge that makes the statement (`statement_id`)."""
+        qualifiers = dict(self.qualifiers)
+        if self.qualified_predicate is not None:
+            qualifiers["qualified_predicate"] = self.qualified_predicate
+        return statement_id(self.subject, self.predicate, self.object, qualifiers, self.negated)
+
+
+class ClaimContext(BaseModel):
+    """Where a claim holds. Species and anatomy are grounded to CURIEs and become the claim's
+    context qualifiers; the notes are free text and never do."""
+
+    species: str | None = Field(
+        default=None,
+        description="NCBITaxon CURIE of the organism studied: the claim's organism and its "
+        "species_context_qualifier",
+    )
+    anatomy: str | None = Field(
+        default=None, description="UBERON CURIE: the claim's anatomical_context_qualifier"
+    )
+    anatomy_name: str | None = Field(
+        default=None, description="The anatomy as the abstract names it, grounded or not"
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Context Biolink can't express: population, cell line, dose, formulation, "
+        "endpoint, stage, comparator, time point",
+    )
+
+    @field_validator("species")
+    @classmethod
+    def _ncbitaxon(cls, v: str | None) -> str | None:
+        return None if v is None else _require_prefix(v, "NCBITaxon:")
+
+    @field_validator("anatomy")
+    @classmethod
+    def _uberon(cls, v: str | None) -> str | None:
+        return None if v is None else _require_prefix(v, "UBERON:")
+
+
+class ClaimRecord(BaseModel):
+    """One finding an abstract states about a node pair, with its checks and review. A
+    negative claim denies its `statement`, which is itself never negated. A pair's claims are
+    judged against every edge between the pair; `supports` is set where a claim is listed on an
+    edge."""
+
+    polarity: Polarity
+    statement: Statement
+    also_supports: list[Statement] = Field(
+        default_factory=list,
+        description="Further positive statements the same finding shows, e.g. "
+        "in_clinical_trials_for from a null trial",
+    )
+    claim_role: ClaimRole
+    hedged: bool = Field(description="Worded as a possibility: 'may', 'suggests', 'could'")
+    negative_finding_type: NegativeFindingType | None = Field(
+        default=None,
+        description="Negative claims only: whether the study showed there is no effect or "
+        "failed to detect one",
+    )
+    context: ClaimContext = Field(default_factory=ClaimContext)
+    evidence_sentence: str = Field(description="Verbatim from the abstract")
+    evidence_sentence_valid: bool = Field(
+        description="Whether the sentence was found in the abstract (after repair, if it "
+        "needed one)"
+    )
+    evidence_sentence_repaired: bool = Field(
+        default=False, description="The sentence is the quote repair's, not the extractor's"
+    )
+    review: ReviewVerdict | None = Field(default=None, description="None if not reviewed")
+    review_reason: str | None = None
+    answered_by: str | None = Field(
+        default=None, description="The model that extracted it, a fallback's name if one did"
+    )
+    supports: bool | None = Field(
+        default=None,
+        description="Whether it counts as support for the edge it's listed on. On an original, it "
+        "supports the edge. On a proposed edge, it makes the edge's statement. None off an edge",
+    )
+
+    @model_validator(mode="after")
+    def _polarity_rules(self) -> ClaimRecord:
+        if any(s.negated for s in (self.statement, *self.also_supports)):
+            raise ValueError("a claim's statements aren't negated; its polarity is")
+        if self.polarity == "positive" and self.negative_finding_type is not None:
+            raise ValueError("negative_finding_type is for negative claims only")
+        return self
+
+
+class PublicationEvidence(BaseModel):
+    """One abstract read for an edge's node pair, with the claims found in it; none if it
+    states nothing about the pair. Every abstract read is listed, with what PubMed says about
+    the paper, so it can be judged again without fetching it.
+    `supporting_document_type` and `supporting_document_year` take their names from Biolink's
+    `TextMiningStudyResult`."""
+
+    publication: str = Field(description="e.g. 'PMID:12345'")
+    publication_types: list[str] = Field(
+        description="PubMed's own, verbatim, e.g. ['Journal Article', 'Review']"
+    )
+    supporting_document_type: ArticleType = Field(
+        description="The article type, from PubMed's publication types"
+    )
+    supporting_document_year: int | None = Field(default=None, description="Publication year")
+    retracted: bool = Field(
+        default=False,
+        description="A Retracted Publication in PubMed; its claims count for nothing",
+    )
+    found_by: list[Origin] = Field(
+        description="How the agent found it: in this edge's publications as its source cited "
+        "them (`source`; for a proposed edge, its originals'), by its PubMed search (`search`) or "
+        "by a PubTator search (`pubtator`); empty if only another edge of the pair cites it"
+    )
+    study_design: StudyDesign = Field(
+        description="PubMed's design where its types name one, else the extractor's"
+    )
+    study_design_source: Literal["pubmed", "extractor"] = Field(
+        description="pubmed where its publication types name a design, else extractor"
+    )
+    extractor_study_design: StudyDesign | None = Field(
+        default=None, description="The extractor's own answer, kept when PubMed's overrode it"
+    )
+    claims: list[ClaimRecord] = Field(default_factory=list)
+
+
+class AugmentedEdge(Edge):
+    """An edge with the augmentation agent's findings from the literature: an input edge it
+    checked (`checked`), with every slot it had, or an edge it proposes (`proposed`) from the
+    originals in `original_edge_ids`, whose statement the literature makes more specific than
+    theirs. Originals stay in the graph, and name the edges that refine them in
+    `lit_refined_by`. The `lit_` prefix keeps the agent's fields clear of Biolink slots."""
+
+    original_edge_ids: list[str] = Field(
+        description="A checked edge's own id; on a proposed edge, the originals it refines"
+    )
+    augmentation: Literal["checked", "proposed"]
+    supporting_data_source: list[str] | None = Field(
+        default=None,
+        description="infores CURIEs of the data its evidence came from, multivalued as in "
+        "Biolink: ['infores:pubmed'] on a proposed edge. A bare CURIE is read as a list of one",
+    )
+    lit_support_score: int = Field(
+        ge=0,
+        description="The number of distinct PMIDs whose counting claims support it (an "
+        "original) or make it (a proposed edge). 0 for an unsupported original",
+    )
+    lit_supporting_publications: list[str] = Field(
+        default_factory=list, description="PMIDs of the claims that support it, e.g. 'PMID:1'"
+    )
+    lit_added_publications: list[str] = Field(
+        default_factory=list,
+        description="On an original: the supporting PMIDs it didn't cite, now appended to its "
+        "`publications`",
+    )
+    lit_refined_by: list[str] = Field(
+        default_factory=list,
+        description="On an original: the edges more specific than it that its supporting claims "
+        "make. These are proposed edges, and edges of the graph that already make such a "
+        "statement",
+    )
+    lit_context_notes: list[str] = Field(
+        default_factory=list,
+        description="Contexts Biolink can't express, such as cell line or dose",
+    )
+    lit_evidence: list[PublicationEvidence] = Field(
+        description="Every abstract read for its node pair, each claim with whether it supports "
+        "this edge"
+    )
+
+    @field_validator("supporting_data_source", mode="before")
+    @classmethod
+    def _one_supporting(cls, v: object) -> object:
+        return [v] if isinstance(v, str) else v
+
+    @field_validator("supporting_data_source")
+    @classmethod
+    def _infores_supporting(cls, v: list[str] | None) -> list[str] | None:
+        return None if v is None else [_require_prefix(s, "infores:") for s in v]
 
 
 class Graph(BaseModel):
