@@ -8,8 +8,10 @@ GRAPH is a directory with nodes.jsonl and edges.jsonl, or a source's ORION norma
 data/filter, data/cleaning, then data/transformation/merged, so the check runs on what the final
 cleaning pass will apply its drop lists to. An edge is selected when it matches the question's
 `select` and cites at least one PubMed article, in `publications` (PMID: CURIEs) or as a PubMed
-URL in any of its fields. Edges the augmentation stage has already checked against PubMed or
-proposed (they carry `augmentation`) are skipped and counted, so no edge is paid for twice.
+URL in any of its fields. Curated edges the augmentation stage has already checked against
+PubMed or proposed (they carry `augmentation`) are skipped and counted, so none is paid for
+twice. Text-mined edges are checked whatever augmentation did: they are the ones most in need of
+it, and only this check flags one whose abstracts don't support it.
 
 Abstracts come from NCBI E-utilities through `shared.pubmed`, whose cache the augmentation agent
 shares (KGB_PUBMED_CACHE, default data/cache/pubmed.sqlite), so only what neither has fetched
@@ -96,14 +98,14 @@ def spread(key: tuple) -> str:
 
 
 def candidate_edges(q: dict, edges_path: Path, skipped: dict | None = None):
-    """Selected edges that cite PubMed, as {edge, key, pmids}. Selected edges augmentation already
-    checked or proposed are counted in `skipped` instead."""
+    """Selected edges that cite PubMed, as {edge, key, pmids}. Selected curated edges augmentation
+    already checked or proposed are counted in `skipped` instead; text-mined ones are kept."""
     with open(edges_path) as f:
         for line in f:
             edge = json.loads(line)
             if not question.selects(q, edge):
                 continue
-            if edge.get("augmentation"):
+            if edge.get("augmentation") and not question.text_based(edge):
                 if skipped is not None:
                     skipped["augmentation"] = skipped.get("augmentation", 0) + 1
                 continue
@@ -200,7 +202,10 @@ def main(argv: list[str] | None = None) -> int:
     skipped: dict[str, int] = {}
     records = select_edges(q, edges_path, args.limit, skipped)
     if skipped:
-        print(f"Skipped {skipped['augmentation']:,} selected edges augmentation already checked.")
+        print(
+            f"Skipped {skipped['augmentation']:,} selected curated edges augmentation already "
+            "checked (text-mined edges are checked regardless)."
+        )
     if not records:
         print("No selected edge cites a PubMed article; nothing to check.")
         return 0

@@ -64,9 +64,10 @@ uv run python $S/build_drop_list.py QUESTION
   `data/augmentation`, else `data/filter`, else `data/cleaning`, else
   `data/transformation/merged`; it prints which. That is the graph the final cleaning pass
   applies the drop lists to. Pass a graph directory to check another one, such as one source's
-  ORION output (`normalized_edges.jsonl`). Edges the augmentation stage already checked against
-  PubMed or proposed (they carry `augmentation`) are skipped and counted, so none is paid for
-  twice. It fetches abstracts from PubMed (NCBI E-utilities, no key needed) and caches them,
+  ORION output (`normalized_edges.jsonl`). Curated edges the augmentation stage already checked
+  against PubMed or proposed (they carry `augmentation`) are skipped and counted, so none is
+  paid for twice. Text-mined edges are always checked, whatever augmentation did: they need it
+  most, and only this check flags one its abstracts don't support. It fetches abstracts from PubMed (NCBI E-utilities, no key needed) and caches them,
   so reruns only fetch new ones.
 - `--limit N` checks a fixed, spread-out sample of N edges. Always start with one: read about
   ten answers in `verdicts.jsonl` against the abstracts, fix the question if Jev misreads it, and

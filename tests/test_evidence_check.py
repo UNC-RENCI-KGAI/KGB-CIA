@@ -325,18 +325,22 @@ def test_build_writes_the_flag_list_cleaning_reads(tmp_path, monkeypatch):
     assert open("data/cleaning/drop_lists/drug_target.jsonl").read() == ""
 
 
-def test_gather_skips_edges_augmentation_checked(workspace, capsys):
+def test_gather_skips_curated_edges_augmentation_checked_but_not_text_mined(workspace, capsys):
     graph, qpath = workspace
     with open(graph / "edges.jsonl", "a") as f:
-        checked = _edge("C:B", "P:1", publications=["PMID:111"], augmentation="checked")
-        f.write(json.dumps(checked) + "\n")
+        curated = _edge("C:B", "P:1", publications=["PMID:111"], augmentation="checked")
+        mined = _edge(
+            "C:A", "P:3", publications=["PMID:111"], augmentation="checked",
+            agent_type="text_mining_agent",
+        )  # fmt: skip
+        f.write(json.dumps(curated) + "\n" + json.dumps(mined) + "\n")
     gather.main([str(qpath), str(graph)])
-    assert "Skipped 1 selected edges augmentation already checked" in capsys.readouterr().out
-    keys = {
-        tuple(json.loads(x)["key"][::2])
-        for x in open("data/cleaning/evidence/drug_target/evidence.jsonl")
-    }
+    assert "Skipped 1 selected curated edges" in capsys.readouterr().out
+    rows = [json.loads(x) for x in open("data/cleaning/evidence/drug_target/evidence.jsonl")]
+    keys = {tuple(r["key"][::2]) for r in rows}
     assert ("C:B", "P:1") not in keys
+    assert ("C:A", "P:3") in keys
+    assert next(r for r in rows if r["key"][2] == "P:3")["based_on_text"]
 
 
 def test_gather_defaults_to_the_latest_stage_graph(workspace, monkeypatch, capsys):
