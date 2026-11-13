@@ -745,8 +745,14 @@ sends every claim that would count, those that only add a PMID to an edge includ
 share grows with the number of supported edges; the tuning sample measures it too. Grounding
 calls are free. The dry run's estimate assumes
 2,000 output tokens a call (`label.ESTIMATED_OUTPUT_TOKENS`), a guess the tuning sample will
-replace. If a 20-abstract call's 95th percentile of output tokens exceeds 70% of the model's
-16,000-token cap, reasoning included, `ABSTRACTS_PER_CALL` drops to 10.
+replace, and it covers labeling alone; the dry run says so, since review and quote repair come
+on top and no multiplier is assumed for them. On the Nov 12 2026 run labeling was 58% of the
+total, review 35% and repair 7%, with the labeling estimate itself 20% over the actual
+($3.44 estimated, $2.81 spent). `label --dry-run --budget USD` exits 1 when the estimate is
+over the budget, and the full run's `--budget` stops the run before any model call on the
+same estimate; `--max-label-cost` instead labels the first pairs that fit. If a 20-abstract
+call's 95th percentile of output tokens exceeds 70% of the model's 16,000-token cap, reasoning
+included, `ABSTRACTS_PER_CALL` drops to 10.
 
 ## Not used: embeddings
 

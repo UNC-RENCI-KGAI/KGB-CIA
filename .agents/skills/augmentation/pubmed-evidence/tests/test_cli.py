@@ -394,6 +394,7 @@ def test_full_run_options_before_a_step_are_rejected(tmp_path, fakes):
         ["--model", "gpt-6-luna", "label"],
         ["--reasoning-effort", "medium", "label"],
         ["--limit", "3", "pubmed"],
+        ["--budget", "5", "label"],
     ):
         with pytest.raises(SystemExit) as exit:
             cli.main([*common_args(tmp_path), *argv])
@@ -520,6 +521,38 @@ def test_full_run_labels_only_what_the_budget_allows(tmp_path, capsys, fakes):
     assert cli.main(argv) == 0
     assert fakes.count("label") == 2
     assert "budget" not in capsys.readouterr().err
+
+
+def test_full_run_stops_over_its_budget(tmp_path, capsys, fakes):
+    argv = common_args(tmp_path)
+    assert cli.main([*argv, "select"]) == 0 and cli.main([*argv, "pubmed"]) == 0
+    capsys.readouterr()
+
+    # Under the estimate: the run stops before any model call, and says what isn't estimated.
+    assert cli.main([*argv, "--budget", "0"]) == 1
+    err = capsys.readouterr().err
+    assert "over the $0.0000 budget; stopping before any model call" in err
+    assert "review and quote repair come on top" in err
+    assert "label" not in fakes and not (tmp_path / "out" / "edges.jsonl").exists()
+    # Over it: the run goes ahead.
+    assert cli.main([*argv, "--budget", "100"]) == 0
+    assert fakes.count("label") == 2
+
+
+def test_label_dry_run_checks_a_budget(tmp_path, capsys, fakes):
+    argv = common_args(tmp_path)
+    assert cli.main([*argv, "select"]) == 0 and cli.main([*argv, "pubmed"]) == 0
+    capsys.readouterr()
+    assert cli.main([*argv, "label", "--dry-run", "--budget", "0"]) == 1
+    out, err = capsys.readouterr()
+    assert "label: the estimate covers labeling alone" in out
+    assert "label: error: the estimate, $" in err and "over the $0.0000 budget" in err
+    assert cli.main([*argv, "label", "--dry-run", "--budget", "100"]) == 0
+    assert "label" not in fakes
+    # Without --dry-run the budget would mean nothing, so it is refused.
+    assert cli.main([*argv, "label", "--budget", "100"]) == 1
+    assert "--budget goes with --dry-run" in capsys.readouterr().err
+    assert "label" not in fakes
 
 
 def test_script_header_lists_the_projects_dependencies():

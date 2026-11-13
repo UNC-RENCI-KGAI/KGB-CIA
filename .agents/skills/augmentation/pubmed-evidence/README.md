@@ -71,12 +71,12 @@ after the step's name.
 | --- | --- |
 | `select` | `--rules FILE` (built-in rules), `--capped-limit` (10,000), `--min-score` (none) |
 | `pubmed` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm`, `--without-key` (search more than 500 uncached pairs without `NCBI_API_KEY`; the step stops otherwise) |
-| `label` | `--model` (gpt-6-luna), `--reasoning-effort E` (the model's: low for gpt-6-luna), `--prompt FILE`, `--sample N --seed S` or `--pairs FILE`, `--dry-run`, `--no-repair`, `--abstracts-per-call` (20), `--workers` (8), `--limit N` |
+| `label` | `--model` (gpt-6-luna), `--reasoning-effort E` (the model's: low for gpt-6-luna), `--prompt FILE`, `--sample N --seed S` or `--pairs FILE`, `--dry-run` (with `--budget USD`: exit 1 over it), `--no-repair`, `--abstracts-per-call` (20), `--workers` (8), `--limit N` |
 | `ground` | `--refresh` |
 | `review` | `--model` (gpt-5.6-terra), `--reasoning-effort E`, `--prompt FILE`, `--limit N`, `--review-support-only` (off: `config.REVIEW_SUPPORT_ONLY`) |
 | `apply` | `--no-review` (for testing only), `--species-in-proposals` (off: `config.SPECIES_IN_PROPOSALS`), `--review-support-only` (off, as review), `--model`, `--prompt-version`, `--reviewer`, `--review-prompt-version` (default: from `label_run.json`) |
 | `evaluate` | `--gold FILE` (`<work>/gold.jsonl`), `--run MODEL[@PROMPT_VERSION]` (repeatable; default the run in `label_run.json`), `--species-in-proposals` (off, as apply); or `--draw N --seed S` (0) to draw the pairs to curate |
-| (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--max-label-cost`, `--skip-review` |
+| (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--max-label-cost` (label only the first pairs that fit), `--budget USD` (stop before labeling when the estimate is over it), `--skip-review` |
 
 Environment (the repository's `.env.example` lists every variable): `AZURE_OPENAI_API_KEY`
 for labeling and review with the Azure OpenAI models (not for `--dry-run`), and

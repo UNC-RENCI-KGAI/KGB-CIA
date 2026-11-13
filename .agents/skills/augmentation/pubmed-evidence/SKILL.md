@@ -50,7 +50,7 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 |---|---|
 | `augment.py select [--rules FILE] [--capped-limit N] [--min-score X]` | Step 1: keep the edges worth checking, by scope rule (`reference/rules.md`), grouped by node pair; `scope_report.json` counts what each rule kept and every edge type skipped |
 | `augment.py pubmed [--limit N] [--max-abstracts N] [--refresh] [--without-key]` | Step 2: one PubMed search per pair (names, synonyms, MeSH), the abstracts it finds and those the edges already cite |
-| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and the review model repairs evidence sentences that weren't found |
+| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run [--budget USD]] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and the review model repairs evidence sentences that weren't found |
 | `augment.py ground [--refresh]` | Step 4: the anatomy the claims name, to UBERON terms; pins the UBERON release. No model calls |
 | `augment.py review [--model M] [--review-support-only]` | Step 5: a stronger model upholds or rejects, in one pass, each claim that would count: one that would add a PMID to an edge or propose a more specific edge. A support-only statement (`ameliorates_condition` under `treats`, `config.SUPPORT_ONLY`) isn't sent unless `--review-support-only` |
 | `augment.py apply [--no-review] [--species-in-proposals] [--review-support-only]` | Step 6: refine each checked edge from its pair's claims (its supporting PMIDs, and the more specific edges they propose) and write the graph, `refinements.jsonl` and `apply_report.json` |
@@ -113,9 +113,11 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    number of calls and the estimated tokens and cost of a full run with the default model
    (`--model` for another), and writes the first request to `work/label_request_example.txt`.
    Read that file once to see exactly what the model gets. The estimate assumes 2,000 output
-   tokens a call, a guess until a sample measures it. Unless you were given a budget, don't
-   start a full labeling run estimated above $100: tune the prompt on samples, then stop and
-   report the estimate.
+   tokens a call, a guess until a sample measures it, and it covers labeling alone: the review
+   and quote repair passes that follow aren't estimated (on the Nov 12 2026 run they were 35%
+   and 7% of the total, with labeling 58%). `--budget USD` makes the dry run exit 1 when the
+   estimate is over it. Unless you were given a budget, don't start a full labeling run
+   estimated above $100: tune the prompt on samples, then stop and report the estimate.
 
 4. **Tune the prompt on a sample.** Copy `prompts/label.md` to `work/prompts/label.md` and run
    `augment.py label --prompt work/prompts/label.md --sample 25 --seed 1`. The prompt includes
@@ -233,7 +235,9 @@ a flag saying how many. Use `--max-label-cost USD` when you have agreed a differ
 the run (`inf` for none), and `--limit N` when you want exactly the first N pairs instead; with
 `--limit` the budget isn't checked. A rerun with a larger budget labels only the pairs not yet
 labeled. The budget covers labeling alone: review runs on those pairs' claims, so it shrinks
-with them, but its cost isn't estimated.
+with them, but its cost isn't estimated, nor is quote repair's. `--budget USD` is the stricter
+cap for a run that must not be trimmed: when the whole estimate is over it, the run stops with
+exit 1 before any model call and says so, instead of labeling what fits.
 
 `--skip-review` leaves out the review step. Apply then holds every pair with a claim that
 would count but has no review, and writes its edges unchanged, so the run adds nothing

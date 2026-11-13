@@ -1340,6 +1340,10 @@ def print_summary(s: dict[str, Any]) -> None:
             f"of them cached); est. cost {_money(s['estimated_cost'])} with "
             f"~{ESTIMATED_OUTPUT_TOKENS} output tokens a call"
         )
+        print(
+            "label: the estimate covers labeling alone: the review and quote repair passes "
+            "that follow aren't estimated"
+        )
         if s["request_example"]:
             print(f"label: first request in {s['request_example']}")
         return
@@ -1440,6 +1444,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help=f"send nothing: write the first request to {REQUEST_EXAMPLE}, estimate the cost",
     )
     parser.add_argument(
+        "--budget",
+        type=float,
+        metavar="USD",
+        help="with --dry-run: exit 1 when the estimate is over this many US dollars (review "
+        "and quote repair aren't in it)",
+    )
+    parser.add_argument(
         "--no-repair",
         action="store_true",
         help="skip the quote repair pass, which asks the review model for the evidence "
@@ -1448,6 +1459,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.budget is not None and not args.dry_run:
+        print(
+            "label: error: --budget goes with --dry-run; the full run (kgb-augment --budget) "
+            "checks it before labeling",
+            file=sys.stderr,
+        )
+        return 1
     try:
         summary = label_pairs(
             args.work,
@@ -1469,6 +1487,16 @@ def run(args: argparse.Namespace) -> int:
         print(f"label: error: {e}", file=sys.stderr)
         return 1
     print_summary(summary)
+    if args.dry_run:
+        cost = summary["estimated_cost"]
+        if args.budget is not None and cost is not None and cost > args.budget:
+            print(
+                f"label: error: the estimate, {_money(cost)}, is over the {_money(args.budget)} "
+                "budget (labeling alone; review and quote repair come on top)",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
     calls, failed = summary["calls"], summary.get("calls_failed", 0)
     needed = summary.get("calls_needed", calls)
     if llm.too_many_failed(needed, failed):
