@@ -16,7 +16,9 @@ croissant by hand.
 ## Inputs and outputs
 
 - Input: a croissant (`croissant.json` or `croissant.json.gz`) and an output directory, plus
-  the maintainers' `semantics_answers.json` next to the croissant, if there is one.
+  the maintainers' `semantics_answers.json` next to the croissant, if there is one. A raw
+  RoboCroissant export that wraps the croissant in a one-element JSON list is read as is (the
+  scripts say so on stderr); don't unwrap it by hand.
 - Output, in the output directory:
   - `semantics_plan.json` — the plan (format: `reference/plan-format.md`)
   - `croissant.semantic.json` (or `.json.gz` if the input was gzipped) — the result

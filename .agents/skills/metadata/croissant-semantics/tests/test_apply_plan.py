@@ -1189,3 +1189,25 @@ def test_record_sets_name_their_plan_entry():
     plan = {"layouts": [{"id": "things", "match": {"record_sets": ["rs"]}, "columns": {}}]}
     out, _ = apply_plan(croissant, plan)
     assert out["recordSet"][0]["rcv:planLayout"] == "things"
+
+
+def test_a_one_element_list_is_read_as_the_croissant_inside_it(tmp_path, capsys):
+    """RoboCroissant's raw exports are `[{...}]`; every Nov 12 agent unwrapped them by hand."""
+    import gzip
+    import json
+
+    from common import load_croissant
+
+    c = croissant()
+    (tmp_path / "wrapped.json").write_text(json.dumps([c]))
+    assert load_croissant(tmp_path / "wrapped.json") == c
+    assert "one-element JSON list" in capsys.readouterr().err
+    with gzip.open(tmp_path / "wrapped.json.gz", "wt") as f:
+        json.dump([c], f)
+    assert load_croissant(tmp_path / "wrapped.json.gz") == c
+    (tmp_path / "plain.json").write_text(json.dumps(c))
+    assert load_croissant(tmp_path / "plain.json") == c
+    assert capsys.readouterr().err.count("one-element") == 1
+    (tmp_path / "two.json").write_text(json.dumps([c, c]))
+    with pytest.raises(ValueError, match="a list of 2"):
+        load_croissant(tmp_path / "two.json")

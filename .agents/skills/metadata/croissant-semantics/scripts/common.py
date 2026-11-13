@@ -9,15 +9,30 @@ import gzip
 import hashlib
 import json
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 
 def load_croissant(path: str | Path) -> dict:
+    """The croissant in a file. RoboCroissant's raw exports wrap the croissant object in a
+    one-element JSON list; that wrapper is read through, with a note on stderr, so no agent has
+    to unwrap it by hand. Anything else that isn't a croissant object is an error."""
     path = Path(path)
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
+        print(
+            f"[croissant] note: {path.name} wraps the croissant in a one-element JSON list "
+            "(a RoboCroissant export); reading the croissant inside it",
+            file=sys.stderr,
+        )
+        data = data[0]
+    if not isinstance(data, dict):
+        kind = f"a list of {len(data)}" if isinstance(data, list) else type(data).__name__
+        raise ValueError(f"{path}: expected a croissant (one JSON object), found {kind}")
+    return data
 
 
 def save_croissant(croissant: dict, path: str | Path) -> None:
