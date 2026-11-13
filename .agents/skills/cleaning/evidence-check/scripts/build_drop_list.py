@@ -8,7 +8,8 @@ Reads evidence.jsonl and answers.jsonl in data/cleaning/evidence/<name>/ and wri
 
 - verdicts.jsonl there: one line per edge with its verdict (keep, drop, flag, unconfirmed), its
   flag, the role probabilities for each article, and the claim, so a person can read why;
-- data/cleaning/drop_lists/<name>.jsonl: the dropped edges, which kgb-clean then removes;
+- data/cleaning/drop_lists/<name>.jsonl: the dropped edges, which kgb-clean then removes, each
+  with the judge's confidence, which kgb-clean carries into its pruned_edges.tsv;
 - data/cleaning/flag_lists/<name>.jsonl: the flagged edges, each with its flag and a reason
   naming the articles, which kgb-clean writes onto the edge for the MCP interface to show;
 - gold_set.tsv beside verdicts.jsonl: every judged edge as a KGX TSV row with a keep or prune
@@ -142,7 +143,8 @@ def main(argv: list[str] | None = None) -> int:
             verdict, flag = question.edge_verdict(q, record["based_on_text"], record["articles"])
             record["verdict"], record["flag"] = verdict, flag
             verdicts[verdict] += 1
-            gold.writerow(gold_row(q, record))
+            row = gold_row(q, record)
+            gold.writerow(row)
             for a in record["articles"]:
                 choices[verdict][a["choice"]] += 1
             out.write(json.dumps(record) + "\n")
@@ -155,7 +157,12 @@ def main(argv: list[str] | None = None) -> int:
             }
             pmids = [a["pmid"] for a in record["articles"]]
             if verdict == "drop":
-                line = {**key, "reason": f"evidence check {q['name']}", "pmids": pmids}
+                line = {
+                    **key,
+                    "reason": f"evidence check {q['name']}",
+                    "pmids": pmids,
+                    "confidence": float(row["confidence"]),
+                }
                 drops.write(json.dumps(line) + "\n")
             elif verdict == "flag":
                 flagged[flag] += 1

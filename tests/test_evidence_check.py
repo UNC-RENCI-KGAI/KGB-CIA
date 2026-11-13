@@ -274,6 +274,7 @@ def test_judge_then_build_writes_the_drop_list_cleaning_reads(workspace, fake_sd
     drops = [json.loads(line) for line in open("data/cleaning/drop_lists/drug_target.jsonl")]
     assert [(d["subject"], d["object"]) for d in drops] == [("C:B", "P:2")]
     assert drops[0]["pmids"] == ["222"] and drops[0]["primary_knowledge_source"] == "infores:dc"
+    assert 0.7 <= drops[0]["confidence"] <= 1
     verdicts = {
         tuple(v["key"][::2]): v["verdict"]
         for v in map(json.loads, open("data/cleaning/evidence/drug_target/verdicts.jsonl"))
