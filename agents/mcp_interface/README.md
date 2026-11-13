@@ -114,39 +114,93 @@ Confirmed on the local-k8s Neo4j 5.26.31 load in November 2026:
 
 ## Status
 
-Build-order steps 1 through 3 are implemented: the standalone uv workspace package, streaming
-pre-dump check, configuration and artifact loading, TransformReport lineage, bounded Neo4j
-service, stdio/HTTP FastMCP server, dump preparation, indexes, Docker image, Helm chart, and
-local-k8s deployment. The live integration smoke test exercises graph information, schema,
-node and edge lookup, paths, connected nodes, lineage, Cypher reads, and raw-driver write
-rejection against the 200-abstract development graph.
+The MCP interface is deployed against the real cleaned graph on the prepared AWS k3s host. The
+loaded graph has **943,412 nodes** and **11,701,010 edges**. Neo4j runs read-only with
+`NEO4J_AUTH=none`; the MCP HTTP deployment is disabled (`mcp.enabled=false`), so teammates run
+`kgbcia-mcp` locally over stdio and connect to the shared Bolt endpoint. Network exposure is
+controlled by the maintainer outside this repository.
 
-The package pins FastMCP 3.4.11 (released October 20, 2026). Pi registration is configured for
-local stdio use; source the ignored deployment environment before launching Pi.
+Build-order steps 1–4 are complete: the standalone uv workspace package, offline graph check,
+artifact loading, TransformReport lineage, bounded Neo4j service, FastMCP tools, optional
+Cypher tool, dump preparation, precomputed statistics, indexes, Docker image, Helm chart,
+local-k8s sample deployment, AWS sample deployment, and AWS real-graph deployment. Step 5,
+publication to PyPI, remains open; until then teammates run from a checkout with
+`uv run kgbcia-mcp serve --enable-cypher`.
 
-AWS build-order step 4 was completed on November 12, 2026 against the LitCoin development
-sample on the prepared arm64 k3s host. The checksum-marker retry path preserved the loaded PVC
-after an interrupted Helm client, and the account hook was corrected to treat Neo4j's
-unchanged-password response as idempotent success. Laptop verification confirmed Bolt login as
-`kgbcia`, raw graph-write rejection, the AWS integration smoke suite, and a local-stdio
-`kgbcia-mcp serve` answer with edge lineage. `kgbcia` can create and drop system users on AWS,
-confirming the Neo4j Community security risk. The selected AWS chart configuration now disables
-Neo4j authentication (`NEO4J_AUTH=none`); laptop clients set only the Bolt URI and artifacts
-variables, while local k8s remains authenticated.
+A teammate can connect from a checkout by adding an MCP entry like this, with placeholders filled
+from the current release handoff. Update `KGB_MCP_ARTIFACTS_SHA256` every time a new
+`artifacts.tar.gz` is published.
 
-Checkpoint 3 AWS verification completed after Helm revision 2 deployed the auth-disabled sample
-release. An unauthenticated graph read returned 1,192 nodes, and a graph `CREATE` was
-rejected with `Neo.ClientError.General.WriteOnReadOnlyAccessDatabase`. An anonymous `CREATE USER`
-in `system` succeeded, then its uniquely named temporary probe user was dropped successfully.
-This confirms the no-auth service still permits raw system-user administration, even though
-Graph writes remain read-only. The initial dynamic-setting probe did not execute because its
-preliminary `SHOW SETTINGS` query requested a non-existent `dynamic` column. The corrected
-probe confirmed the configured 30-second transaction timeout, but
-`dbms.setConfigValue('db.transaction.timeout', '31s')` was rejected because the procedure is not
-registered; no setting changed. Both `STOP DATABASE neo4j WAIT 60 SECONDS` and the exact
-`STOP DATABASE neo4j` command were rejected as unsupported administration commands, with no
-database state change, so no restart or recovery was needed. Read-only mode protects the graph,
-but it does not prevent anonymous `CREATE USER`; no-auth AWS is safe only while the maintainer
-keeps Bolt exposure restricted.
+```json
+{
+  "mcpServers": {
+    "kgbcia-mcp": {
+      "command": "uv",
+      "args": ["run", "kgbcia-mcp", "serve", "--enable-cypher"],
+      "env": {
+        "NEO4J_URI": "bolt://<aws-bolt-host>:7687",
+        "NEO4J_DATABASE": "neo4j",
+        "KGB_MCP_ARTIFACTS": "https://<public-artifact-host>/artifacts.tar.gz",
+        "KGB_MCP_ARTIFACTS_SHA256": "<64-hex-artifact-checksum>"
+      }
+    }
+  }
+}
+```
 
-Note that on `main`, `kgb-mcp` is a stub that prints "not implemented yet". A first MCP server backed by Neo4j is in [#64](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/64) (in review), and is being deployed on AWS for the hosted demo.
+Current verification:
+
+- `get_graph_info()` returns 943,412 nodes and 11,701,010 edges and includes the `build` section
+  from `description.json`.
+- `get_schema()` returns a 116-row one-category meta-graph, avoiding the former whole-graph
+  aggregate timeout.
+- Precomputed flag counts are present for `unresolved_node` (1,914,123), `type_violation`
+  (178,255), `self_loop` (2,435), and `rare_category_combination` (1,325).
+- Flag formatting and `exclude_flags` were verified on `WIKIPATHWAYS:WP4580` -> `CHEBI:10034`
+  (`biolink:has_participant`, edge `62c07ced-910e-5540-b2b6-3c4cdd94491f`):
+  `get_edges_between(include_lineage=true)` returns `unresolved_node` and
+  `rare_category_combination` as `{flag, reason}` pairs, and
+  `get_node_edges(..., exclude_flags=["unresolved_node"])` filters those edges out.
+- The issue #63 olodaterol (`CHEBI:82700`) -> ADRB2 (`UniProtKB:P07550`) `wrong_mechanism`
+  example is **pending a future graph cleaned with #62 and #49**. In the current non-final graph,
+  that DrugCentral edge cites PMID:20371707 but carries no `kgbcia_flags` /
+  `kgbcia_flag_reasons` properties in the cleaned input, so the server correctly has no flag to
+  report.
+
+Known limits:
+
+- The package is not yet on PyPI; use `uv run` from a checkout.
+- `explain_edge(edge_id)` still unions over relationship types and can time out on the full
+  graph for some edge IDs. Prefer `get_edges_between(include_lineage=true)` when endpoint IDs
+  are known; it returns the same lineage for direct edges with an anchored query.
+- AWS uses unauthenticated Bolt. Read-only graph settings block graph writes, but Neo4j
+  Community does not provide a strong authorization boundary for the `system` database. Keep
+  Bolt exposure restricted.
+- `query_cypher` is read-only, row-capped and useful for ad hoc aggregates, but expensive raw
+  queries can still hit the configured 30-second transaction timeout or 2 GiB transaction memory
+  cap.
+
+## Design decisions
+
+- **Separate package:** `kgbcia-mcp` is a uv workspace member with no imports from `shared` or
+  `agents`, so it can be published independently from the pipeline code.
+- **Local stdio server, shared Neo4j:** each client runs the MCP server locally over stdio while
+  all clients share one read-only Neo4j service. This avoids deploying and authenticating a
+  public MCP HTTP endpoint for the demo.
+- **Precomputed artifacts for aggregate answers:** `prepare_dump.sh` computes graph summary,
+  schema, property examples and flag counts on a temporary build-time Neo4j and writes them to
+  `graph_metadata.json`. Runtime tools and validation use those artifacts and never scan the
+  full graph for `get_graph_info()` or `get_schema()`.
+- **One category per node in the meta-graph:** nodes carry ancestor labels, so the meta-graph
+  uses the rarest graph-wide category label per node to avoid cross-products over all ancestors.
+- **Indexes baked into the dump:** the deployed database starts read-only, so the full-text node
+  index and relationship-id indexes are created before the final `kgb.dump` is produced.
+- **Checksum-keyed loads:** Helm init containers key their PVC marker on the dump checksum, not
+  the URL, so changing presigned URLs does not reload an unchanged dump.
+- **AWS auth disabled:** Neo4j Community allowed the authenticated sample user to administer
+  `system`; the AWS deployment therefore uses `NEO4J_AUTH=none` plus maintainer-controlled
+  network exposure, graph read-only mode and resource limits rather than a reusable plaintext
+  Bolt password.
+- **Build description is an artifact:** `description.json` is generated on the VM that has the
+  Nov 9 transformation output and cleaning report, then sanitized and packed into the artifact
+  tarball so user-facing tools can mention failed or missing sources.
