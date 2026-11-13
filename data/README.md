@@ -2,6 +2,21 @@
 
 Local only. Everything here except this file is gitignored.
 
+## cache/
+
+Every cache lives under `cache/` (`shared/paths.py`; `KGB_CACHE_DIR` moves it, for example to
+share it between checkouts or git worktrees):
+
+| Directory | What | Written by |
+| --- | --- | --- |
+| `croissant/` | Raw RoboCroissant files, the input to the croissant-semantics skill | You |
+| `croissant-semantics/` | That skill's downloads, validation results and Biolink vocabulary | The skill's scripts |
+| `pubmed/` | `pubmed.sqlite`: PubMed searches, abstracts and NodeNorm entries (`KGB_PUBMED_CACHE` names another file) | `shared.pubmed` |
+| `augmentation/` | `labels.sqlite` (every paid claim and review) and the UBERON release (`KGB_AUGMENT_CACHE_DIR` names another directory) | augmentation |
+
+Don't delete `pubmed/` or `augmentation/`: rebuilding them means searching PubMed and paying for
+every label call again.
+
 Record each source you download so runs are reproducible:
 
 | Source | File | Version / date | Downloaded by | Notes |

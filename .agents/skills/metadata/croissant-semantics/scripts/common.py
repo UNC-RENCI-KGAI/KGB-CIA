@@ -8,9 +8,26 @@ semantics plan describes each layout once.
 import gzip
 import hashlib
 import json
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
+
+# The root of the caches, as the KGB-CIA repository's `shared/paths.py` has it. These scripts
+# run on their own (`uv run --script`), so they find it themselves.
+CACHE_ROOT_ENV = "KGB_CACHE_DIR"
+
+
+def cache_dir(name: str = "croissant-semantics") -> Path:
+    """Where this skill keeps a cache: <root>/<name>. The root is KGB_CACHE_DIR if set; else,
+    when the skill runs from inside the KGB-CIA repository, its data/cache; else, run on its
+    own, ~/.cache."""
+    if value := os.environ.get(CACHE_ROOT_ENV):
+        return Path(value).expanduser() / name
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "shared" / "paths.py").is_file() and (parent / "pyproject.toml").is_file():
+            return parent / "data" / "cache" / name
+    return Path.home() / ".cache" / name
 
 
 def load_croissant(path: str | Path) -> dict:

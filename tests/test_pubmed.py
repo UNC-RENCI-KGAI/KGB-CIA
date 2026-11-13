@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 import pytest
 
-from shared import nodenorm, pubmed
+from shared import nodenorm, paths, pubmed
 from shared.pubmed import (
     Abstract,
     Entity,
@@ -630,8 +630,38 @@ def test_cache_path_from_the_environment(monkeypatch, tmp_path: Path):
     monkeypatch.setenv(cache_module.CACHE_ENV, str(tmp_path / "shared" / "x.sqlite"))
     with PubMedCache() as cache:
         assert cache.path == tmp_path / "shared" / "x.sqlite" and cache.path.exists()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv(cache_module.CACHE_ENV, "~/team/pubmed.sqlite")
+    assert pubmed.default_cache_path() == tmp_path / "home" / "team" / "pubmed.sqlite"
+    # Unset: pubmed/ under the cache root, whatever directory the command runs from.
     monkeypatch.delenv(cache_module.CACHE_ENV)
-    assert pubmed.default_cache_path() == Path("data/cache/pubmed.sqlite")
+    monkeypatch.setattr(cache_module, "LEGACY_CACHE_PATHS", ())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(paths.CACHE_ROOT_ENV, "~/caches")
+    assert pubmed.default_cache_path() == tmp_path / "home" / "caches" / "pubmed" / "pubmed.sqlite"
+    monkeypatch.delenv(paths.CACHE_ROOT_ENV)
+    assert pubmed.default_cache_path() == paths.REPO_ROOT / "data/cache/pubmed/pubmed.sqlite"
+    assert pubmed.default_cache_path() == cache_module.DEFAULT_CACHE_PATH
+
+
+def test_an_old_cache_is_used_until_it_is_moved(monkeypatch, tmp_path: Path, capsys):
+    monkeypatch.delenv(cache_module.CACHE_ENV)
+    monkeypatch.setenv(paths.CACHE_ROOT_ENV, str(tmp_path / "data" / "cache"))
+    monkeypatch.chdir(tmp_path)
+    old_default = Path("data/cache/pubmed.sqlite")
+    monkeypatch.setattr(cache_module, "LEGACY_CACHE_PATHS", (old_default,))
+    cache_module._warn_legacy.cache_clear()
+    new = tmp_path / "data" / "cache" / "pubmed" / "pubmed.sqlite"
+    old = tmp_path / old_default
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"")
+    assert pubmed.default_cache_path() == old_default
+    assert pubmed.default_cache_path() == old_default
+    err = capsys.readouterr().err
+    assert err.count("old default") == 1 and f"mv {old} {new}" in err  # once a process
+    new.parent.mkdir(parents=True)
+    new.write_bytes(b"")
+    assert pubmed.default_cache_path() == new
 
 
 # --- Through the cache --------------------------------------------------------------------------

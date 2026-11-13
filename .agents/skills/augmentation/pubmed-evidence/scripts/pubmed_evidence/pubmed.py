@@ -4,9 +4,9 @@
 MeSH headings and NodeNorm's labels, then EFetch for the abstracts of its hits and of the PMIDs
 the pair's edges already cite, which are labeled even when the search misses them. Everything it
 fetches goes in the PubMed cache (`shared.pubmed.default_cache_path()`: KGB_PUBMED_CACHE, or
-data/cache/pubmed.sqlite), so a rerun makes no requests and `pubmed.jsonl` is cheap to rewrite
-in full. This module reads the pairs and entities step 1 wrote and writes what the search found
-to `pubmed.jsonl`.
+data/cache/pubmed/pubmed.sqlite), so a rerun makes no requests and `pubmed.jsonl` is cheap to
+rewrite in full. This module reads the pairs and entities step 1 wrote and writes what the search
+found to `pubmed.jsonl`.
 
 What a paper's publication types make it is here too: its article type, whether it's retracted,
 and the study design they name (`article_type`, `study_design`).

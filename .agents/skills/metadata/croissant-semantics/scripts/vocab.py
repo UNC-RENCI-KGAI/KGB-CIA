@@ -25,8 +25,8 @@
                                         # exact labels are often missed: when you know the id, use
                                         # term
 
-Biolink is pinned to the version in BIOLINK_VERSION; files are cached in ~/.cache/croissant-
-semantics."""
+Biolink is pinned to the version in BIOLINK_VERSION; files are cached in croissant-semantics/
+under the cache root (common.cache_dir: KGB_CACHE_DIR, else the repository's data/cache)."""
 
 import argparse
 import json
@@ -38,11 +38,14 @@ import requests
 import truststore
 import yaml
 
+sys.path.insert(0, str(Path(__file__).parent))
+from common import cache_dir  # noqa: E402
+
 truststore.inject_into_ssl()  # the OS certificate store, as in sample.py
 
 BIOLINK_VERSION = "v4.4.6"
 BIOLINK_RAW = f"https://raw.githubusercontent.com/biolink/biolink-model/{BIOLINK_VERSION}"
-CACHE = Path.home() / ".cache" / "croissant-semantics" / BIOLINK_VERSION
+CACHE = cache_dir() / BIOLINK_VERSION
 
 
 def _cached(name: str, url: str) -> str:

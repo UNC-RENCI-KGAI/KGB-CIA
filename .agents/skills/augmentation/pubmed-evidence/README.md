@@ -39,8 +39,8 @@ augment.py            every step but evaluate, in order
 ```
 
 Each step reads the files of the steps before it, so any one reruns alone. The caches (the
-PubMed cache, `data/cache/pubmed.sqlite`, and in `data/augmentation/cache/`, `labels.sqlite` and
-`uberon-basic.obo`) hold everything that costs a request or tokens; a rerun asks only for
+PubMed cache, `data/cache/pubmed/pubmed.sqlite`, and in `data/cache/augmentation/`, `labels.sqlite`
+and `uberon-basic.obo`) hold everything that costs a request or tokens; a rerun asks only for
 what's new.
 
 ## Run it alone
@@ -64,8 +64,10 @@ $A --input data/filter --output data/augmentation apply
 `--help` lists the steps, and `augment.py STEP --help` a step's options. Every step takes
 `--input` (the graph), `--output` (where step 6 writes the augmented graph), `--work` (default
 `<output>/work`) and `--cache-dir` (the label cache and the UBERON release; default
-`data/augmentation/cache`, or `KGB_AUGMENT_CACHE_DIR` to share them across a team), before or
-after the step's name.
+`data/cache/augmentation`, or `KGB_AUGMENT_CACHE_DIR` to share them across a team), before or
+after the step's name. `KGB_CACHE_DIR` moves the root both caches are under. They used to be
+`data/cache/pubmed.sqlite` and `data/augmentation/cache`; while one is still there and not at its
+new default, it is used with a warning that says how to move it.
 
 | Step | Main options (default) |
 | --- | --- |
@@ -85,7 +87,7 @@ for labeling and review with the Azure OpenAI models (not for `--dry-run`), and
 `AZURE_OPENAI_API_KEY` by default, for the sentence repair pass. `NCBI_EMAIL`, and
 `NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search. `KGB_PUBMED_CACHE`
 is the PubMed cache file, `shared.pubmed`'s, which every agent that reads PubMed shares
-(default `data/cache/pubmed.sqlite`); a `pubmed.sqlite` from an older `--cache-dir` opens as it
+(default `data/cache/pubmed/pubmed.sqlite`); an older `--cache-dir`'s `pubmed.sqlite` opens as it
 is, so move it there or point `KGB_PUBMED_CACHE` at it. `NAMERES_URL` points the ground step at
 another Name Resolver.
 

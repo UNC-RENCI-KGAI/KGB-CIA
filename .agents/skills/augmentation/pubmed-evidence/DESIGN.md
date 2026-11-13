@@ -701,15 +701,18 @@ abstracts, and each candidate model labels the same pairs. Two gold tools serve 
 
 ## Caching
 
-Two SQLite caches under `data/`, kept out of git and shareable across a team (`KGB_AUGMENT_CACHE_DIR`):
+Two SQLite caches under the cache root (`shared/paths.py`: `KGB_CACHE_DIR`, else the
+repository's `data/cache/`, whatever directory a run starts in), kept out of git and shareable
+across a team:
 
 - **PubMed:** `shared.pubmed`'s cache, the file `KGB_PUBMED_CACHE` names (default
-  `data/cache/pubmed.sqlite`), which every agent that reads PubMed shares: ESearch results
+  `data/cache/pubmed/pubmed.sqlite`), which every agent that reads PubMed shares: ESearch results
   keyed by query string, with the retrieval date; abstracts keyed by PMID, so an abstract
   shared by several pairs is fetched once and reruns make no requests; and NodeNorm entries.
   The skill adds one table of its own, the anatomy groundings, by name. PubMed changes over
   time, so the query string and retrieval date stay with the evidence.
-- **Claims:** in the cache directory (`--cache-dir`, default `data/augmentation/cache`), with
+- **Claims:** in the cache directory (`--cache-dir` or `KGB_AUGMENT_CACHE_DIR`, default
+  `data/cache/augmentation`), with
   the pinned `uberon-basic.obo` beside it. Each abstract's answer for a pair, keyed by (pair,
   PMID, prompt version, model), with its design and claims; each claim's checks; the review's
   verdicts and the sentence repairs, keyed by the claim's id and their own model and prompt

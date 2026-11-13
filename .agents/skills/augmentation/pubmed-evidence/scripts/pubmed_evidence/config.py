@@ -8,10 +8,14 @@ PubMed's settings (the cache file, the NCBI key and email) are `shared.pubmed`'s
 
 from __future__ import annotations
 
+import functools
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from shared.paths import DEFAULT_CACHE_ROOT, REPO_ROOT, cache_dir
 
 # The augmentation agent's infores ID. Every edge it proposes gets it as
 # `primary_knowledge_source`, with PubMed, where its claims come from, as the one
@@ -28,10 +32,47 @@ DEFAULT_INPUT = Path(os.environ.get("KGB_AUGMENT_INPUT", "data/filter"))
 DEFAULT_OUTPUT = Path(os.environ.get("KGB_AUGMENT_OUTPUT", "data/augmentation"))
 # Intermediate files of each step: `<output>/work` unless given.
 WORK_SUBDIR = "work"
-# The label cache and the UBERON release. Point this at a shared directory to share them across
-# a team. The PubMed cache is shared.pubmed's: KGB_PUBMED_CACHE, or data/cache/pubmed.sqlite.
-DEFAULT_CACHE_DIR = Path(os.environ.get("KGB_AUGMENT_CACHE_DIR", "data/augmentation/cache"))
+# The label cache and the UBERON release: KGB_AUGMENT_CACHE_DIR, else augmentation/ under the
+# cache root (`shared.paths`: KGB_CACHE_DIR, else the repository's data/cache), whatever
+# directory a command runs from (`default_cache_dir`). Point it at a shared directory to share
+# them across a team. The PubMed cache is shared.pubmed's: KGB_PUBMED_CACHE, else
+# pubmed/pubmed.sqlite under the same root.
+CACHE_DIR_ENV = "KGB_AUGMENT_CACHE_DIR"
+# The default with KGB_CACHE_DIR unset.
+DEFAULT_CACHE_DIR = DEFAULT_CACHE_ROOT / "augmentation"
+# The default before Nov 13 2026: data/augmentation/cache, relative to where the command ran,
+# which for the pipeline is the repository root. While one of these holds a label cache and the
+# new default doesn't, it is used still, so its claims aren't paid for again.
+LEGACY_CACHE_DIRS = (Path("data/augmentation/cache"), REPO_ROOT / "data" / "augmentation" / "cache")
 LABEL_CACHE = "labels.sqlite"
+
+
+def default_cache_dir() -> Path:
+    """KGB_AUGMENT_CACHE_DIR if set (`~` expanded), else augmentation/ under the cache root
+    (`shared.paths.cache_dir`). But while only the old default, data/augmentation/cache, holds a
+    label cache, that one, with a warning to move it."""
+    if value := os.environ.get(CACHE_DIR_ENV):
+        return Path(value).expanduser()
+    path = cache_dir("augmentation")
+    if not (path / LABEL_CACHE).exists():
+        for old in LEGACY_CACHE_DIRS:
+            if (old / LABEL_CACHE).exists():
+                _warn_legacy(old.resolve(), path)
+                return old
+    return path
+
+
+@functools.cache
+def _warn_legacy(old: Path, new: Path) -> None:
+    """Once a process for each old cache directory: where it should go."""
+    print(
+        f"[augmentation] warning: using the label cache at its old default, {old}; move its "
+        f"files to the new one (mkdir -p {new} && mv {old}/* {new}/), or set {CACHE_DIR_ENV} "
+        "to it",
+        file=sys.stderr,
+    )
+
+
 # UBERON's release, whose is_a/part_of closure decides whether one anatomical context is at or
 # below another. The ground step fetches the release UBERON_URL pins into the cache directory
 # once; delete the file there to fetch it again after changing the pin.

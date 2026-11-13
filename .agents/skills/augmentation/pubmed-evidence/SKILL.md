@@ -29,10 +29,12 @@ edit the graph, the caches or the claims by hand: every change to the graph come
   reports, your tuned prompts and rules, and your `notes.md`. `reference/work-files.md`
   describes every file.
 - **Caches:** PubMed responses and anatomy groundings in the PubMed cache, which every agent
-  that reads PubMed shares (`KGB_PUBMED_CACHE`, default `data/cache/pubmed.sqlite`); the pinned
-  UBERON release and every claim, check, review and repair in `data/augmentation/cache`
+  that reads PubMed shares (`KGB_PUBMED_CACHE`, default `data/cache/pubmed/pubmed.sqlite`); the
+  pinned UBERON release and every claim, check, review and repair in `data/cache/augmentation`
   (`--cache-dir`, or `KGB_AUGMENT_CACHE_DIR` to share them across a team). Reruns reuse them, so
-  rerunning a step is cheap. Only one process should write to a cache at a time.
+  rerunning a step is cheap. If a step warns that it is using a cache at its old default under
+  `data/`, tell the user and give them the warning's `mv` command; don't move it yourself. Only
+  one process should write to a cache at a time.
 
 Pass the same `--input`, `--output`, `--work` and `--cache-dir` to every step, with the same
 `KGB_PUBMED_CACHE`. Put downloads, helper scripts and other scratch work in `OUT/work/`, not
@@ -74,8 +76,8 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 - The ground step needs no key: it calls the RENCI Name Resolver (`NAMERES_URL`) and NodeNorm,
   and fetches UBERON's release once.
 - Earlier runs kept the PubMed cache in the cache directory. If `--cache-dir` holds a
-  `pubmed.sqlite` and `KGB_PUBMED_CACHE` (default `data/cache/pubmed.sqlite`) names no file yet,
-  stop and ask whether to move it there or point `KGB_PUBMED_CACHE` at it: an empty cache
+  `pubmed.sqlite` and `KGB_PUBMED_CACHE` (default `data/cache/pubmed/pubmed.sqlite`) names no
+  file yet, stop and ask whether to move it there or point `KGB_PUBMED_CACHE` at it: an empty cache
   searches every pair again and grounds every anatomy name again.
 - Large PubMed jobs belong off-peak: weekends, or 9pm–5am ET on weekdays. `augment.py pubmed`
   warns when a big uncached job starts at peak hours.

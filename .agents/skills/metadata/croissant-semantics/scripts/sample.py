@@ -43,6 +43,7 @@ from common import (  # noqa: E402
     CURIE,
     as_list,
     by_field_name,
+    cache_dir,
     column_names,
     content_size,
     distribution_index,
@@ -112,7 +113,7 @@ class BotCheck(requests.HTTPError):
     """The host answered with a bot challenge instead of the file."""
 
 
-CACHE_DIR = Path.home() / ".cache" / "croissant-semantics" / "downloads"
+CACHE_DIR = cache_dir() / "downloads"  # common.cache_dir: data/cache/croissant-semantics
 USE_CACHE = True  # False: don't read or write the cache (tests)
 REFRESH = False  # sample.py --refresh: download again and replace the cached copy
 MIN_INTERVAL = 1.0  # seconds between requests to one host from this process
@@ -158,8 +159,8 @@ def _cache_path(*key) -> Path:
 
 
 def _cached(key: tuple, fetch) -> bytes:
-    """fetch() once per key; kept on disk across runs (delete ~/.cache/croissant-semantics/downloads
-    to clear)."""
+    """fetch() once per key; kept on disk across runs (delete CACHE_DIR, which is
+    croissant-semantics/downloads under the cache root, to clear)."""
     path = _cache_path(*key)
     if USE_CACHE and not REFRESH and path.exists():
         _index(path, key)
