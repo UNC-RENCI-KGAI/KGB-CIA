@@ -32,6 +32,7 @@ from kgbcia_mcp.report_models import (
 )
 from kgbcia_mcp.server import SERVER_INSTRUCTIONS, create_server
 from kgbcia_mcp.services.neo4j_service import (
+    _READ_TIMEOUT_SECONDS,
     FULLTEXT_INDEX_PROPERTIES,
     Neo4jService,
     ReadResult,
@@ -768,6 +769,35 @@ def test_query_cypher_rejects_write_before_driver_access():
     service = Neo4jService("unused", "unused", "unused", driver=_FakeDriver())
     with pytest.raises(ValueError, match="write"):
         service.query_cypher("CREATE (n)")
+
+
+def test_query_cypher_uses_documented_read_timeout(monkeypatch):
+    service = Neo4jService("unused", "unused", "unused", driver=_FakeDriver())
+    calls = []
+    monkeypatch.setattr(service, "_explain_read_only", lambda *_args: None)
+
+    def execute_read(cypher, parameters, *, timeout, row_limit):
+        calls.append(
+            {
+                "cypher": cypher,
+                "parameters": parameters,
+                "timeout": timeout,
+                "row_limit": row_limit,
+            }
+        )
+        return ReadResult(({"answer": 42},), truncated=False)
+
+    monkeypatch.setattr(service, "execute_read", execute_read)
+    assert service.query_cypher("RETURN 42 AS answer", limit=1)["results"] == [{"answer": 42}]
+    assert calls == [
+        {
+            "cypher": "CALL { RETURN 42 AS answer } RETURN * LIMIT $kgb_mcp_limit",
+            "parameters": {"kgb_mcp_limit": 2},
+            "timeout": _READ_TIMEOUT_SECONDS,
+            "row_limit": 2,
+        }
+    ]
+    assert _READ_TIMEOUT_SECONDS == 30.0
 
 
 def test_stage_cli_runs_as_a_direct_script():

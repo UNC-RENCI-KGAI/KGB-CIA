@@ -29,6 +29,7 @@ RELATIONSHIP_ID_INDEX_PREFIX = "kgbcia_relationship_id_"
 _LOG = logging.getLogger(__name__)
 _MAX_LIMIT = 500
 _MAX_FETCH = _MAX_LIMIT + 1
+_READ_TIMEOUT_SECONDS = 30.0
 _FORBIDDEN_CYPHER = re.compile(
     r"\b(CREATE|DELETE|DETACH|DROP|FOREACH|LOAD\s+CSV|MERGE|REMOVE|RENAME|SET|START)\b",
     re.IGNORECASE,
@@ -111,7 +112,7 @@ class Neo4jService:
         cypher: str,
         parameters: Mapping[str, Any] | None = None,
         *,
-        timeout: float = 30.0,
+        timeout: float = _READ_TIMEOUT_SECONDS,
         row_limit: int = _MAX_LIMIT,
     ) -> ReadResult:
         """Run through ``session.execute_read`` and cap materialized records."""
@@ -583,7 +584,7 @@ class Neo4jService:
             self.execute_read(
                 wrapped,
                 supplied,
-                timeout=15.0,
+                timeout=_READ_TIMEOUT_SECONDS,
                 row_limit=limit + 1,
             ).rows
         )
