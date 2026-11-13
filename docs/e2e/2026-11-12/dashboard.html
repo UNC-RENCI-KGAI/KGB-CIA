@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KGB-CIA End-to-End Run</title>
+<meta name="description" content="The Nov 12 2026 end-to-end run of the KGB-CIA pipeline: ClinVar, Monarch and eRAM metadata files to a Neo4j graph on AWS, with timings, costs and defects.">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root {
+    --font-anthropic-sans: ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    --font-anthropic-serif: ui-serif, Georgia, "Times New Roman", serif;
+    --cds-font-size-caption: 0.8rem; --cds-font-size-body: 0.95rem; --cds-font-size-heading: 1.25rem; --cds-font-size-title: 1.9rem;
+    --cds-font-weight-medium: 600;
+    --cds-gap-xs: 4px; --cds-gap-sm: 8px; --cds-gap-md: 16px; --cds-gap-lg: 24px; --cds-gap-xl: 36px;
+    --cds-pad-xs: 4px; --cds-pad-sm: 8px; --cds-pad-md: 12px; --cds-pad-lg: 16px; --cds-pad-xl: 24px;
+    --cds-radius: 10px;
+    --color-fg: #1b1b1f; --color-fg-muted: #5b5f68; --color-bg: #f7f6f3; --color-panel: #ffffff; --color-border-line: #e2e0da;
+    --color-ok: #2a7f4f; --color-warn: #a86a00; --color-bad: #b3261e;
+    --cds-text-secondary: #5b5f68; --cds-surface-popover: #ffffff; --cds-border: #d8d5ce; --cds-shadow-popover: 0 4px 16px rgba(0,0,0,.12);
+    --cds-chart-axis: #c9c6bf; --cds-chart-grid: #ebe9e3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --color-fg: #ececec; --color-fg-muted: #a5a8b0; --color-bg: #17181b; --color-panel: #202228; --color-border-line: #33363d;
+      --color-ok: #5fcf8a; --color-warn: #e0a640; --color-bad: #f08a80;
+      --cds-text-secondary: #a5a8b0; --cds-surface-popover: #272a31; --cds-border: #3d4049; --cds-shadow-popover: 0 4px 16px rgba(0,0,0,.5);
+      --cds-chart-axis: #4a4d56; --cds-chart-grid: #2c2f36;
+    }
+  }
+  :root[data-theme="dark"] {
+    --color-fg: #ececec; --color-fg-muted: #a5a8b0; --color-bg: #17181b; --color-panel: #202228; --color-border-line: #33363d;
+    --color-ok: #5fcf8a; --color-warn: #e0a640; --color-bad: #f08a80;
+    --cds-text-secondary: #a5a8b0; --cds-surface-popover: #272a31; --cds-border: #3d4049; --cds-shadow-popover: 0 4px 16px rgba(0,0,0,.5);
+    --cds-chart-axis: #4a4d56; --cds-chart-grid: #2c2f36;
+  }
+  html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); }
+  #dash-root { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="dash-root">
+<script>
+window.dash = (function () {
+  var DATA = {"augmentation":[{"run":"B (cardiomyopathy, uncapped)","pairs_selected":2964,"pairs_searched":2957,"abstracts":14200,"pairs_labeled":2129,"edges_checked":3361,"edges_supported":231,"edges_unsupported":3130,"edges_refined":62,"edges_proposed":82,"publications_added":560,"claims_upheld":504,"claims_rejected":107,"review_calls":217,"label_calls":2129,"cost_label":2.8058,"cost_repair":0.3414,"cost_review":1.6692,"cost_total":4.8164,"dry_run_label_estimate":3.4443,"pubmed_seconds":2494.9,"paid_seconds":3612.6,"ncbi_key":"no"},{"run":"A (whole graph, 500-pair cap)","pairs_selected":131195,"pairs_searched":500,"abstracts":1522,"pairs_labeled":290,"edges_checked":532,"edges_supported":31,"edges_unsupported":501,"edges_refined":2,"edges_proposed":2,"publications_added":69,"claims_upheld":45,"claims_rejected":4,"review_calls":19,"label_calls":290,"cost_label":0.299,"cost_repair":0.0203,"cost_review":0.1358,"cost_total":0.4551,"dry_run_label_estimate":0.4329,"pubmed_seconds":74.6,"paid_seconds":440.8,"ncbi_key":"yes"}],"costs":[{"item":"Azure OpenAI, run B labeling (gpt-6-luna)","usd":2.8058,"kind":"Azure"},{"item":"Azure OpenAI, run B quote repair (gpt-5.6-terra)","usd":0.3414,"kind":"Azure"},{"item":"Azure OpenAI, run B review (gpt-5.6-terra)","usd":1.6692,"kind":"Azure"},{"item":"Azure OpenAI, run A labeling","usd":0.299,"kind":"Azure"},{"item":"Azure OpenAI, run A quote repair","usd":0.0203,"kind":"Azure"},{"item":"Azure OpenAI, run A review","usd":0.1358,"kind":"Azure"},{"item":"AWS, month to date for the team account (credits)","usd":0.0,"kind":"AWS"},{"item":"AWS, kgb-graph host standing cost per day (r7g.large + EIP + EBS)","usd":2.7,"kind":"AWS"}],"cut_predicates":[{"predicate":"gene_associated_with_condition","edges":3318},{"predicate":"has_phenotype","edges":818},{"predicate":"model_of","edges":263},{"predicate":"has_mode_of_inheritance","edges":147},{"predicate":"causes","edges":133},{"predicate":"associated_with_increased_likelihood_of","edges":1},{"predicate":"disease_has_location","edges":1}],"cut_sources":[{"source":"eram","edges":3652},{"source":"clinvar","edges":284},{"source":"mgi","edges":241},{"source":"hpo-annotations","edges":147},{"source":"orphanet","edges":127},{"source":"omim","edges":113},{"source":"kgbcia-augmentor","edges":82},{"source":"zfin","edges":14},{"source":"clingen","edges":12},{"source":"rgd","edges":8},{"source":"mondo","edges":1}],"defects":[{"id":"D1","severity":"high","stage":"transformation","title":"ClinVar wrote 0 edges: the runtime strips '#' from the '#GeneID' header the croissant names","status":"fixed in worktree (713e460), not in main; 12,923 edges after the fix"},{"id":"D2","severity":"medium","stage":"metadata","title":"eRAM symptom layout wrote 0 of 1,663 rows: item_pattern checked with match() but applied with fullmatch()","status":"NOT fixed: the eram-v2 patch changed the disease-name pattern, not the symptom one"},{"id":"D3","severity":"medium","stage":"metadata","title":"eRAM derived entity fields land on every edge: 1.3 GB output and 2.1 GB RSS from a 5 MB source","status":"open"},{"id":"D4","severity":"medium","stage":"metadata","title":"eRAM text-mined file is in and the merge drops its provenance; it drives the whole-graph augmentation cost","status":"decision needed; see D13"},{"id":"D5","severity":"medium","stage":"metadata","title":"Raw Monarch croissant lacks the main KG files: 39,862 edges vs 77,357 on Nov 9","status":"open"},{"id":"D6","severity":"low","stage":"transformation","title":"About 34,000 spurious 'invalid syntax' diagnostics from empty Monarch list cells","status":"open"},{"id":"D7","severity":"info","stage":"cleaning","title":"148,007 to 42,858 nodes (unresolved 63,220, orphan 41,929) and 224,646 to 224,554 edges; flags kept on edges","status":"as designed; see D14"},{"id":"D8","severity":"low","stage":"describe","title":"Zero-row layouts are not called out: describe says '3 of 3 sources built' while the symptom layout wrote nothing","status":"open"},{"id":"D9","severity":"low","stage":"augmentation","title":"select's skipped table shows node categories by the first list element (BiologicalEntity, NamedThing)","status":"open"},{"id":"D10","severity":"low","stage":"runner","title":"Runner RSS is cumulative over children, disk-free is machine-wide, no per-stage outcome assertion","status":"open"},{"id":"D11","severity":"high","stage":"mcp_interface","title":"Edge contract mismatch between PR 22 and PR 64: kgb-mcp check rejects every augmentor-proposed edge (no kgbcia_source_records)","status":"fixed in worktree (e3a562b), not in main"},{"id":"D12","severity":"medium","stage":"runner","title":"Runner error heuristic is wrong both ways: 79 false positives from 'failed' in progress lines, and 0 lines plus no errors.log entry on a stage that exited 1","status":"open"},{"id":"D13","severity":"high","stage":"augmentation","title":"select keys the literature skip rule on predicate only, so eRAM's 113,706 text_co_occurrence edges enter the query tier: 127,774 of 131,195 whole-graph pairs, roughly $120-215 and hours of PubMed if uncapped","status":"open"},{"id":"D14","severity":"medium","stage":"metadata","title":"eRAM has_phenotype objects resolve to Disease: 20,179 type violations and 201 self-loops; the plan types UMLS CUIs as PhenotypicFeature, NodeNorm says Disease","status":"open"},{"id":"D15","severity":"medium","stage":"augmentation","title":"PubMed stage is silent about a missing NCBI key: 2,957 pairs in 41.6 min vs 500 in 75 s with the key; keys only on the laptop forced every keyed step off the host","status":"open"},{"id":"D16","severity":"low","stage":"augmentation","title":"A failed label call leaves edges unchecked with exit 0; the dry run estimates labeling only and omits review (35% of run B's cost)","status":"open"},{"id":"D17","severity":"medium","stage":"metadata","title":"Metadata friction on all three sources: one-element JSON lists, missing Croissant 1.0 @context keys, three check.py bugs, no batching in vocab.py; about half of 46 agent-minutes was tooling","status":"open"},{"id":"D18","severity":"medium","stage":"pipeline","title":"No pipeline driver: nine hand-written stage files, five scripts, SSM plus nohup plus polling, tarballs through S3, and a full re-bootstrap per code fix","status":"open"},{"id":"D19","severity":"low","stage":"filter","title":"Focus skill assumes a subclass_of hierarchy the graph lacks; no --estimate; its taxon advice would drop most Mondo subtypes","status":"open"},{"id":"D20","severity":"low","stage":"filter","title":"Whole-graph path writes three near-identical 400 MB copies per run (filter without focus, final cleaning with 0 drops)","status":"open"}],"flags":[{"graph":"whole","flag":"type_violation","edges":29243},{"graph":"whole","flag":"unresolved_node","edges":20112},{"graph":"whole","flag":"self_loop","edges":201},{"graph":"whole","flag":"rare_category_combination","edges":69},{"graph":"cardiomyopathy","flag":"type_violation","edges":605},{"graph":"cardiomyopathy","flag":"unresolved_node","edges":425},{"graph":"cardiomyopathy","flag":"self_loop","edges":6}],"graphs":[{"step":"1 merged (transformation)","graph":"whole","nodes":148007,"edges":224646},{"step":"2 cleaned","graph":"whole","nodes":42858,"edges":224554},{"step":"3 filtered","graph":"whole","nodes":42858,"edges":224554},{"step":"4 augmented","graph":"whole","nodes":42858,"edges":224556},{"step":"5 final cleaned","graph":"whole","nodes":42858,"edges":224556},{"step":"3 filtered","graph":"cardiomyopathy","nodes":1435,"edges":4599},{"step":"4 augmented","graph":"cardiomyopathy","nodes":1435,"edges":4681},{"step":"5 final cleaned","graph":"cardiomyopathy","nodes":1435,"edges":4681}],"neo4j":[{"release":"kgb-e2e","namespace":"kgb-e2e","service":"ClusterIP 7687","nodes":1435,"relationships":4681,"proposed_relationships":82,"write_rejected":"yes","dump_mb":3.6,"loaded_at":"2026-11-12T22:38:45Z"}],"stages":[{"run":"metadata-agents","where":"laptop","stage":"metadata_clinvar","start":"2026-11-12T19:58:55+00:00","seconds":716,"status":"ok","phase":"metadata","minutes":11.93,"user":"shared"},{"run":"metadata-agents","where":"laptop","stage":"metadata_monarch","start":"2026-11-12T19:58:57+00:00","seconds":831,"status":"ok","phase":"metadata","minutes":13.85,"user":"shared"},{"run":"metadata-agents","where":"laptop","stage":"metadata_eram","start":"2026-11-12T19:58:55+00:00","seconds":1235,"status":"ok","phase":"metadata","minutes":20.58,"user":"shared"},{"run":"aws-shared","where":"aws host","stage":"transformation","start":"2026-11-12T20:40:12+00:00","seconds":86.9,"status":"ok","phase":"transformation","minutes":1.45,"user":"shared"},{"run":"aws-shared","where":"aws host","stage":"cleaning","start":"2026-11-12T20:41:38+00:00","seconds":16.2,"status":"ok","phase":"cleaning","minutes":0.27,"user":"shared"},{"run":"aws-shared","where":"aws host","stage":"describe_graph","start":"2026-11-12T20:41:55+00:00","seconds":1.0,"status":"ok","phase":"describe","minutes":0.02,"user":"shared"},{"run":"aws-shared","where":"aws host","stage":"filter_whole","start":"2026-11-12T20:41:56+00:00","seconds":0.0,"status":"ok","phase":"filter","minutes":0.0,"user":"A (whole graph)"},{"run":"aws-shared","where":"aws host","stage":"augment_select_whole","start":"2026-11-12T20:41:56+00:00","seconds":13.1,"status":"ok","phase":"augmentation","minutes":0.22,"user":"A (whole graph)"},{"run":"aws-focus","where":"aws host","stage":"filter_cardiomyopathy","start":"2026-11-12T20:44:16+00:00","seconds":5.6,"status":"ok","phase":"filter","minutes":0.09,"user":"B (cardiomyopathy)"},{"run":"aws-focus","where":"aws host","stage":"augment_select_cardiomyopathy","start":"2026-11-12T20:44:22+00:00","seconds":1.6,"status":"ok","phase":"augmentation","minutes":0.03,"user":"B (cardiomyopathy)"},{"run":"laptop-augB-free","where":"laptop","stage":"augment_select_B","start":"2026-11-12T20:46:29+00:00","seconds":1.4,"status":"ok","phase":"augmentation","minutes":0.02,"user":"B (cardiomyopathy)"},{"run":"laptop-augB-free","where":"laptop","stage":"augment_pubmed_B","start":"2026-11-12T20:46:30+00:00","seconds":2494.9,"status":"ok","phase":"augmentation","minutes":41.58,"user":"B (cardiomyopathy)"},{"run":"laptop-augB-paid","where":"laptop","stage":"augment_label_dryrun_B","start":"2026-11-12T21:28:08+00:00","seconds":2.4,"status":"ok","phase":"augmentation","minutes":0.04,"user":"B (cardiomyopathy)"},{"run":"laptop-augB-paid","where":"laptop","stage":"augment_full_B","start":"2026-11-12T21:28:10+00:00","seconds":3612.6,"status":"ok","phase":"augmentation","minutes":60.21,"user":"B (cardiomyopathy)"},{"run":"laptop-augA","where":"laptop","stage":"augment_select_A","start":"2026-11-12T21:28:08+00:00","seconds":8.7,"status":"ok","phase":"augmentation","minutes":0.14,"user":"A (whole graph)"},{"run":"laptop-augA","where":"laptop","stage":"augment_pubmed_A_limit500","start":"2026-11-12T21:28:17+00:00","seconds":74.6,"status":"ok","phase":"augmentation","minutes":1.24,"user":"A (whole graph)"},{"run":"laptop-augA","where":"laptop","stage":"augment_label_dryrun_A_limit500","start":"2026-11-12T21:29:31+00:00","seconds":2.9,"status":"ok","phase":"augmentation","minutes":0.05,"user":"A (whole graph)"},{"run":"laptop-augA","where":"laptop","stage":"augment_full_A_limit500","start":"2026-11-12T21:29:34+00:00","seconds":440.8,"status":"ok","phase":"augmentation","minutes":7.35,"user":"A (whole graph)"},{"run":"aws-final","where":"aws host","stage":"final_cleaning_whole","start":"2026-11-12T22:30:25+00:00","seconds":14.8,"status":"ok","phase":"final cleaning","minutes":0.25,"user":"A (whole graph)"},{"run":"aws-final","where":"aws host","stage":"mcp_check_whole","start":"2026-11-12T22:30:40+00:00","seconds":3.8,"status":"failed","phase":"mcp check","minutes":0.06,"user":"A (whole graph)"},{"run":"aws-final","where":"aws host","stage":"final_cleaning_cardiomyopathy","start":"2026-11-12T22:30:44+00:00","seconds":1.6,"status":"ok","phase":"final cleaning","minutes":0.03,"user":"B (cardiomyopathy)"},{"run":"aws-final","where":"aws host","stage":"mcp_check_cardiomyopathy","start":"2026-11-12T22:30:46+00:00","seconds":1.2,"status":"failed","phase":"mcp check","minutes":0.02,"user":"B (cardiomyopathy)"},{"run":"aws-final2","where":"aws host","stage":"mcp_check_whole","start":"2026-11-12T22:33:29+00:00","seconds":3.8,"status":"ok","phase":"mcp check","minutes":0.06,"user":"A (whole graph)"},{"run":"aws-final2","where":"aws host","stage":"final_cleaning_cardiomyopathy","start":"2026-11-12T22:33:33+00:00","seconds":1.6,"status":"ok","phase":"final cleaning","minutes":0.03,"user":"B (cardiomyopathy)"},{"run":"aws-final2","where":"aws host","stage":"mcp_check_cardiomyopathy","start":"2026-11-12T22:33:35+00:00","seconds":1.2,"status":"ok","phase":"mcp check","minutes":0.02,"user":"B (cardiomyopathy)"},{"run":"laptop-dump","where":"laptop","stage":"neo4j_dump_build","start":"2026-11-12T22:34:52+00:00","seconds":102,"status":"ok","phase":"other","minutes":1.7,"user":"B (cardiomyopathy)"},{"run":"aws-neo4j","where":"aws host","stage":"neo4j_helm_install_kgb-e2e","start":"2026-11-12T22:37:45+00:00","seconds":60,"status":"ok","phase":"neo4j","minutes":1.0,"user":"B (cardiomyopathy)"}]};
+  var calcs = {}, draws = [];
+  function data(id) {
+    if (id in calcs) return { status: 'ok', data: calcs[id].value };
+    if (id in DATA) return { status: 'ok', data: DATA[id] };
+    return { status: 'missing', data: [] };
+  }
+  function calc(id, spec) { calcs[id] = { inputs: spec.inputs, fn: spec.fn, value: null }; }
+  function draw(name, fn) { draws.push([name, fn]); }
+  function run() {
+    Object.keys(calcs).forEach(function (id) { var c = calcs[id]; c.value = c.fn.apply(null, c.inputs.map(function (i) { return data(i).data; })); });
+    draws.forEach(function (d) { document.querySelectorAll('[data-draw="' + d[0] + '"]').forEach(function (el) { d[1](el); }); });
+  }
+  var timer;
+  window.addEventListener('DOMContentLoaded', run);
+  window.addEventListener('resize', function () { clearTimeout(timer); timer = setTimeout(run, 150); });
+  return { data: data, calc: calc, draw: draw, colors: ['#3B6FD4', '#D98A2B', '#3A9E6E', '#8E5BC2'], onData: function (fn) { fn(); }, params: function () { return {}; }, setParams: function () {}, setLink: function () {} };
+})();
+</script>
+<style>
+  .e2e { font-family: var(--font-anthropic-sans); color: var(--color-fg); }
+  .e2e h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0 0 var(--cds-gap-xs); }
+  .e2e h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: var(--cds-gap-xl) 0 var(--cds-gap-sm); }
+  .e2e .lede { color: var(--color-fg-muted); margin: 0 0 var(--cds-gap-lg); }
+  .e2e .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--cds-gap-md); }
+  .e2e .tile { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); }
+  .e2e .tile .big { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: 2rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .e2e .tile .lbl { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin-top: var(--cds-gap-xs); }
+  .e2e .card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); margin-top: var(--cds-gap-md); }
+  .e2e .chart { position: relative; min-height: 220px; }
+  .e2e .chart svg { width: 100%; display: block; }
+  .e2e .chart svg text { font-family: var(--font-anthropic-sans); font-size: var(--cds-font-size-caption); fill: var(--cds-text-secondary); }
+  .e2e .chart .tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); box-shadow: var(--cds-shadow-popover); border-radius: var(--cds-radius); padding: var(--cds-pad-sm); font-size: var(--cds-font-size-caption); max-width: 260px; }
+  .e2e .legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin-bottom: var(--cds-gap-sm); }
+  .e2e .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; background: var(--sw); vertical-align: middle; }
+  .e2e .scroll { overflow-x: auto; }
+  .e2e table { border-collapse: collapse; width: 100%; font-size: var(--cds-font-size-body); font-variant-numeric: tabular-nums; }
+  .e2e th, .e2e td { text-align: left; padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); vertical-align: top; }
+  .e2e th { color: var(--color-fg-muted); font-weight: var(--cds-font-weight-medium); font-size: var(--cds-font-size-caption); }
+  .e2e td.num, .e2e th.num { text-align: right; }
+  .e2e .sev-high { color: var(--color-bad); font-weight: var(--cds-font-weight-medium); }
+  .e2e .sev-medium { color: var(--color-warn); font-weight: var(--cds-font-weight-medium); }
+  .e2e .sev-low, .e2e .sev-info { color: var(--color-fg-muted); }
+  .e2e .ok { color: var(--color-ok); }
+  .e2e .bad { color: var(--color-bad); }
+  .e2e .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--cds-gap-md); }
+  .e2e details { margin-top: var(--cds-gap-lg); color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .e2e [data-dash-source-state=refreshing] { opacity: .5; }
+</style>
+
+<div class="e2e">
+  <h1 id="title">KGB-CIA pipeline, end to end on AWS</h1>
+  <p class="lede">Three sources (ClinVar, Monarch, eRAM) through metadata, transformation, cleaning, filter, augmentation, final cleaning, the MCP check and a Neo4j load, 2026-11-12. Two users: A takes the whole graph with augmentation capped at 500 pairs, B focuses on cardiomyopathy and augments every pair.</p>
+  <p id="takeaway">The whole exercise took <b data-draw="wall" data-source="wallclock">—</b> of wall clock, cost <b data-draw="azure" data-source="azure_total">—</b> on Azure OpenAI and effectively nothing on AWS, and ended with user B's cardiomyopathy graph of <b data-draw="n4j-nodes" data-source="neo4j" data-field="nodes" data-row="0">—</b> nodes and <b data-draw="n4j-rels" data-source="neo4j" data-field="relationships" data-row="0">—</b> relationships live in a read-only Neo4j on the kgb-graph host. The pipeline needed <b data-draw="fixes" data-source="fixes_needed">—</b> code fixes along the way, each found by this run.</p>
+
+  <div class="tiles" id="tiles">
+    <div class="tile"><div class="big" data-draw="t-wall" data-source="wallclock">—</div><div class="lbl">wall clock, first metadata agent to Neo4j ready</div></div>
+    <div class="tile"><div class="big" data-draw="t-stages" data-source="stage_count">—</div><div class="lbl">timed stages, laptop and host</div></div>
+    <div class="tile"><div class="big" data-draw="t-azure" data-source="azure_total">—</div><div class="lbl">Azure OpenAI, both users</div></div>
+    <div class="tile"><div class="big" data-draw="t-aws" data-source="costs" data-field="usd" data-where="kind=AWS&amp;item=AWS%2C%20month%20to%20date%20for%20the%20team%20account%20(credits)">—</div><div class="lbl">AWS month to date (USD)</div></div>
+    <div class="tile"><div class="big" data-draw="t-proposed" data-source="augmentation" data-field="edges_proposed" data-row="0">—</div><div class="lbl">new edges proposed for user B</div></div>
+    <div class="tile"><div class="big" data-draw="t-defects" data-source="defect_count">—</div><div class="lbl">defects logged, <span data-draw="t-high" data-source="high_count">—</span> high</div></div>
+  </div>
+
+  <h2 id="timeline">Where the time went</h2>
+  <div class="card">
+    <div class="legend"><span style="--sw: var(--c0)">laptop</span><span style="--sw: var(--c1)">AWS host</span></div>
+    <div class="chart" data-draw="gantt" data-source="stages" id="gantt">—</div>
+    <p class="lede">Each bar is one timed stage, placed on the clock. The three metadata agents ran in parallel on the laptop; the host did transformation, cleaning, filter, final cleaning and the MCP check; the paid augmentation ran on the laptop because API keys stay there. Sub-second stages are drawn 2 px wide.</p>
+  </div>
+  <div class="card">
+    <div class="chart" data-draw="phases" data-source="stages" id="phases">—</div>
+    <p class="lede">Seconds per phase, summed over both users. Augmentation dominates, and inside it the PubMed search without an NCBI key took <b data-draw="pubmedB" data-source="augmentation" data-field="pubmed_seconds" data-row="0">—</b> s for user B against <b data-draw="pubmedA" data-source="augmentation" data-field="pubmed_seconds" data-row="1">—</b> s for user A's 500 pairs with the key.</p>
+  </div>
+
+  <h2 id="graphs">The graph at each step</h2>
+  <div class="card scroll">
+    <table data-source="graphs" data-row-key="step,graph" id="graph-table">
+      <thead><tr><th data-field="step">Step</th><th data-field="graph">Graph</th><th class="num" data-field="nodes">Nodes</th><th class="num" data-field="edges">Edges</th></tr></thead>
+      <tbody data-draw="graph-rows"></tbody>
+    </table>
+    <p class="lede">Cleaning kept the edges but dropped 105,149 unreferenced nodes; the cardiomyopathy focus (127 seed diseases, one hop) cut the graph to 2%; augmentation added 82 proposed edges to the cut and 2 to the capped whole-graph run; final cleaning dropped nothing.</p>
+  </div>
+
+  <h2 id="users">Two users, two augmentation runs</h2>
+  <div class="card scroll">
+    <table data-source="augmentation" data-row-key="run" id="aug-table">
+      <thead><tr><th data-field="run">Run</th><th class="num" data-field="pairs_selected">Pairs selected</th><th class="num" data-field="pairs_searched">Searched</th><th class="num" data-field="abstracts">Abstracts</th><th class="num" data-field="pairs_labeled">Labeled</th><th class="num" data-field="edges_checked">Edges checked</th><th class="num" data-field="edges_supported">Supported</th><th class="num" data-field="edges_refined">Refined</th><th class="num" data-field="edges_proposed">Proposed</th><th class="num" data-field="publications_added">PMIDs added</th><th class="num" data-field="dry_run_label_estimate">Dry-run est. (USD)</th><th class="num" data-field="cost_total">Actual (USD)</th></tr></thead>
+      <tbody data-draw="aug-rows"></tbody>
+    </table>
+    <p class="lede">Only a pair with a PubMed record and abstracts reaches labeling, so the paid work is a fraction of what select picks. The whole-graph user would have faced 131,195 pairs (the eRAM text-mined channel); at run B's rate that is roughly $200 of labeling and review plus a day of PubMed searching, which is why the cap.</p>
+  </div>
+
+  <h2 id="costs">What it cost</h2>
+  <div class="two">
+    <div class="card">
+      <div class="chart" data-draw="costbars" data-source="costs" id="cost-chart">—</div>
+      <p class="lede">Azure OpenAI by step and run. Labeling uses gpt-6-luna; quote repair and review use gpt-5.6-terra. AWS shows $0.00 month to date on the team account; the host costs about <b data-draw="hostday" data-source="costs" data-field="usd" data-where="item=AWS%2C%20kgb-graph%20host%20standing%20cost%20per%20day%20(r7g.large%20%2B%20EIP%20%2B%20EBS)">—</b> a day whether or not it works.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin:0 0 8px;font-size:var(--cds-font-size-body)">Neo4j on the host</h3>
+      <table data-source="neo4j" data-row-key="release" id="neo4j-table">
+        <thead><tr><th data-field="release">Release</th><th data-field="namespace">Namespace</th><th class="num" data-field="nodes">Nodes</th><th class="num" data-field="relationships">Relationships</th><th class="num" data-field="proposed_relationships">Proposed</th><th data-field="write_rejected">Writes rejected</th></tr></thead>
+        <tbody data-draw="neo4j-rows"></tbody>
+      </table>
+      <p class="lede">User B's final graph as a Neo4j dump built on the laptop (ORION image, 102 s), loaded by a second Helm release beside the team's kgb-mcp release, ClusterIP only. Counts match the final cleaned files exactly.</p>
+    </div>
+  </div>
+
+  <h2 id="cut">What user B's graph is made of</h2>
+  <div class="two">
+    <div class="card"><div class="chart" data-draw="srcbars" data-source="cut_sources" id="src-chart">—</div></div>
+    <div class="card"><div class="chart" data-draw="predbars" data-source="cut_predicates" id="pred-chart">—</div></div>
+  </div>
+  <div class="card scroll">
+    <table data-source="flags" data-row-key="graph,flag" id="flag-table">
+      <thead><tr><th data-field="graph">Graph</th><th data-field="flag">Cleaning flag (kept on the edge)</th><th class="num" data-field="edges">Edges</th></tr></thead>
+      <tbody data-draw="flag-rows"></tbody>
+    </table>
+    <p class="lede">Flags are not drops. Every has_mode_of_inheritance edge is a type violation only because Biolink's range for that predicate is stricter than the sources; unresolved nodes are mostly ClinVar and eRAM identifiers NodeNorm does not know.</p>
+  </div>
+
+  <h2 id="defects">Defects this run found</h2>
+  <div class="card scroll">
+    <table data-source="defects" data-row-key="id" id="defect-table">
+      <thead><tr><th data-field="id">ID</th><th data-field="severity">Severity</th><th data-field="stage">Stage</th><th data-field="title">What</th><th data-field="status">Status</th></tr></thead>
+      <tbody data-draw="defect-rows"></tbody>
+    </table>
+    <p class="lede">D1 and D11 each stopped the pipeline until patched; both patches live only in the test worktree and need pull requests. D2 was thought fixed during the run but the re-applied eRAM plan changed the wrong pattern, so the symptom layout still wrote nothing. D13 is why the whole-graph user was capped. Full detail with evidence is in the observer's observations.md.</p>
+  </div>
+
+  <details><summary>How this was run, and caveats</summary>
+    <ul>
+      <li>Code: main at 823ef5e plus PR 22 (augmentation) and PR 64 (MCP interface) merged into a test branch, plus two patches (orion_runtime.py header handling; check.py augmentor edges).</li>
+      <li>Host: kgb-graph (r7g.large, k3s) in the KGB-CIA account, driven from the laptop with SSM Run Command; files moved through the team S3 bucket.</li>
+      <li>Metadata agents, the first local dry run, and the first two-source run are not in the timeline except the agents' own wall clock; the dry runs found D1 and D2 before the host saw them.</li>
+      <li>Azure figures are the cost lines the augmentation stage prints from its token counts, not an invoice. AWS is from Cost Explorer for the linked account through Nov 12.</li>
+      <li>Peak memory per stage is not shown: the runner reports cumulative child RSS (D10).</li>
+    </ul>
+  </details>
+</div>
+
+<script>
+  // Shared helpers for the drawings.
+  window.e2e = (function () {
+    const fmtInt = d3.format(',');
+    const fmtUsd = d3.format('$,.2f');
+    const fmtSec = (s) => s >= 3600 ? (s / 3600).toFixed(1) + ' h' : s >= 60 ? (s / 60).toFixed(1) + ' min' : s.toFixed(1) + ' s';
+    function hms(sec) {
+      const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+      return h ? `${h} h ${m} min` : `${m} min`;
+    }
+    function tip(box) {
+      let t = box.querySelector('.tip');
+      if (!t) { t = document.createElement('div'); t.className = 'tip'; t.hidden = true; box.appendChild(t); }
+      return t;
+    }
+    function showTip(box, ev, text) {
+      const t = tip(box); t.textContent = text; t.hidden = false;
+      const r = box.getBoundingClientRect();
+      let x = ev.clientX - r.left + 12, y = ev.clientY - r.top + 12;
+      if (x + 270 > r.width) x = Math.max(0, ev.clientX - r.left - 270);
+      t.style.left = x + 'px'; t.style.top = y + 'px';
+    }
+    function hideTip(box) { tip(box).hidden = true; }
+    // Horizontal bars: rows [{label, value}], one series.
+    function hbars(el, rows, opts) {
+      el.replaceChildren();
+      if (!rows.length) { el.textContent = '—'; return; }
+      const w = el.clientWidth || 320, rowH = 22, pad = 4;
+      const labelW = Math.min(Math.round(w * 0.45), Math.max(...rows.map(r => r.label.length)) * 6.3 + 8);
+      const h = rows.length * rowH + 28;
+      const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${w} ${h}`).attr('role', 'img').attr('aria-label', opts.aria);
+      const max = d3.max(rows, r => r.value) || 1;
+      const x = d3.scaleLinear().domain([0, max]).range([labelW, w - 56]);
+      svg.append('text').attr('x', 0).attr('y', 12).style('fill', 'var(--color-fg)').style('font-weight', 500).text(opts.title);
+      const g = svg.selectAll('g.row').data(rows).join('g').attr('class', 'row').attr('transform', (d, i) => `translate(0,${22 + i * rowH})`);
+      g.append('text').attr('x', labelW - 6).attr('y', rowH / 2 + 4).attr('text-anchor', 'end').text(d => d.label);
+      g.append('rect').attr('x', labelW).attr('y', pad).attr('height', rowH - pad * 2).attr('rx', 3)
+        .attr('width', d => Math.max(2, x(d.value) - labelW)).style('fill', 'var(--c0)');
+      g.append('text').attr('x', d => x(d.value) + 4).attr('y', rowH / 2 + 4).text(d => opts.fmt(d.value));
+      g.append('rect').attr('x', 0).attr('y', 0).attr('width', w).attr('height', rowH).attr('fill', 'transparent')
+        .on('mousemove', (ev, d) => showTip(el, ev, `${d.label}: ${opts.fmt(d.value)}`)).on('mouseleave', () => hideTip(el));
+    }
+    return { fmtInt, fmtUsd, fmtSec, hms, showTip, hideTip, hbars };
+  })();
+  document.documentElement.style.setProperty('--c0', dash.colors[0]);
+  document.documentElement.style.setProperty('--c1', dash.colors[1]);
+</script>
+
+<script>
+  // Calculations readers can inspect in Sources.
+  dash.calc('wallclock', {
+    inputs: ['stages'],
+    title: 'Wall clock of the whole exercise',
+    description: 'From the earliest stage start to the latest stage end (start + seconds), as "h min".',
+    fn: (stages) => {
+      if (!stages.length) return null;
+      const starts = stages.map(s => Date.parse(s.start));
+      const ends = stages.map(s => Date.parse(s.start) + s.seconds * 1000);
+      const sec = (Math.max(...ends) - Math.min(...starts)) / 1000;
+      const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+      return `${h} h ${m} min`;
+    }
+  });
+  dash.calc('stage_count', { inputs: ['stages'], title: 'Timed stages', description: 'Number of rows in the stages source.', fn: (stages) => stages.length });
+  dash.calc('azure_total', { inputs: ['costs'], title: 'Azure OpenAI total', description: 'Sum of usd over rows with kind Azure, formatted as dollars.', fn: (costs) => '$' + costs.filter(c => c.kind === 'Azure').reduce((a, c) => a + Number(c.usd), 0).toFixed(2) });
+  dash.calc('defect_count', { inputs: ['defects'], title: 'Defects logged', description: 'Number of rows in the defects source.', fn: (defects) => defects.length });
+  dash.calc('high_count', { inputs: ['defects'], title: 'High-severity defects', description: 'Rows with severity high.', fn: (defects) => defects.filter(d => d.severity === 'high').length });
+  dash.calc('fixes_needed', { inputs: ['defects'], title: 'Code fixes made during the run', description: 'Defects whose status says fixed in worktree or plan patched.', fn: (defects) => defects.filter(d => /fixed in worktree|plan patched/.test(d.status)).length });
+  dash.calc('phase_seconds', {
+    inputs: ['stages'],
+    title: 'Seconds per phase',
+    description: 'Sum of seconds grouped by phase, descending.',
+    fn: (stages) => {
+      const m = new Map();
+      for (const s of stages) m.set(s.phase, (m.get(s.phase) || 0) + Number(s.seconds));
+      return [...m].map(([phase, seconds]) => ({ phase, seconds: Math.round(seconds) })).sort((a, b) => b.seconds - a.seconds);
+    }
+  });
+</script>
+
+<script>
+  const E = window.e2e;
+  const text = (sel, v) => { sel.textContent = v; };
+  const simple = (name, srcId, fmt) => dash.draw(name, (el) => {
+    const d = dash.data(srcId);
+    text(el, d.status === 'ok' && d.data != null ? fmt(d.data) : '—');
+  });
+  const field = (name, srcId, f, row, fmt) => dash.draw(name, (el) => {
+    const d = dash.data(srcId);
+    const r = d.status === 'ok' ? d.data[row] : null;
+    text(el, r ? fmt(r[f]) : '—');
+  });
+  const where = (name, srcId, f, key, val, fmt) => dash.draw(name, (el) => {
+    const d = dash.data(srcId);
+    const r = d.status === 'ok' ? d.data.find(x => x[key] === val) : null;
+    text(el, r ? fmt(r[f]) : '—');
+  });
+  simple('wall', 'wallclock', v => v); simple('t-wall', 'wallclock', v => v);
+  simple('azure', 'azure_total', v => v); simple('t-azure', 'azure_total', v => v);
+  simple('t-stages', 'stage_count', v => E.fmtInt(v));
+  simple('t-defects', 'defect_count', v => E.fmtInt(v));
+  simple('t-high', 'high_count', v => E.fmtInt(v));
+  simple('fixes', 'fixes_needed', v => E.fmtInt(v));
+  field('n4j-nodes', 'neo4j', 'nodes', 0, E.fmtInt); field('n4j-rels', 'neo4j', 'relationships', 0, E.fmtInt);
+  field('t-proposed', 'augmentation', 'edges_proposed', 0, E.fmtInt);
+  field('pubmedB', 'augmentation', 'pubmed_seconds', 0, v => d3.format(',.0f')(v));
+  field('pubmedA', 'augmentation', 'pubmed_seconds', 1, v => d3.format(',.0f')(v));
+  where('t-aws', 'costs', 'usd', 'item', 'AWS, month to date for the team account (credits)', v => E.fmtUsd(v));
+  where('hostday', 'costs', 'usd', 'item', 'AWS, kgb-graph host standing cost per day (r7g.large + EIP + EBS)', v => E.fmtUsd(v));
+
+  // Gantt of every stage on the clock.
+  dash.draw('gantt', (el) => {
+    el.replaceChildren();
+    const d = dash.data('stages');
+    if (d.status !== 'ok' || !d.data.length) { el.textContent = d.status === 'error' ? 'Failed to load' : '—'; return; }
+    const rows = d.data.map(s => ({ ...s, t0: Date.parse(s.start), t1: Date.parse(s.start) + Number(s.seconds) * 1000 })).sort((a, b) => a.t0 - b.t0);
+    const w = el.clientWidth || 600, rowH = 16, h = rows.length * rowH + 30;
+    const left = Math.min(Math.round(w * 0.45), Math.max(...rows.map(r => r.stage.length)) * 6.3 + 10);
+    const x = d3.scaleUtc().domain([d3.min(rows, r => r.t0), d3.max(rows, r => r.t1)]).range([left, w - 12]);
+    const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${w} ${h}`).attr('role', 'img').attr('aria-label', 'Timeline of every pipeline stage on 2026-11-12, by start time and duration');
+    const ax = d3.axisTop(x).ticks(Math.max(3, Math.floor((w - left) / 90))).tickFormat(d3.utcFormat('%H:%M'));
+    svg.append('g').attr('transform', 'translate(0,20)').call(ax).call(g => { g.select('.domain').style('stroke', 'var(--cds-chart-axis)'); g.selectAll('.tick line').style('stroke', 'var(--cds-chart-grid)').attr('y2', h - 20); });
+    const g = svg.selectAll('g.r').data(rows).join('g').attr('class', 'r').attr('transform', (r, i) => `translate(0,${24 + i * rowH})`);
+    g.append('text').attr('x', left - 6).attr('y', rowH / 2 + 3).attr('text-anchor', 'end').text(r => r.stage);
+    g.append('rect').attr('x', r => x(r.t0)).attr('y', 3).attr('height', rowH - 6).attr('rx', 2)
+      .attr('width', r => Math.max(2, x(r.t1) - x(r.t0)))
+      .style('fill', r => r.where === 'laptop' ? 'var(--c0)' : 'var(--c1)')
+      .style('opacity', r => r.status === 'ok' ? 1 : 0.45);
+    g.filter(r => r.status !== 'ok').append('text').attr('x', r => x(r.t1) + 4).attr('y', rowH / 2 + 3).style('fill', 'var(--color-bad)').text('failed');
+    g.append('rect').attr('x', 0).attr('y', 0).attr('width', w).attr('height', rowH).attr('fill', 'transparent')
+      .on('mousemove', (ev, r) => E.showTip(el, ev, `${r.stage} (${r.run}, ${r.where}): started ${d3.utcFormat('%H:%M:%S')(r.t0)} UTC, ${E.fmtSec(Number(r.seconds))}, ${r.status}`))
+      .on('mouseleave', () => E.hideTip(el));
+  });
+
+  dash.draw('phases', (el) => {
+    const d = dash.data('phase_seconds');
+    if (d.status !== 'ok' || !d.data) { el.replaceChildren(); el.textContent = '—'; return; }
+    E.hbars(el, d.data.map(r => ({ label: r.phase, value: r.seconds })), { title: 'Seconds per phase', fmt: E.fmtSec, aria: 'Seconds spent per pipeline phase' });
+  });
+  dash.draw('costbars', (el) => {
+    const d = dash.data('costs');
+    if (d.status !== 'ok') { el.replaceChildren(); el.textContent = '—'; return; }
+    E.hbars(el, d.data.filter(r => r.kind === 'Azure').map(r => ({ label: r.item.replace('Azure OpenAI, ', ''), value: Number(r.usd) })), { title: 'Azure OpenAI by step (USD)', fmt: E.fmtUsd, aria: 'Azure OpenAI cost per augmentation step and run' });
+  });
+  dash.draw('srcbars', (el) => {
+    const d = dash.data('cut_sources');
+    if (d.status !== 'ok') { el.replaceChildren(); el.textContent = '—'; return; }
+    E.hbars(el, d.data.map(r => ({ label: r.source, value: Number(r.edges) })), { title: 'Edges by primary knowledge source', fmt: E.fmtInt, aria: 'Edges in the final cardiomyopathy graph by primary knowledge source' });
+  });
+  dash.draw('predbars', (el) => {
+    const d = dash.data('cut_predicates');
+    if (d.status !== 'ok') { el.replaceChildren(); el.textContent = '—'; return; }
+    E.hbars(el, d.data.map(r => ({ label: r.predicate, value: Number(r.edges) })), { title: 'Edges by predicate', fmt: E.fmtInt, aria: 'Edges in the final cardiomyopathy graph by predicate' });
+  });
+
+  // Tables.
+  const tbody = (name, srcId, cols, cls) => dash.draw(name, (el) => {
+    const d = dash.data(srcId);
+    const rows = d.status === 'ok' ? d.data : [];
+    d3.select(el).selectAll('tr').data(rows).join('tr').attr('class', cls ? (r => cls(r)) : null)
+      .selectAll('td').data(r => cols.map(c => ({ c, r }))).join('td')
+      .attr('class', ({ c }) => c.num ? 'num' : null)
+      .text(({ c, r }) => c.fmt ? c.fmt(r[c.f]) : r[c.f]);
+  });
+  tbody('graph-rows', 'graphs', [{ f: 'step' }, { f: 'graph' }, { f: 'nodes', num: 1, fmt: E.fmtInt }, { f: 'edges', num: 1, fmt: E.fmtInt }]);
+  tbody('aug-rows', 'augmentation', [{ f: 'run' }, { f: 'pairs_selected', num: 1, fmt: E.fmtInt }, { f: 'pairs_searched', num: 1, fmt: E.fmtInt }, { f: 'abstracts', num: 1, fmt: E.fmtInt }, { f: 'pairs_labeled', num: 1, fmt: E.fmtInt }, { f: 'edges_checked', num: 1, fmt: E.fmtInt }, { f: 'edges_supported', num: 1, fmt: E.fmtInt }, { f: 'edges_refined', num: 1, fmt: E.fmtInt }, { f: 'edges_proposed', num: 1, fmt: E.fmtInt }, { f: 'publications_added', num: 1, fmt: E.fmtInt }, { f: 'dry_run_label_estimate', num: 1, fmt: E.fmtUsd }, { f: 'cost_total', num: 1, fmt: E.fmtUsd }]);
+  tbody('neo4j-rows', 'neo4j', [{ f: 'release' }, { f: 'namespace' }, { f: 'nodes', num: 1, fmt: E.fmtInt }, { f: 'relationships', num: 1, fmt: E.fmtInt }, { f: 'proposed_relationships', num: 1, fmt: E.fmtInt }, { f: 'write_rejected' }]);
+  tbody('flag-rows', 'flags', [{ f: 'graph' }, { f: 'flag' }, { f: 'edges', num: 1, fmt: E.fmtInt }]);
+  tbody('defect-rows', 'defects', [{ f: 'id' }, { f: 'severity' }, { f: 'stage' }, { f: 'title' }, { f: 'status' }], r => 'sev-' + r.severity);
+</script>
+
+<p style="color:var(--color-fg-muted);font-size:.8rem;margin-top:32px">Static copy of the run dashboard, built 2026-11-13 from the reports under <code>data/</code>. Tracking issue #81.</p>
+</div>
+</body>
+</html>
