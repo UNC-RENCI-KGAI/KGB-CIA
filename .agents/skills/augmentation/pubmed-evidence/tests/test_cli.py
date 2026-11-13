@@ -524,12 +524,23 @@ def test_full_run_labels_only_what_the_budget_allows(tmp_path, capsys, fakes):
 
 def test_script_header_lists_the_projects_dependencies():
     """`scripts/augment.py` runs alone under `uv run --script`, so its PEP 723 header repeats
-    the project's dependencies and the `augmentation` extra; they must not drift apart."""
+    the project's dependencies and the `augmentation` extra; they must not drift apart. A
+    workspace member (`[tool.uv.sources]` with `workspace = true`, such as kgbcia-mcp) is left
+    out: it isn't on PyPI, so `uv run --script` couldn't resolve it, and the script doesn't
+    import it."""
     import tomllib
 
     root = Path(__file__).resolve().parents[5]
-    project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
-    wanted = project["dependencies"] + project["optional-dependencies"]["augmentation"]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    project = pyproject["project"]
+    sources = pyproject.get("tool", {}).get("uv", {}).get("sources", {})
+    members = {name for name, source in sources.items() if source.get("workspace")}
+    wanted = [
+        requirement
+        for requirement in project["dependencies"]
+        + project["optional-dependencies"]["augmentation"]
+        if re.split(r"[\s<>=!~\[;]", requirement, maxsplit=1)[0] not in members
+    ]
     script = (Path(__file__).resolve().parents[1] / "scripts" / "augment.py").read_text()
     header = re.search(r"^# /// script\n(.*?)^# ///$", script, re.M | re.S)
     assert header is not None
