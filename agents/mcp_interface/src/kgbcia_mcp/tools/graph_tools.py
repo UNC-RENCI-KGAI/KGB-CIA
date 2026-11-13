@@ -62,9 +62,10 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
         """Count a node's edges by direction, predicate and neighbor category.
 
         Example: summarize ``NCBIGene:1017`` before fetching neighbors.
-        Presentation Guidelines: state direction and exact Biolink predicates; do not imply
-        that counts are
-        evidence. Next call ``get_node_edges`` with a predicate/category filter.
+        Presentation Guidelines: present each row by its ``reads_as`` statement (subject →
+        predicate → object) rather than an incoming/outgoing column, keep exact Biolink
+        predicates, and do not imply that counts are evidence. Next call ``get_node_edges``
+        with a predicate/category filter.
         """
 
         return _safe(svc.summarize_node_edges, node_id)
@@ -83,10 +84,11 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
         """Page through labeled neighbors and citable edge summaries for one node.
 
         Example: outgoing ``biolink:affects`` edges from ``NCBIGene:1017``.
-        Presentation Guidelines: report edge IDs, predicates, knowledge sources, publication
-        counts and any flags verbatim; if an answer uses a flagged edge, say it is flagged and
-        give each reason verbatim, including any PMID. Next call ``explain_edge`` for every
-        connection used in an answer.
+        Presentation Guidelines: state each edge by its ``reads_as`` statement (subject →
+        predicate → object) rather than incoming/outgoing; report edge IDs, predicates,
+        knowledge sources, publication counts and any flags verbatim; if an answer uses a
+        flagged edge, say it is flagged and give each reason verbatim, including any PMID.
+        Next call ``explain_edge`` for every connection used in an answer.
         """
 
         return _safe(

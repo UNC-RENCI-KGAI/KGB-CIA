@@ -1328,9 +1328,12 @@ def test_integration_smoke_against_configured_neo4j():
 
         assert service.search_nodes(source_id)["results"]
         assert service.get_node(source_id)["node"]["id"] == source_id
-        assert service.summarize_node_edges(source_id)["total"] > 0
+        summary = service.summarize_node_edges(source_id)
+        assert summary["total"] > 0
+        assert " → " in summary["results"][0]["reads_as"]
         node_edges = service.get_node_edges(source_id)
         assert node_edges["results"]
+        assert source_id in node_edges["results"][0]["reads_as"]
         assert node_edges["results"][0]["edge"]["primary_knowledge_source"]
         direct = service.get_edges_between(source_id, target_id, include_lineage=True)
         assert direct["results"]
@@ -1458,3 +1461,19 @@ def test_check_passes_graph_whose_only_unrecorded_edges_are_augmentor_proposals(
     assert result.ok
     assert result.edge_count == 16
     assert result.augmentor_edges_without_records == 1
+
+
+def test_reads_as_puts_the_anchor_on_the_correct_end():
+    from kgbcia_mcp.services.neo4j_service import _node_label, _reads_as
+
+    cdk2 = _node_label({"id": "NCBIGene:1017", "name": "CDK2"})
+    assert cdk2 == "CDK2 (NCBIGene:1017)"
+    assert _node_label({"id": "X:1"}) == "X:1"
+    assert (
+        _reads_as(cdk2, "biolink:expressed_in", "biolink:AnatomicalEntity", "outgoing")
+        == "CDK2 (NCBIGene:1017) → biolink:expressed_in → biolink:AnatomicalEntity"
+    )
+    assert (
+        _reads_as(cdk2, "biolink:has_participant", "biolink:Pathway", "incoming")
+        == "biolink:Pathway → biolink:has_participant → CDK2 (NCBIGene:1017)"
+    )

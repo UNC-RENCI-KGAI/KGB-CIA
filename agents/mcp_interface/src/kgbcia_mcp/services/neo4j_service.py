@@ -288,7 +288,17 @@ class Neo4jService:
             query,
             {"id": resolved["node"]["id"], "anchor": NAMED_THING_LABEL, "limit": _MAX_LIMIT},
         ).rows
-        return _list_response(list(rows), _MAX_LIMIT)
+        anchor = _node_label(resolved["node"])
+        rows = [
+            {
+                **row,
+                "reads_as": _reads_as(
+                    anchor, row["predicate"], row["neighbor_category"], row["direction"]
+                ),
+            }
+            for row in rows
+        ]
+        return _list_response(rows, _MAX_LIMIT)
 
     def get_node_edges(
         self,
@@ -351,9 +361,17 @@ class Neo4jService:
             "fetch": limit + 1,
         }
         rows = list(self.execute_read(query, params, row_limit=limit + 1).rows)
+        anchor = _node_label(resolved["node"])
         for row in rows:
             if fixed_direction:
                 row["direction"] = fixed_direction
+            edge = row.get("edge") or {}
+            row["reads_as"] = _reads_as(
+                anchor,
+                edge.get("predicate", ""),
+                _node_label(row.get("neighbor") or {}),
+                row["direction"],
+            )
         return _paged_response(rows, limit, offset)
 
     def get_edges_between(
@@ -761,6 +779,22 @@ def _validate_page(limit: int, offset: int) -> None:
     _validate_limit(limit)
     if offset < 0:
         raise ValueError("offset must be non-negative")
+
+
+def _node_label(node: Mapping[str, Any]) -> str:
+    """Name a node for a reads_as statement: ``name (CURIE)``, or the CURIE alone."""
+
+    node_id = node.get("id", "")
+    name = node.get("name")
+    return f"{name} ({node_id})" if name and node_id else str(name or node_id)
+
+
+def _reads_as(anchor: str, predicate: str, neighbor: str, direction: str) -> str:
+    """Spell an edge as subject → predicate → object, whichever end the anchor is."""
+
+    if direction == "incoming":
+        return f"{neighbor} → {predicate} → {anchor}"
+    return f"{anchor} → {predicate} → {neighbor}"
 
 
 def _list_response(
