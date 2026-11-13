@@ -276,15 +276,18 @@ def test_judge_then_build_writes_the_drop_list_cleaning_reads(workspace, fake_sd
     assert drops[0]["pmids"] == ["222"] and drops[0]["primary_knowledge_source"] == "infores:dc"
     assert 0.7 <= drops[0]["confidence"] <= 1
     verdicts = {
-        tuple(v["key"][::2]): v["verdict"]
+        tuple(v["key"][0:3:2]): v["verdict"]
         for v in map(json.loads, open("data/cleaning/evidence/drug_target/verdicts.jsonl"))
     }
     assert verdicts == {("C:A", "P:1"): "keep", ("C:B", "P:2"): "drop"}
 
     from agents.cleaning import garbage
+    from shared.schema import edge_statement_id
 
     keys = garbage.load_drop_list(Path("data/cleaning/drop_lists/drug_target.jsonl"))
-    assert keys == {("C:B", "biolink:interacts_with", "P:2", "infores:dc")}
+    statement = edge_statement_id(_edge("C:B", "P:2"))
+    assert keys == {("C:B", "biolink:interacts_with", "P:2", "infores:dc", statement)}
+    assert drops[0]["causal_mechanism_qualifier"] == "biolink:inhibition"
 
 
 def test_build_writes_the_flag_list_cleaning_reads(tmp_path, monkeypatch):
@@ -302,11 +305,12 @@ def test_build_writes_the_flag_list_cleaning_reads(tmp_path, monkeypatch):
     qpath.write_text(json.dumps(q))
     work = tmp_path / "data/cleaning/evidence/drug_target"
     work.mkdir(parents=True)
-    key = ["C:A", "biolink:interacts_with", "P:1", "infores:dc"]
+    key = ["C:A", "biolink:interacts_with", "P:1", "infores:dc", "0123456789abcdef"]
+    statement = {"causal_mechanism_qualifier": "biolink:inhibition"}
     (work / "evidence.jsonl").write_text(
-        json.dumps({"key": key, "pmid": "111", "based_on_text": False, "claim": "A inhibits P1"})
-        + "\n"
-    )
+        json.dumps({"key": key, "statement": statement, "pmid": "111", "based_on_text": False,
+                    "claim": "A inhibits P1"}) + "\n"
+    )  # fmt: skip
     probabilities = {"different_action": 0.9, "not_reported": 0.1}
     (work / "answers.jsonl").write_text(
         json.dumps({"key": key, "pmid": "111", "choice": "different_action",
@@ -319,6 +323,8 @@ def test_build_writes_the_flag_list_cleaning_reads(tmp_path, monkeypatch):
         "predicate": "biolink:interacts_with",
         "object": "P:1",
         "primary_knowledge_source": "infores:dc",
+        "statement_id": "0123456789abcdef",
+        "causal_mechanism_qualifier": "biolink:inhibition",
         "flag": "wrong_mechanism",
         "reason": "a cited paper reports a different action than the edge's (PMID:111)",
     }
@@ -337,7 +343,7 @@ def test_gather_skips_curated_edges_augmentation_checked_but_not_text_mined(work
     gather.main([str(qpath), str(graph)])
     assert "Skipped 1 selected curated edges" in capsys.readouterr().out
     rows = [json.loads(x) for x in open("data/cleaning/evidence/drug_target/evidence.jsonl")]
-    keys = {tuple(r["key"][::2]) for r in rows}
+    keys = {tuple(r["key"][0:3:2]) for r in rows}
     assert ("C:B", "P:1") not in keys
     assert ("C:A", "P:3") in keys
     assert next(r for r in rows if r["key"][2] == "P:3")["based_on_text"]
@@ -356,7 +362,7 @@ def test_gather_defaults_to_the_latest_stage_graph(workspace, monkeypatch, capsy
 
 
 def _record(verdict, flag, *articles):
-    key = ["C:A", "biolink:interacts_with", "P:1", "infores:dc"]
+    key = ["C:A", "biolink:interacts_with", "P:1", "infores:dc", "0123456789abcdef"]
     return {"key": key, "verdict": verdict, "flag": flag, "articles": list(articles)}
 
 
@@ -380,6 +386,7 @@ def test_gold_row_verdict_and_confidence(record, verdict, confidence):
     row = build.gold_row({"name": "q"}, record)
     assert (row["verdict"], row["confidence"]) == (verdict, confidence)
     assert row["evidence_check"] == record["verdict"]
+    assert row["statement_id"] == record["key"][4]
     assert row["publications"] == "|".join(f"PMID:{a['pmid']}" for a in record["articles"])
 
 
@@ -432,3 +439,90 @@ def test_label_sample_then_score(workspace, fake_sdk, capsys):
     scored = json.loads(Path("data/cleaning/evidence/drug_target/label_score.json").read_text())
     assert scored["keep"] == {"labelled": 1, "agree": 1}
     assert scored["drop"] == {"labelled": 1, "agree": 0}
+
+
+GRAPHIO = Path(__file__).parents[1] / ".agents/skills/augmentation/pubmed-evidence/scripts"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {},
+        {"causal_mechanism_qualifier": "biolink:inhibition"},
+        {"qualified_predicate": "causes", "object_aspect_qualifier": "expression"},
+        {"object_direction_qualifier": "increased", "negated": "true"},
+        {"negated": True, "subject_form_or_variant_qualifier": ""},
+    ],
+)
+def test_statement_id_is_the_augmentation_agents(extra, monkeypatch):
+    """Cleaning and augmentation must agree on which edges make the same statement."""
+    monkeypatch.syspath_prepend(str(GRAPHIO))
+    from pubmed_evidence import graphio
+
+    from shared.schema import Edge, edge_statement_id
+
+    record = {
+        **_edge("C:A", "P:1"),
+        "knowledge_level": "knowledge_assertion",
+        "agent_type": "manual_agent",
+        **extra,
+    }
+    record.pop("causal_mechanism_qualifier")
+    record.update(extra)
+    assert edge_statement_id(record) == graphio.edge_statement_id(Edge.model_validate(record))
+
+
+def test_edges_that_differ_only_in_qualifiers_are_judged_and_dropped_apart(workspace, fake_sdk):
+    """Two A-P2 edges from one source, one with each mechanism: the abstract contradicts both,
+    but each is its own claim, its own verdict and its own drop line, which kgb-clean then
+    matches to that edge only."""
+    graph, qpath = workspace
+    cited = {"supporting_documents": "https://pubmed.ncbi.nlm.nih.gov/222/"}
+    with open(graph / "edges.jsonl", "a") as f:
+        f.write(json.dumps(_edge("C:A", "P:2", **cited)) + "\n")
+        agonist = _edge("C:A", "P:2", **cited, causal_mechanism_qualifier="biolink:agonism")
+        f.write(json.dumps(agonist) + "\n")
+    gather.main([str(qpath), str(graph)])
+    rows = [json.loads(line) for line in open("data/cleaning/evidence/drug_target/evidence.jsonl")]
+    claims = sorted(r["claim"] for r in rows if r["key"][:3] == ["C:A", "biolink:interacts_with",
+                                                                  "P:2"])  # fmt: skip
+    assert claims == ["drug A interacts with (agonism) P2", "drug A interacts with (inhibition) P2"]
+
+    judge.main([str(qpath)], client=FakeJev())
+    build.main([str(qpath)])
+    drops = [json.loads(line) for line in open("data/cleaning/drop_lists/drug_target.jsonl")]
+    a_p2 = sorted(
+        (d["causal_mechanism_qualifier"], d["statement_id"]) for d in drops if d["subject"] == "C:A"
+    )
+    assert [mechanism for mechanism, _ in a_p2] == ["biolink:agonism", "biolink:inhibition"]
+    assert a_p2[0][1] != a_p2[1][1]
+    with open("data/cleaning/evidence/drug_target/gold_set.tsv") as f:
+        gold = [r for r in csv.DictReader(f, delimiter="\t") if r["subject"] == "C:A"]
+    assert sorted(r["statement_id"] for r in gold if r["object"] == "P:2") == sorted(
+        sid for _, sid in a_p2
+    )  # one gold-set row per qualifier version
+
+    from agents.cleaning import garbage
+
+    # Keep the agonism line only: kgb-clean then drops that edge and keeps the inhibition one.
+    lists = Path("lists/drop_lists")
+    lists.mkdir(parents=True)
+    agonism = next(d for d in drops if d.get("causal_mechanism_qualifier") == "biolink:agonism")
+    (lists / "check.jsonl").write_text(json.dumps(agonism) + "\n")
+    keys = garbage.load_drop_lists(lists)
+    assert garbage.edge_drop_reason(agonist, {"C:A", "P:2"}, set(), keys) == "drop_list:check"
+    inhibition = _edge("C:A", "P:2", **cited)
+    assert garbage.edge_drop_reason(inhibition, {"C:A", "P:2"}, set(), keys) is None
+
+
+def test_build_refuses_evidence_from_before_statement_keys(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    qpath = tmp_path / "q.json"
+    qpath.write_text(json.dumps(QUESTION))
+    work = tmp_path / "data/cleaning/evidence/drug_target"
+    work.mkdir(parents=True)
+    old = {"key": ["C:A", "biolink:interacts_with", "P:1", "infores:dc"], "pmid": "111"}
+    (work / "evidence.jsonl").write_text(json.dumps({**old, "claim": "c", "based_on_text": False}))
+    (work / "answers.jsonl").write_text(json.dumps({**old, "choice": "x", "probabilities": {}}))
+    assert build.main([str(qpath)]) == 1
+    assert "rerun gather_evidence.py" in capsys.readouterr().out
