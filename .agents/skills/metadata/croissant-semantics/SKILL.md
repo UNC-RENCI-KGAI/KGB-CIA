@@ -56,7 +56,10 @@ workflow brings in the rest where they're needed.
 - `vocab.py ... --limit N`: the term you expect isn't in the first results of `class`, `search`,
   `identify`, `infores`, `associations` or `ols`.
 - `vocab.py names --file F`: more names than fit on a command line, such as a profiled column's
-  distinct values, one per line.
+  distinct values, one per line. Names go to NameRes 200 at a time; a chunk that fails is
+  retried smaller, and names whose lookup still fails are listed under `failed` in the output
+  (with `codes` and `unmapped`): run those again with `--file` and merge the codes, rather than
+  starting over. `--chunk N` changes the chunk size, for a service that rejects 200.
 - `vocab.py names --type biolink:Class`: a name could match more than one kind of thing
   ("heart" as anatomy or as a phenotype); give the class the column holds. Repeatable.
 - `check.py --no-data`: the data files can't be fetched from here (licence, size, network) and

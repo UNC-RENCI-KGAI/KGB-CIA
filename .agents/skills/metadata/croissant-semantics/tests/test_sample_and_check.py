@@ -1596,3 +1596,47 @@ def test_a_cached_validator_failure_keeps_its_text(tmp_path, monkeypatch):
     f = Findings()
     check.run_validate(str(croissant), f, 60)
     assert len(runs) == 2 and "no dataType" in f.items[0][2]
+
+
+def test_names_are_looked_up_in_chunks_and_a_bad_name_costs_only_itself(monkeypatch, capsys):
+    """eRAM's 8,879 names in one request were an HTTP error, and one chunk kept failing at 500,
+    100 and 10 names. Lookups go in chunks, a failed chunk is retried smaller, and the names that
+    still fail are reported so the run can be resumed with just those."""
+    import requests
+    import vocab
+
+    sizes = []
+
+    class Response:
+        def __init__(self, data, status=200):
+            self.data, self.status = data, status
+
+        def raise_for_status(self):
+            if self.status != 200:
+                raise requests.HTTPError(f"{self.status} Server Error")
+
+        def json(self):
+            return self.data
+
+    def post(url, json, timeout):
+        if url == vocab.NAMERES_URL:
+            sizes.append(len(json["strings"]))
+            if "bad name" in json["strings"]:
+                return Response(None, 500)
+            return Response(
+                {n: [{"curie": f"X:{n[-3:]}", "label": n, "synonyms": []}] for n in json["strings"]}
+            )
+        assert url == vocab.NODENORM_URL
+        return Response({c: {"id": {"identifier": c}} for c in json["curies"]})
+
+    monkeypatch.setattr(vocab.requests, "post", post)
+    names = [f"name {i:03d}" for i in range(450)]
+    names[300] = "bad name"
+    result = vocab.map_names(names, {"biolink_types": [], "limit": 20}, chunk=200)
+    assert result["failed"] == ["bad name"] and result["unmapped"] == []
+    assert len(result["codes"]) == 449 and result["codes"]["name 000"] == "X:000"
+    # 200, 200 (fails: 100, 100 (fails: 50, 50 ... 1, 1)), 50
+    assert sizes[:2] == [200, 200] and sizes[-1] == 50 and 1 in sizes and max(sizes) == 200
+    assert sum(1 for n in sizes if n == 1) <= 4
+    err = capsys.readouterr().err
+    assert "retrying as chunks of 100" in err and "lookup failed for 'bad name'" in err

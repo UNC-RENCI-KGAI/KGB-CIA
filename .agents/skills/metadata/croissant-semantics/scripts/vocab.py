@@ -690,22 +690,79 @@ def exact_match(name: str, hits: list[dict]) -> str | None:
     return None
 
 
-def resolved(curies: list[str]) -> set[str]:
-    """Which of these ids NodeNorm knows."""
-    known = set()
-    for start in range(0, len(curies), 500):
-        batch = curies[start : start + 500]
+def in_chunks(items: list, size: int, fetch, what: str = "items") -> tuple[list, list]:
+    """fetch(batch) over consecutive chunks of `size` items, with progress on stderr. A chunk
+    whose request fails (an HTTP error, a timeout) is retried as two smaller chunks, down to one
+    item, so one name the service chokes on, or one bad response, costs that item and not the
+    run. Returns (the results, in order; the items whose own request still failed)."""
+    results, failed = [], []
+    done = 0
+    for start in range(0, len(items), size):
+        batch = items[start : start + size]
+        try:
+            results.append(fetch(batch))
+        except requests.RequestException as e:
+            if len(batch) == 1:
+                failed += batch
+                print(f"[vocab] {what}: lookup failed for {batch[0]!r}: {e}", file=sys.stderr)
+            else:
+                half = (len(batch) + 1) // 2
+                print(
+                    f"[vocab] {what}: a chunk of {len(batch)} failed ({type(e).__name__}); "
+                    f"retrying as chunks of {half}",
+                    file=sys.stderr,
+                )
+                r, f = in_chunks(batch, half, fetch, what)
+                results += r
+                failed += f
+        done += len(batch)
+        if size >= 50 and len(items) > size:
+            print(f"[vocab] {what}: {done:,} of {len(items):,} looked up", file=sys.stderr)
+    return results, failed
+
+
+def resolved(curies: list[str], chunk: int = 500) -> tuple[set[str], list[str]]:
+    """(which of these ids NodeNorm knows, the ids whose lookup failed)."""
+
+    def fetch(batch):
         r = requests.post(NODENORM_URL, json={"curies": batch}, timeout=120)
         r.raise_for_status()
-        known |= {c for c, v in r.json().items() if v}
-    return known
+        return {c for c, v in r.json().items() if v}
+
+    results, failed = in_chunks(curies, chunk, fetch, "resolve")
+    return set().union(*results), failed
 
 
 def cmd_resolve(args) -> None:
-    known = resolved(args.curies)
+    known, failed = resolved(args.curies)
     print(f"{len(known)} of {len(args.curies)} resolve in NodeNorm")
     for curie in args.curies:
-        print(f"  {'yes' if curie in known else 'no '}  {curie}")
+        print(f"  {'?  ' if curie in failed else 'yes' if curie in known else 'no '}  {curie}")
+    if failed:
+        sys.exit(f"resolve: {len(failed)} lookups failed ('?' above); run those again")
+
+
+def map_names(names: list[str], body: dict, chunk: int = 200) -> dict:
+    """{codes: name -> id NodeNorm resolves, unmapped: names with no exact match, failed: names
+    whose lookup failed}. NameRes is asked `chunk` names at a time (8,879 in one request was an
+    HTTP error); a failed chunk is retried smaller, and the names that still fail are listed so a
+    second run can take just those, keeping this run's codes."""
+
+    def fetch(batch):
+        r = requests.post(NAMERES_URL, json={**body, "strings": batch}, timeout=120)
+        r.raise_for_status()
+        return {n: c for n, hits in r.json().items() if (c := exact_match(n, hits))}
+
+    results, failed = in_chunks(names, chunk, fetch, "names")
+    found = {n: c for r in results for n, c in r.items()}
+    known, unresolved = resolved(sorted(set(found.values())))
+    failed += [n for n, c in found.items() if c in unresolved]
+    codes = {n: c for n, c in found.items() if c in known}
+    return {
+        "codes": codes,
+        "unmapped": [n for n in names if n not in codes and n not in failed],
+        "failed": [n for n in names if n in set(failed)],
+    }
 
 
 def cmd_names(args) -> None:
@@ -716,20 +773,15 @@ def cmd_names(args) -> None:
     body = {"biolink_types": args.type, "limit": 20}
     if args.prefixes:
         body["only_prefixes"] = args.prefixes.replace(",", "|")
-    found = {}
-    for start in range(0, len(names), 100):
-        batch = names[start : start + 100]
-        r = requests.post(NAMERES_URL, json={**body, "strings": batch}, timeout=120)
-        r.raise_for_status()
-        for name, hits in r.json().items():
-            if curie := exact_match(name, hits):
-                found[name] = curie
-    known = resolved(sorted(set(found.values())))
-    codes = {n: c for n, c in found.items() if c in known}
-    result = {"codes": codes, "unmapped": [n for n in names if n not in codes]}
+    result = map_names(names, body, args.chunk)
     if args.json:
         Path(args.json).write_text(json.dumps(result, indent=1, ensure_ascii=False) + "\n")
-    print(f"{len(codes)} of {len(names)} names mapped")
+    print(f"{len(result['codes'])} of {len(names)} names mapped")
+    if result["failed"]:
+        print(
+            f"{len(result['failed'])} lookups failed (listed under 'failed'): run names again "
+            "with just those (--file), and merge the codes"
+        )
     if not args.json:
         print(json.dumps(result, indent=1, ensure_ascii=False))
 
@@ -969,7 +1021,8 @@ def main() -> None:
     p.add_argument("--file", help="one name per line")
     p.add_argument("--type", action="append", default=[], help="Biolink class, repeatable")
     p.add_argument("--prefixes", help="comma-separated, e.g. UBERON,CL")
-    p.add_argument("--json", help="write {codes, unmapped} to this file")
+    p.add_argument("--json", help="write {codes, unmapped, failed} to this file")
+    p.add_argument("--chunk", type=int, default=200, help="names per NameRes request (default 200)")
     p.set_defaults(fn=cmd_names)
     p = sub.add_parser("resolve", help="test whether ids resolve in NodeNorm")
     p.add_argument("curies", nargs="+")
