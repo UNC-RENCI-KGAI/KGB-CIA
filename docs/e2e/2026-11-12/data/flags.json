@@ -1,0 +1,45 @@
+{
+ "rows": [
+  {
+   "graph": "whole",
+   "flag": "type_violation",
+   "edges": 29243
+  },
+  {
+   "graph": "whole",
+   "flag": "unresolved_node",
+   "edges": 20112
+  },
+  {
+   "graph": "whole",
+   "flag": "self_loop",
+   "edges": 201
+  },
+  {
+   "graph": "whole",
+   "flag": "rare_category_combination",
+   "edges": 69
+  },
+  {
+   "graph": "cardiomyopathy",
+   "flag": "type_violation",
+   "edges": 605
+  },
+  {
+   "graph": "cardiomyopathy",
+   "flag": "unresolved_node",
+   "edges": 425
+  },
+  {
+   "graph": "cardiomyopathy",
+   "flag": "self_loop",
+   "edges": 6
+  }
+ ],
+ "meta": [
+  {
+   "label": "Source",
+   "value": "final cleaning_report.json for each graph (flags are kept on the edge, not dropped)"
+  }
+ ]
+}
