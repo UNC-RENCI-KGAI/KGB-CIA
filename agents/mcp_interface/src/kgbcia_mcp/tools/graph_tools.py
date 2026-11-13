@@ -76,16 +76,17 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
         predicate: str | None = None,
         neighbor_category: str | None = None,
         neighbor_where: dict[str, Any] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
         """Page through labeled neighbors and citable edge summaries for one node.
 
         Example: outgoing ``biolink:affects`` edges from ``NCBIGene:1017``.
-        Presentation Guidelines: report edge IDs, predicates, knowledge sources and publication
-        counts
-        verbatim; never paraphrase provenance. Next call ``explain_edge`` for every connection
-        used in an answer.
+        Presentation Guidelines: report edge IDs, predicates, knowledge sources, publication
+        counts and any flags verbatim; if an answer uses a flagged edge, say it is flagged and
+        give each reason verbatim, including any PMID. Next call ``explain_edge`` for every
+        connection used in an answer.
         """
 
         return _safe(
@@ -95,6 +96,7 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
             predicate,
             neighbor_category,
             neighbor_where,
+            exclude_flags,
             limit,
             offset,
         )
@@ -110,9 +112,10 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
         """Return every direct edge in either direction between two resolved nodes.
 
         Example: compare ``CHEBI:45783`` and ``NCBIGene:1017`` with lineage enabled.
-        Presentation Guidelines: cite knowledge sources, publications and source records
-        verbatim; never paraphrase provenance. With ``include_lineage=true`` this is the
-        one-call answer to "why?"; otherwise call ``explain_edge`` next.
+        Presentation Guidelines: cite knowledge sources, publications, source records and flags
+        verbatim; if an answer uses a flagged edge, say it is flagged and give each reason
+        verbatim, including any PMID. With ``include_lineage=true`` this is the one-call answer
+        to "why?"; otherwise call ``explain_edge`` next.
         """
 
         return _safe(
@@ -130,17 +133,22 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
         target_id: str,
         max_hops: int = 3,
         predicates: list[str] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
         """Find bounded shortest paths between two known nodes while avoiding hub intermediates.
 
         Example: paths from ``CHEBI:45783`` to ``MONDO:0005148`` within three hops.
-        Presentation Guidelines: preserve path direction, IDs and predicates and distinguish a
-        path from causal evidence. Next call ``get_edges_between(include_lineage=true)`` or
-        ``explain_edge`` for each claimed connection.
+        Presentation Guidelines: preserve path direction, IDs, predicates and flags, and
+        distinguish a path from causal evidence. If an answer uses a flagged hop, say it is
+        flagged and give each reason verbatim, including any PMID. Next call
+        ``get_edges_between(include_lineage=true)`` or ``explain_edge`` for each claimed
+        connection.
         """
 
-        return _safe(svc.find_paths, source_id, target_id, max_hops, predicates, limit)
+        return _safe(
+            svc.find_paths, source_id, target_id, max_hops, predicates, exclude_flags, limit
+        )
 
     @mcp.tool
     def find_connected_nodes(
@@ -149,12 +157,14 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
         max_hops: int = 2,
         predicates: list[str] | None = None,
         target_where: dict[str, Any] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
         """Find category-constrained nodes reachable by bounded, hub-filtered paths.
 
         Example: diseases reachable from ``CHEBI:45783`` via a target. Presentation Guidelines:
-        name every path predicate and do not infer causality from reachability. Next call
+        name every path predicate and flag, do not infer causality from reachability, and if an
+        answer uses a flagged edge give each reason verbatim, including any PMID. Next call
         ``get_edges_between(include_lineage=true)`` for each edge supporting the answer.
         """
 
@@ -165,6 +175,7 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
             max_hops,
             predicates,
             target_where,
+            exclude_flags,
             limit,
         )
 
@@ -174,9 +185,10 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
 
         Example: ``edge_id='edge-123'`` copied from a neighbor or path result.
         Presentation Guidelines: cite knowledge sources, publications, mapping files, columns,
-        constants and
-        source-record keys verbatim; label candidate matches as candidates and never paraphrase
-        provenance. Next call ``get_edges_between`` if endpoint context is needed.
+        constants, flags and source-record keys verbatim; label candidate matches as candidates
+        and never paraphrase provenance. If the edge has flags, say it is flagged and give each
+        reason verbatim, including any PMID. Next call ``get_edges_between`` if endpoint context
+        is needed.
         """
 
         return _safe(svc.explain_edge, edge_id)
@@ -193,12 +205,16 @@ def _safe(function: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]
                 "NEO4J_USER and NEO4J_PASSWORD; then restart the MCP server."
             ),
         }
-    except Neo4jUnavailable:
+    except Neo4jUnavailable as exc:
         return {
-            "error": "Neo4j unreachable",
+            "error": str(exc),
+            "cause": exc.cause,
+            "detail": exc.detail,
             "hint": (
-                "Check the Neo4j URI, credentials, network access, and service health; the MCP "
-                "server is still running."
+                "Neo4j returned a classified failure. For connection failures, check the URI, "
+                "network access, credentials if enabled, and service health. For timeouts or "
+                "query errors, narrow the request or rebuild artifacts so aggregate answers are "
+                "precomputed. The MCP server is still running."
             ),
         }
     except (ValueError, LookupError) as exc:

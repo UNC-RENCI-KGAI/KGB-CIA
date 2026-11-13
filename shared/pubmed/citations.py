@@ -10,11 +10,17 @@ from typing import Any
 _PMID_CURIE = re.compile(r"\s*PMID\s*:\s*([0-9]+)\s*", re.IGNORECASE)
 # PubMed article URLs, old and new: ncbi.nlm.nih.gov/pubmed/12345, pubmed.ncbi.nlm.nih.gov/12345/
 PUBMED_URL = re.compile(r"(?:ncbi\.nlm\.nih\.gov/pubmed/|pubmed\.ncbi\.nlm\.nih\.gov/)([0-9]+)")
+# A value that is one PubMed article URL and nothing else, as some sources write `publications`.
+_PUBMED_URL_ONLY = re.compile(
+    r"\s*(?:https?://)?(?:www\.)?" + PUBMED_URL.pattern + r"/?\s*", re.IGNORECASE
+)
 
 
 def pmid_of(value: str) -> str | None:
-    """'PMID:12345' -> '12345' ('pmid: 12345' too); anything that isn't a PubMed CURIE -> None."""
-    match = _PMID_CURIE.fullmatch(value)
+    """The PMID a citation names: 'PMID:12345' -> '12345' (the prefix in any case, 'pmid: 12345'
+    too), and a PubMed article URL -> its id ('https://pubmed.ncbi.nlm.nih.gov/12345/'), as
+    DrugCentral and GtoPdb write `publications`. Anything else -> None."""
+    match = _PMID_CURIE.fullmatch(value) or _PUBMED_URL_ONLY.fullmatch(value)
     return match.group(1) if match else None
 
 

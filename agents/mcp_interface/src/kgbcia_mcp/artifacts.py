@@ -32,6 +32,7 @@ class ArtifactBundle:
     graph_metadata: dict[str, Any]
     hubs: Any
     reports: tuple[TransformReport, ...]
+    description: dict[str, Any] | None = None
 
 
 def resolve_artifacts(
@@ -112,7 +113,9 @@ def load_artifacts(
     graph_metadata = _read_json_object(root / "graph_metadata.json")
     hubs = json.loads((root / "hubs.json").read_text())
     reports = tuple(TransformReport.model_validate_json(path.read_text()) for path in report_files)
-    return ArtifactBundle(root, manifest, graph_metadata, hubs, reports)
+    description_path = root / "description.json"
+    description = _read_json_object(description_path) if description_path.is_file() else None
+    return ArtifactBundle(root, manifest, graph_metadata, hubs, reports, description)
 
 
 def _validate_relative_path(value: str) -> str:

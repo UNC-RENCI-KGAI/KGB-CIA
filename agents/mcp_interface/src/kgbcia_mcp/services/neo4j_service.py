@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ FULLTEXT_INDEX_PROPERTIES = ("name", "synonym", "equivalent_identifiers")
 # Generated per relationship type; SHOW INDEXES confirmed these names and id properties.
 RELATIONSHIP_ID_INDEX_PREFIX = "kgbcia_relationship_id_"
 
+_LOG = logging.getLogger(__name__)
 _MAX_LIMIT = 500
 _MAX_FETCH = _MAX_LIMIT + 1
 _FORBIDDEN_CYPHER = re.compile(
@@ -38,7 +40,12 @@ class Neo4jNotConfigured(RuntimeError):
 
 
 class Neo4jUnavailable(RuntimeError):
-    """Raised when a configured Neo4j service cannot be reached."""
+    """Raised when a configured Neo4j read fails with a classified cause."""
+
+    def __init__(self, message: str, *, cause: str, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.detail = detail or message
 
 
 @dataclass(frozen=True)
@@ -61,6 +68,7 @@ class Neo4jService:
         lineage: LineageIndex | None = None,
         graph_metadata: Mapping[str, Any] | None = None,
         hubs: Iterable[str] = (),
+        build_description: Mapping[str, Any] | None = None,
     ) -> None:
         self._driver = driver
         self._uri = uri
@@ -70,6 +78,7 @@ class Neo4jService:
         self.lineage = lineage or LineageIndex()
         self.graph_metadata = dict(graph_metadata or {})
         self.hubs = tuple(hubs)
+        self.build_description = dict(build_description or {})
         self._cache: dict[str, Any] = {}
 
     def close(self) -> None:
@@ -94,7 +103,7 @@ class Neo4jService:
             else:
                 self._driver = GraphDatabase.driver(self._uri)
         except (Neo4jError, OSError, ValueError) as exc:
-            raise Neo4jUnavailable("Neo4j unreachable") from exc
+            raise _classify_neo4j_failure(exc) from exc
         return self._driver
 
     def execute_read(
@@ -152,98 +161,63 @@ class Neo4jService:
     def get_graph_info(self, *, refresh: bool = False) -> dict[str, Any]:
         if not refresh and (cached := self.cache_get("graph_info")) is not None:
             return cached
-        query = f"""
-        MATCH (n:`{NAMED_THING_LABEL}`)
-        WITH count(n) AS node_count
-        CALL {{ MATCH ()-[r]->() RETURN count(r) AS edge_count }}
-        CALL {{
-          MATCH (m:`{NAMED_THING_LABEL}`)
-          UNWIND labels(m) AS category
-          WITH category WHERE category <> $anchor
-          WITH category, count(*) AS count
-          RETURN collect({{category: category, count: count}}) AS categories
-        }}
-        CALL {{
-          MATCH ()-[q]->()
-          WITH type(q) AS predicate, count(*) AS count
-          RETURN collect({{predicate: predicate, count: count}}) AS predicates
-        }}
-        CALL {{
-          MATCH ()-[s]->()
-          RETURN collect(DISTINCT s.primary_knowledge_source) AS knowledge_sources
-        }}
-        RETURN node_count, edge_count, categories, predicates, knowledge_sources
-        """
-        rows = self.execute_read(query, {"anchor": NAMED_THING_LABEL}, row_limit=1).rows
-        info = (
-            dict(rows[0])
-            if rows
-            else {
-                "node_count": 0,
-                "edge_count": 0,
-                "categories": [],
-                "predicates": [],
-                "knowledge_sources": [],
-            }
-        )
-        info["graph_metadata"] = self.graph_metadata
+        stats = self._graph_statistics()
+        if stats is None:
+            return self._missing_statistics("get_graph_info")
+        info = {
+            "node_count": stats.get("node_count", 0),
+            "edge_count": stats.get("edge_count", 0),
+            "categories": list(stats.get("categories", [])),
+            "predicates": list(stats.get("predicates", [])),
+            "knowledge_sources": [
+                row.get("primary_knowledge_source")
+                for row in stats.get("primary_knowledge_sources", [])
+                if row.get("primary_knowledge_source")
+            ],
+            "primary_knowledge_sources": list(stats.get("primary_knowledge_sources", [])),
+            "flag_counts": list(stats.get("flag_counts", [])),
+            "graph_metadata": self.graph_metadata,
+        }
+        if self.build_description:
+            info["build"] = self.build_description
         self.cache_set("graph_info", info)
         return info
 
     def get_schema(self, *, refresh: bool = False) -> dict[str, Any]:
         if not refresh and (cached := self.cache_get("schema")) is not None:
             return cached
-        meta_query = f"""
-        MATCH (s:`{NAMED_THING_LABEL}`)-[r]->(o:`{NAMED_THING_LABEL}`)
-        UNWIND [x IN labels(s) WHERE x <> $anchor] AS subject_category
-        UNWIND [x IN labels(o) WHERE x <> $anchor] AS object_category
-        RETURN subject_category, type(r) AS predicate, object_category, count(*) AS count
-        ORDER BY count DESC LIMIT $limit
-        """
-        property_query = f"""
-        MATCH (n:`{NAMED_THING_LABEL}`)
-        UNWIND [x IN labels(n) WHERE x <> $anchor] AS category
-        UNWIND keys(n) AS property
-        WITH category, property, head(collect(n[property])) AS example
-        RETURN category, property, example LIMIT $limit
-        """
-        category_query = f"""
-        MATCH (n:`{NAMED_THING_LABEL}`)
-        UNWIND [x IN labels(n) WHERE x <> $anchor] AS category
-        RETURN DISTINCT category ORDER BY category SKIP $offset LIMIT $page_size
-        """
-        predicate_query = """
-        MATCH ()-[r]->()
-        RETURN DISTINCT type(r) AS predicate
-        ORDER BY predicate SKIP $offset LIMIT $page_size
-        """
-        property_name_query = f"""
-        MATCH (n:`{NAMED_THING_LABEL}`)
-        UNWIND [x IN labels(n) WHERE x <> $anchor] AS category
-        UNWIND keys(n) AS property
-        RETURN DISTINCT category, property
-        ORDER BY category, property SKIP $offset LIMIT $page_size
-        """
-        params = {"anchor": NAMED_THING_LABEL, "limit": _MAX_LIMIT}
-        meta = self.execute_read(meta_query, params).rows
-        properties = self.execute_read(property_query, params).rows
-        categories = sorted(row["category"] for row in self._execute_pages(category_query, params))
-        predicates = sorted(
-            row["predicate"] for row in self._execute_pages(predicate_query, params)
-        )
-        property_names: dict[str, list[str]] = {}
-        for row in self._execute_pages(property_name_query, params):
-            property_names.setdefault(row["category"], []).append(row["property"])
-        schema = {
-            "meta_graph": list(meta),
-            "meta_graph_truncated": len(meta) == _MAX_LIMIT,
-            "properties": list(properties),
-            "properties_truncated": len(properties) == _MAX_LIMIT,
-            "categories": categories,
-            "predicates": predicates,
-            "property_names": {
+        stats = self._graph_statistics()
+        if stats is None:
+            return self._missing_statistics("get_schema")
+        property_names = {
+            str(category): sorted({str(name) for name in names})
+            for category, names in dict(stats.get("property_names", {})).items()
+        }
+        if not property_names:
+            for row in stats.get("properties", []):
+                category = row.get("category")
+                name = row.get("property")
+                if category and name:
+                    property_names.setdefault(str(category), []).append(str(name))
+            property_names = {
                 category: sorted(set(names)) for category, names in property_names.items()
-            },
+            }
+        schema = {
+            "meta_graph": list(stats.get("meta_graph", [])),
+            "meta_graph_truncated": False,
+            "properties": list(stats.get("properties", [])),
+            "properties_truncated": False,
+            "edge_properties": list(stats.get("edge_properties", [])),
+            "categories": sorted(
+                row["category"] for row in stats.get("categories", []) if row.get("category")
+            ),
+            "predicates": sorted(
+                row["predicate"] for row in stats.get("predicates", []) if row.get("predicate")
+            ),
+            "property_names": property_names,
+            "flag_values": sorted(
+                row["flag"] for row in stats.get("flag_counts", []) if row.get("flag")
+            ),
         }
         self.cache_set("schema", schema)
         return schema
@@ -322,6 +296,7 @@ class Neo4jService:
         predicate: str | None = None,
         neighbor_category: str | None = None,
         neighbor_where: Mapping[str, Any] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -333,6 +308,7 @@ class Neo4jService:
         if neighbor_category:
             self._validate_name("category", neighbor_category)
         property_name, property_value = self._validate_where(neighbor_category, neighbor_where)
+        self._validate_flags(exclude_flags)
         resolved = self._resolve_node(node_id)
         if resolved["status"] != "found":
             return resolved
@@ -349,6 +325,10 @@ class Neo4jService:
             filters.append("$neighbor_category IN labels(neighbor)")
         if property_name:
             filters.append(f"neighbor.`{property_name}` = $neighbor_value")
+        if exclude_flags:
+            filters.append(
+                "NOT any(flag IN coalesce(r.kgbcia_flags, []) WHERE flag IN $exclude_flags)"
+            )
         where = f"WHERE {' AND '.join(filters)}" if filters else ""
         query = f"""
         MATCH (n:`{NAMED_THING_LABEL}` {{id: $id}}){pattern}
@@ -365,6 +345,7 @@ class Neo4jService:
             "predicate": predicate,
             "neighbor_category": neighbor_category,
             "neighbor_value": property_value,
+            "exclude_flags": exclude_flags or [],
             "offset": offset,
             "fetch": limit + 1,
         }
@@ -436,12 +417,14 @@ class Neo4jService:
         target_id: str,
         max_hops: int = 3,
         predicates: list[str] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
         if max_hops < 1 or max_hops > 4:
             raise ValueError("max_hops must be between 1 and 4")
         _validate_limit(limit)
         self._validate_predicates(predicates)
+        self._validate_flags(exclude_flags)
         source = self._resolve_node(source_id)
         if source["status"] != "found":
             return source
@@ -452,6 +435,7 @@ class Neo4jService:
             "source_id": source["node"]["id"],
             "target_id": target["node"]["id"],
             "predicates": predicates or [],
+            "exclude_flags": exclude_flags or [],
             "hubs": list(self.hubs),
             "limit": limit + 1,
         }
@@ -462,6 +446,9 @@ class Neo4jService:
             WHERE (size($predicates) = 0 OR
                    all(r IN relationships(p) WHERE type(r) IN $predicates))
               AND all(n IN nodes(p)[1..-1] WHERE NOT n.id IN $hubs)
+              AND (size($exclude_flags) = 0 OR
+                   all(r IN relationships(p) WHERE
+                       NOT any(flag IN coalesce(r.kgbcia_flags, []) WHERE flag IN $exclude_flags)))
             RETURN p AS path LIMIT $limit
             """
             rows = [
@@ -480,6 +467,7 @@ class Neo4jService:
         max_hops: int = 2,
         predicates: list[str] | None = None,
         target_where: Mapping[str, Any] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
         if max_hops < 1 or max_hops > 3:
@@ -487,6 +475,7 @@ class Neo4jService:
         _validate_limit(limit)
         self._validate_name("category", target_category)
         self._validate_predicates(predicates)
+        self._validate_flags(exclude_flags)
         property_name, property_value = self._validate_where(target_category, target_where)
         source = self._resolve_node(source_id)
         if source["status"] != "found":
@@ -497,6 +486,7 @@ class Neo4jService:
             "target_category": target_category,
             "target_value": property_value,
             "predicates": predicates or [],
+            "exclude_flags": exclude_flags or [],
             "hubs": list(self.hubs),
             "limit": limit + 1,
         }
@@ -508,6 +498,9 @@ class Neo4jService:
               AND (size($predicates) = 0 OR
                    all(r IN relationships(p) WHERE type(r) IN $predicates))
               AND all(n IN nodes(p)[1..-1] WHERE NOT n.id IN $hubs)
+              AND (size($exclude_flags) = 0 OR
+                   all(r IN relationships(p) WHERE
+                       NOT any(flag IN coalesce(r.kgbcia_flags, []) WHERE flag IN $exclude_flags)))
             RETURN target, p AS path LIMIT $limit
             """
             rows = list(self.execute_read(query, params, row_limit=limit + 1).rows)
@@ -541,7 +534,10 @@ class Neo4jService:
         return hubs
 
     def explain_edge(self, edge_id: str) -> dict[str, Any]:
-        predicates = self.get_schema()["predicates"]
+        schema = self.get_schema()
+        if "hint" in schema:
+            return schema
+        predicates = schema["predicates"]
         if not predicates:
             return {"hint": "The cached schema has no relationship types to search."}
         branches = []
@@ -593,6 +589,22 @@ class Neo4jService:
         )
         return _list_response(rows, limit)
 
+    def _graph_statistics(self) -> dict[str, Any] | None:
+        stats = self.graph_metadata.get("statistics")
+        if isinstance(stats, Mapping):
+            return dict(stats)
+        return None
+
+    def _missing_statistics(self, tool_name: str) -> dict[str, Any]:
+        return {
+            "hint": (
+                f"{tool_name} requires precomputed graph statistics in graph_metadata.json. "
+                "Rebuild the MCP artifacts with deploy/prepare_dump.sh; whole-graph aggregate "
+                "queries are intentionally not run against the deployed Neo4j service."
+            ),
+            "graph_metadata": self.graph_metadata,
+        }
+
     def _resolve_node(self, value: str) -> dict[str, Any]:
         response = self.search_nodes(value, limit=10)
         rows = response["results"]
@@ -613,6 +625,8 @@ class Neo4jService:
 
     def _validate_name(self, kind: str, value: str) -> None:
         schema = self.get_schema()
+        if "hint" in schema:
+            raise ValueError(schema["hint"])
         valid = schema["predicates" if kind == "predicate" else "categories"]
         if value not in valid:
             raise ValueError(f"unknown {kind} {value!r}; valid values: {', '.join(valid)}")
@@ -620,6 +634,19 @@ class Neo4jService:
     def _validate_predicates(self, predicates: list[str] | None) -> None:
         for predicate in predicates or []:
             self._validate_name("predicate", predicate)
+
+    def _validate_flags(self, flags: list[str] | None) -> None:
+        if not flags:
+            return
+        schema = self.get_schema()
+        if "hint" in schema:
+            raise ValueError(schema["hint"])
+        valid = schema.get("flag_values", [])
+        unknown = [flag for flag in flags if flag not in valid]
+        if unknown:
+            raise ValueError(
+                f"unknown quality flag {unknown[0]!r}; valid values: {', '.join(valid)}"
+            )
 
     def _validate_where(
         self, category: str | None, where: Mapping[str, Any] | None
@@ -657,9 +684,9 @@ class Neo4jService:
             with driver.session(**session_kwargs) as session:
                 return session.execute_read(callback)
         except Neo4jError as exc:
-            raise Neo4jUnavailable("Neo4j unreachable") from exc
+            raise _classify_neo4j_failure(exc) from exc
         except OSError as exc:
-            raise Neo4jUnavailable("Neo4j unreachable") from exc
+            raise _classify_neo4j_failure(exc) from exc
 
 
 def serialize_neo4j_value(value: Any) -> Any:
@@ -680,6 +707,7 @@ def serialize_neo4j_value(value: Any) -> Any:
             "publication_count": publication_count,
             **properties,
         }
+        result["flags"] = _quality_flags(result)
         if value.start_node is not None:
             result["subject"] = value.start_node.get(NODE_ID_PROPERTY)
         if value.end_node is not None:
@@ -702,6 +730,25 @@ def serialize_neo4j_value(value: Any) -> Any:
     if isinstance(value, (list, tuple, set, frozenset)):
         return [serialize_neo4j_value(item) for item in value]
     return value
+
+
+def _quality_flags(edge: Mapping[str, Any]) -> list[dict[str, Any]]:
+    flags = edge.get("kgbcia_flags", [])
+    reasons = edge.get("kgbcia_flag_reasons", [])
+    if not isinstance(flags, list):
+        flags = [flags] if flags else []
+    if not isinstance(reasons, list):
+        reasons = [reasons] if reasons else []
+    if len(flags) != len(reasons):
+        edge_id = edge.get("edge_id") or edge.get("id") or "<unknown>"
+        _LOG.warning("edge %s has mismatched kgbcia_flags and kgbcia_flag_reasons", edge_id)
+    paired = []
+    for index, flag in enumerate(flags):
+        if flag is None:
+            continue
+        reason = reasons[index] if index < len(reasons) else None
+        paired.append({"flag": str(flag), "reason": str(reason) if reason is not None else None})
+    return paired
 
 
 def _validate_limit(limit: int) -> None:
@@ -737,6 +784,20 @@ def _paged_response(rows: list[Any], limit: int, offset: int) -> dict[str, Any]:
     response["offset"] = offset
     response["total"] = offset + len(response["results"]) + (1 if response["truncated"] else 0)
     return response
+
+
+def _classify_neo4j_failure(exc: BaseException) -> Neo4jUnavailable:
+    code = str(getattr(exc, "code", "") or "")
+    detail = str(exc) or exc.__class__.__name__
+    combined = f"{code} {detail}".lower()
+    class_name = exc.__class__.__name__.lower()
+    if "timeout" in combined or "timed out" in combined:
+        return Neo4jUnavailable("Neo4j query timed out", cause="timeout", detail=detail)
+    if isinstance(exc, OSError) or "serviceunavailable" in class_name or "connection" in combined:
+        return Neo4jUnavailable(
+            "Neo4j connection failure", cause="connection_failure", detail=detail
+        )
+    return Neo4jUnavailable("Neo4j query error", cause="query_error", detail=detail)
 
 
 def _strip_literals_and_comments(cypher: str) -> str:
