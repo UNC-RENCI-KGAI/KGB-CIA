@@ -370,6 +370,12 @@ def test_predicates_come_from_the_rules_biolink_and_opposites():
     both = label.predicates_of(rules, ["chemical-treats-disease", "chemical-affects-gene"])
     assert set(both) == set(treats) | set(label.predicates_of(rules, ["chemical-affects-gene"]))
     assert label.predicates_of(rules, ["literature-co-occurrence"]) == ()
+    # A skip rule on the edge's provenance drops nothing: a text-mined `treats` edge is skipped,
+    # but a paper can still claim `treats`.
+    mined = scope.Rule(
+        id="mined", tier="skip", predicates=("biolink:treats",), agent_type=("text_mining_agent",)
+    )
+    assert set(label.predicates_of((mined, *rules), ["chemical-treats-disease"])) == set(treats)
 
 
 def test_predicates_read_from_the_rules_subject_to_its_object():
@@ -445,6 +451,33 @@ def test_prompt_version_covers_rules_effort_and_the_included_rules(tmp_path, mon
         f.write("\nOne more rule.\n")
     text, version = label.label_prompt(copy, MODEL)
     assert version != low and "One more rule." in text
+
+
+def test_provenance_rules_have_no_schema_and_leave_the_version_alone():
+    """A provenance rule names no predicates: it has no reply schema (its predicate enum would
+    be empty), a pair never names it, and adding one, in any tier, leaves the prompt version
+    and so the cached claims as they were. Only the statement rules that aren't skips make
+    the version, the same five as before provenance rules existed."""
+    statement_rules = tuple(r for r in scope.DEFAULT_RULES if not r.is_provenance)
+    more = (
+        scope.Rule(id="mined", tier="capped", agent_type=("text_mining_agent",)),
+        *scope.DEFAULT_RULES,
+        scope.Rule(id="co-mentioned", tier="query", knowledge_level=("text_co_occurrence",)),
+    )
+    schemas = label.rule_schemas(more)
+    assert set(schemas) == {
+        "chemical-treats-disease",
+        "chemical-affects-gene",
+        "gene-disease",
+        "gene-gene",
+        "gene-phenotype",
+    }
+    for schema in schemas.values():
+        assert schema.body["$defs"]["statement"]["properties"]["predicate"]["enum"]
+    assert label.predicates_of(more, ["mined"]) == ()
+    version = label.label_prompt(model=MODEL, rules=statement_rules)[1]
+    assert label.label_prompt(model=MODEL)[1] == version
+    assert label.label_prompt(model=MODEL, rules=more)[1] == version
 
 
 # --- Checks ---------------------------------------------------------------------------------
@@ -771,9 +804,12 @@ def test_abstracts_per_call_is_at_most_20(w, capsys):
     assert "at most 20 abstracts per call" in capsys.readouterr().err
 
 
-def test_pairs_without_pubmed_rules_or_abstracts_are_skipped(w):
+# A provenance rule names no predicates, so a pair naming one (select never writes one) has
+# none to offer from it.
+@pytest.mark.parametrize("unknown", ["no-such-rule", "text-mined"])
+def test_pairs_without_pubmed_rules_or_abstracts_are_skipped(w, unknown):
     pairs = list(records.read_records(w.work / records.PAIRS, Pair))
-    pairs[1] = pairs[1].model_copy(update={"rules": ["no-such-rule"]})
+    pairs[1] = pairs[1].model_copy(update={"rules": [unknown]})
     third = Pair(pair_id="A:1|B:1", nodes=("A:1", "B:1"), statement_ids=["s3"], rules=["gene-gene"])
     write_jsonl(w.work / records.PAIRS, [*pairs, third])
     w.write_pubmed(["1001", "9999"], ["2001"])

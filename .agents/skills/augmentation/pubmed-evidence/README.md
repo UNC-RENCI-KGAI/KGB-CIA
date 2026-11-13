@@ -71,21 +71,22 @@ new default, it is used with a warning that says how to move it.
 
 | Step | Main options (default) |
 | --- | --- |
-| `select` | `--rules FILE` (built-in rules), `--capped-limit` (10,000), `--min-score` (none) |
-| `pubmed` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm` |
-| `label` | `--model` (gpt-6-luna), `--reasoning-effort E` (the model's: low for gpt-6-luna), `--prompt FILE`, `--sample N --seed S` or `--pairs FILE`, `--dry-run`, `--no-repair`, `--abstracts-per-call` (20), `--workers` (8), `--limit N` |
+| `select` | `--rules FILE` (built-in rules), `--capped-limit` (10,000 pairs per capped rule: gene–gene, gene–phenotype, and the edges mined from the literature, which carry no publications for any other step to check), `--min-score` (none) |
+| `pubmed` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm`, `--without-key` (search more than 500 uncached pairs without `NCBI_API_KEY`; the step stops otherwise) |
+| `label` | `--model` (gpt-6-luna), `--reasoning-effort E` (the model's: low for gpt-6-luna), `--prompt FILE`, `--sample N --seed S` or `--pairs FILE`, `--dry-run` (with `--budget USD`: exit 1 over it), `--no-repair`, `--abstracts-per-call` (20), `--workers` (8), `--limit N` |
 | `ground` | `--refresh` |
 | `review` | `--model` (gpt-5.6-terra), `--reasoning-effort E`, `--prompt FILE`, `--limit N`, `--review-support-only` (off: `config.REVIEW_SUPPORT_ONLY`) |
 | `apply` | `--no-review` (for testing only), `--species-in-proposals` (off: `config.SPECIES_IN_PROPOSALS`), `--review-support-only` (off, as review), `--model`, `--prompt-version`, `--reviewer`, `--review-prompt-version` (default: from `label_run.json`) |
 | `evaluate` | `--gold FILE` (`<work>/gold.jsonl`), `--run MODEL[@PROMPT_VERSION]` (repeatable; default the run in `label_run.json`), `--species-in-proposals` (off, as apply); or `--draw N --seed S` (0) to draw the pairs to curate |
-| (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--max-label-cost`, `--skip-review` |
+| (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--max-label-cost` (label only the first pairs that fit), `--budget USD` (stop before labeling when the estimate is over it), `--skip-review` |
 
 Environment (the repository's `.env.example` lists every variable): `AZURE_OPENAI_API_KEY`
 for labeling and review with the Azure OpenAI models (not for `--dry-run`), and
 `AZURE_OPENAI_BASE_URL` to point them at your own endpoint; `ANTHROPIC_API_KEY` or an
 `ant auth login` profile with Claude models. Labeling also needs the review model's,
 `AZURE_OPENAI_API_KEY` by default, for the sentence repair pass. `NCBI_EMAIL`, and
-`NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search. `KGB_PUBMED_CACHE`
+`NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search (without it the
+step says so, and stops above 500 uncached searches unless `--without-key`). `KGB_PUBMED_CACHE`
 is the PubMed cache file, `shared.pubmed`'s, which every agent that reads PubMed shares
 (default `data/cache/pubmed/pubmed.sqlite`); an older `--cache-dir`'s `pubmed.sqlite` opens as it
 is, so move it there or point `KGB_PUBMED_CACHE` at it. `NAMERES_URL` points the ground step at

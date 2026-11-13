@@ -2,19 +2,45 @@
 them by node pair.
 
 An edge is checked when abstracts state its relationship as a claim that a paper could
-contradict (DESIGN.md, "Step 1: Which edges to query"). Rules pick edges by (subject category,
-predicate, object category), matching on Biolink ancestry so the child predicates and
-categories the transform picks are covered. The first rule that matches an edge decides:
+contradict (DESIGN.md, "Step 1: Which edges to query"). There are two kinds of rule.
+
+A *statement rule* names predicates. It picks edges by (subject category, predicate, object
+category), matching on Biolink ancestry so the child predicates and categories the transform
+picks are covered, and, if it lists them, by how the edge was made (its `knowledge_level` and
+`agent_type`). The first statement rule that matches an edge decides its tier:
 
 - `query` rules keep every matching edge.
 - `capped` rules (gene-gene, gene-phenotype) keep only their best-scored `--capped-limit` pairs,
-  after dropping statements below `--min-score` if given.
+  after dropping statements below `--min-score` if given; ties, unscored pairs included, go to
+  the pair with the most sources, then by a hash of the pair id (`cap_rank`).
 - `skip` rules keep nothing. They exist so the report can say which skip rule covered an
   edge type, and so an edge type no rule covers shows up as `unmatched`.
 
-A rule matches an edge in its own direction, and also reversed when the rule is `symmetric` or
-Biolink marks the edge's predicate symmetric (`interacts_with`, `binds`, ...), since a source
-may write either "A binds B" or "B binds A".
+A statement rule matches an edge in its own direction, and also reversed when the rule is
+`symmetric` or Biolink marks the edge's predicate symmetric (`interacts_with`, `binds`, ...),
+since a source may write either "A binds B" or "B binds A". One that lists knowledge levels or
+agent types matches only an edge whose own is among them.
+
+A *provenance rule* names knowledge levels or agent types and no predicates (nor a subject, an
+object or `symmetric`). It picks no edges by itself: it lowers the tier of the edges a
+statement rule picked (`decide`). When the statement rule isn't a skip, and the first
+provenance rule that the edge's knowledge level and agent type match has a tier no higher than
+the statement rule's (skip < capped < query), the edge takes the provenance rule's tier: a skip
+is reported as `skip:<provenance rule>`, and a capped edge goes into the provenance rule's own
+cap. Its statement still names its statement rule (`SelectedStatement.rule`), which sets the
+predicates the pair's claims may use, and names the provenance rule beside it
+(`SelectedStatement.provenance_rule`). A statement made of edges in the statement rule's own
+tier and edges a provenance rule lowered takes the higher tier, and no provenance rule; one
+whose kept edges were all lowered takes the highest tier among them, then the provenance rule
+first in rule order. Every kept edge counts in the statement's edges, sources, PMIDs and score.
+So order matters among statement rules, and among provenance rules, but not between the two.
+
+The default provenance rules cap edges mined from the literature (`text-co-occurrence` on
+`knowledge_level: text_co_occurrence`, `text-mined` on `agent_type: text_mining_agent`),
+whatever their predicate: eRAM writes a co-mention as `gene_associated_with_condition`. They
+carry no publications or supporting sentence, so this step is the only one that can check
+them, and it isn't circular: label asks whether an abstract states the relationship, not
+whether it mentions both entities. The cap bounds the cost. A rules file can still skip them.
 
 A negated source edge (`negated: true`) is kept like any other, as its own statement apart from
 the positive one. Nothing is narrower than a negated statement (`refine.Lattice.entails`), so
@@ -34,19 +60,24 @@ one `Pair` per unordered node pair and one `Entity` per node in a kept pair, in 
 `--rules FILE` replaces the built-in rules with a JSON list of objects (or `{"rules": [...]}`)
 with the same fields as `Rule`, in order of precedence:
 
-    [{"id": "gene-disease", "tier": "query",
+    [{"id": "text-mined", "tier": "capped", "agent_type": ["text_mining_agent"]},
+     {"id": "gene-disease", "tier": "query",
       "subject": ["biolink:GeneOrGeneProduct"],
       "predicates": ["biolink:gene_associated_with_condition", "biolink:causes"],
       "object": ["biolink:Disease"],
       "symmetric": false}]
 
 `subject` and `object` list Biolink categories (empty or left out: any node); `tier` is
-`query`, `capped` or `skip`; `symmetric` defaults to false.
+`query`, `capped` or `skip`; `symmetric` defaults to false; `knowledge_level` and `agent_type`
+list the Biolink values the edge's may take (empty or left out: any). A rule that leaves
+`predicates` out is a provenance rule: it must list a knowledge level or an agent type, and
+can't set `subject`, `object` or `symmetric`.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -56,7 +87,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from pubmed_evidence import biolink, config, records
 from pubmed_evidence.graphio import (
@@ -79,7 +110,7 @@ from pubmed_evidence.graphio import (
     write_jsonl,
 )
 from pubmed_evidence.records import Entity, Pair, SelectedStatement
-from shared.schema import Node
+from shared.schema import AgentType, KnowledgeLevel, Node
 
 STEP = "select"
 
@@ -104,21 +135,68 @@ SYNONYM_SLOTS = ("symbol", "synonym", "full_name")
 
 PROGRESS_EVERY = 1_000_000
 
+# A provenance rule lowers an edge's tier, never raises it: it applies when its tier is at most
+# the statement rule's.
+TIER_RANK = {"skip": 0, "capped": 1, "query": 2}
+
 
 class Rule(BaseModel):
-    """Which edges to keep (or name as skipped), by category and predicate ancestry."""
+    """A scope rule (module docstring). A statement rule names predicates, and keeps edges (or
+    names them skipped) by category and predicate ancestry, and by the edge's knowledge level
+    and agent type if it lists them. A provenance rule names only knowledge levels or agent
+    types, and lowers the tier of the edges a statement rule keeps."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str = Field(min_length=1)
     tier: Literal["query", "capped", "skip"]
     subject: tuple[str, ...] = Field(default=(), description="Categories; empty: any node")
-    predicates: tuple[str, ...] = Field(min_length=1)
+    predicates: tuple[str, ...] = Field(
+        default=(),
+        description="Empty: a provenance rule, which needs a knowledge_level or agent_type",
+    )
     object: tuple[str, ...] = Field(default=(), description="Categories; empty: any node")
     symmetric: bool = False
+    knowledge_level: tuple[KnowledgeLevel, ...] = Field(
+        default=(), description="The edge's knowledge_level is one of these; empty: any"
+    )
+    agent_type: tuple[AgentType, ...] = Field(
+        default=(), description="The edge's agent_type is one of these; empty: any"
+    )
+
+    @model_validator(mode="after")
+    def _names_something(self) -> Rule:
+        if not (self.predicates or self.knowledge_level or self.agent_type):
+            raise ValueError("a rule needs predicates, a knowledge_level or an agent_type")
+        if not self.predicates and (self.subject or self.object or self.symmetric):
+            raise ValueError(
+                "a provenance rule (one without predicates) can't set subject, object or symmetric"
+            )
+        return self
+
+    @property
+    def by_provenance(self) -> bool:
+        """Whether the rule matches on how the edge was made, not on its statement alone."""
+        return bool(self.knowledge_level or self.agent_type)
+
+    @property
+    def is_provenance(self) -> bool:
+        """A provenance rule: no predicates, so it picks no edges by itself (`decide`)."""
+        return not self.predicates
 
 
 DEFAULT_RULES: tuple[Rule, ...] = (
+    # Provenance rules: an edge mined from the literature (a co-mention, or a text-mining
+    # pipeline's reading of one) is capped, whatever statement rule keeps it. Such edges are the
+    # least trustworthy, and carry no publications or supporting sentence, so the cleaning
+    # stage's evidence check can't judge them: this step is the only one that can. Checking
+    # them isn't circular, since label asks whether an abstract states the relationship, not
+    # whether it mentions both entities. The cap bounds the cost: eRAM writes its co-mentions
+    # as `gene_associated_with_condition`, and in gene-disease's query tier they made 127,774
+    # of the Nov 12 2026 run's 131,195 pairs. Their place in this list doesn't matter, only
+    # their order between themselves.
+    Rule(id="text-co-occurrence", tier="capped", knowledge_level=("text_co_occurrence",)),
+    Rule(id="text-mined", tier="capped", agent_type=("text_mining_agent",)),
     # Two entities mentioned together isn't a claim, and checking co-mention against PubMed
     # would be circular. It is under `associated_with`, so it is skipped before the rules below.
     Rule(
@@ -228,7 +306,7 @@ def load_rules(path: Path) -> tuple[Rule, ...]:
         rules = tuple(Rule.model_validate(r) for r in data)
     except ValidationError as e:
         first = e.errors()[0]
-        where = ".".join(str(x) for x in first["loc"])
+        where = ".".join(str(x) for x in first["loc"]) or "(whole)"
         raise RulesError(f"rules file {path}: rule {where}: {first['msg']}") from e
     ids = [r.id for r in rules]
     if len(set(ids)) != len(ids):
@@ -245,14 +323,27 @@ def _side(categories: tuple[str, ...], allowed: tuple[str, ...]) -> bool:
     return not allowed or biolink.is_a(list(categories), list(allowed))
 
 
+def _made_as(rule: Rule, knowledge_level: str | None, agent_type: str | None) -> bool:
+    """Whether the edge's knowledge level and agent type are among the rule's (empty: any)."""
+    if rule.knowledge_level and knowledge_level not in rule.knowledge_level:
+        return False
+    return not rule.agent_type or agent_type in rule.agent_type
+
+
 def match_rule(
     rules: Iterable[Rule],
     subject_categories: tuple[str, ...],
     predicate: str,
     object_categories: tuple[str, ...],
+    knowledge_level: str | None = None,
+    agent_type: str | None = None,
 ) -> Rule | None:
-    """The first rule that matches the edge, in either direction where that is allowed."""
+    """The first statement rule that matches the edge, in either direction where that is
+    allowed. A rule that lists knowledge levels or agent types matches only an edge whose own is
+    among them. Provenance rules are passed over: `provenance_rule` finds those."""
     for rule in rules:
+        if rule.is_provenance or not _made_as(rule, knowledge_level, agent_type):
+            continue
         if not biolink.is_a(predicate, list(rule.predicates)):
             continue
         if _side(subject_categories, rule.subject) and _side(object_categories, rule.object):
@@ -265,6 +356,41 @@ def match_rule(
         ):
             return rule
     return None
+
+
+def provenance_rule(
+    rules: Iterable[Rule], knowledge_level: str | None, agent_type: str | None
+) -> Rule | None:
+    """The first provenance rule that the edge's knowledge level and agent type match."""
+    for rule in rules:
+        if rule.is_provenance and _made_as(rule, knowledge_level, agent_type):
+            return rule
+    return None
+
+
+def decide(
+    rules: Iterable[Rule],
+    subject_categories: tuple[str, ...],
+    predicate: str,
+    object_categories: tuple[str, ...],
+    knowledge_level: str | None = None,
+    agent_type: str | None = None,
+) -> tuple[Rule | None, Rule | None]:
+    """(statement rule, provenance rule) for an edge. The statement rule is the first that
+    matches it (`match_rule`), None if none does: the edge is unmatched. The provenance rule,
+    if any, sets the edge's tier instead of the statement rule: the first provenance rule the
+    edge's knowledge level and agent type match (`provenance_rule`), when the statement rule
+    isn't a skip and the provenance rule's tier is no higher than its (`TIER_RANK`)."""
+    rules = tuple(rules)
+    statement = match_rule(
+        rules, subject_categories, predicate, object_categories, knowledge_level, agent_type
+    )
+    if statement is None or statement.tier == "skip":
+        return statement, None
+    lower = provenance_rule(rules, knowledge_level, agent_type)
+    if lower is not None and TIER_RANK[lower.tier] <= TIER_RANK[statement.tier]:
+        return statement, lower
+    return statement, None
 
 
 def edge_score(edge_slots: dict[str, Any]) -> float | None:
@@ -336,6 +462,9 @@ class _Accumulator:
         "sources",
         "pmids",
         "score",
+        "own_edges",
+        "lowered_by",
+        "provenance",
     )
 
     def __init__(self, edge, rule: str):
@@ -349,13 +478,37 @@ class _Accumulator:
         self.sources: set[str] = set()
         self.pmids: set[str] = set()
         self.score: float | None = None
+        # Edges whose tier the statement rule set, and the provenance rules that set the rest.
+        self.own_edges = 0
+        self.lowered_by: set[str] = set()
+        # The provenance rule that sets the statement's tier, once `settle` has run.
+        self.provenance: str | None = None
 
-    def add(self, edge, score: float | None) -> None:
+    def add(self, edge, score: float | None, lowered_by: str | None = None) -> None:
         self.edges += 1
         self.sources.add(edge.primary_knowledge_source)
         self.pmids.update(p for p in map(pmid_of, edge.publications) if p)
         if score is not None and (self.score is None or score > self.score):
             self.score = score
+        if lowered_by is None:
+            self.own_edges += 1
+        else:
+            self.lowered_by.add(lowered_by)
+
+    def settle(self, rules: dict[str, Rule], order: dict[str, int]) -> None:
+        """Set the provenance rule that sets the statement's tier: none if the statement rule
+        set any of its edges' (its tier is then the higher); else the one with the highest
+        tier among those that lowered its edges, then the first in rule order."""
+        if self.own_edges or not self.lowered_by:
+            self.provenance = None
+            return
+        self.provenance = min(self.lowered_by, key=lambda r: (-TIER_RANK[rules[r].tier], order[r]))
+
+    @property
+    def owner(self) -> str:
+        """The rule whose tier, cap and report entry the statement takes: its provenance rule
+        if it has one, else its statement rule."""
+        return self.provenance or self.rule
 
     @property
     def pair_id(self) -> str:
@@ -373,6 +526,17 @@ def _read_categories(input_dir: Path) -> dict[str, tuple[str, ...]]:
     return out
 
 
+def cap_rank(pair: str, best: float | None, sources: int) -> tuple:
+    """A pair's sort key in a capped rule, first kept first: scored before unscored, the best
+    score of the rule's statements in it highest first, then the most distinct
+    `primary_knowledge_source`s among those statements, then the SHA-256 of the pair id, and
+    last the pair id. The hash, stable across runs and machines unlike `hash()`, spreads an
+    unscored cap over the graph: by pair id alone it would keep the pairs whose CURIEs sort
+    first, one prefix's."""
+    digest = hashlib.sha256(pair.encode("utf-8")).hexdigest()
+    return (best is None, -(best or 0.0), -sources, digest, pair)
+
+
 def _apply_caps(
     statements: dict[str, _Accumulator],
     rules: tuple[Rule, ...],
@@ -380,10 +544,13 @@ def _apply_caps(
     min_score: float | None,
 ) -> dict[str, dict[str, int]]:
     """Drop capped-rule statements below `min_score`, then all but the top `capped_limit`
-    pairs of each capped rule. Returns what was dropped, per rule."""
+    pairs of each capped rule. A statement is in the cap of its provenance rule if it has one,
+    else of its statement rule (`_Accumulator.owner`). Every pair in the rule's statements
+    counts against its cap, a pair another rule keeps too: the statements kept widen what
+    review sends. Returns what was dropped, per rule."""
     by_rule: dict[str, list[str]] = defaultdict(list)
     for sid, acc in statements.items():
-        by_rule[acc.rule].append(sid)
+        by_rule[acc.owner].append(sid)
     dropped: dict[str, dict[str, int]] = {}
     for rule in rules:
         if rule.tier != "capped":
@@ -401,16 +568,17 @@ def _apply_caps(
             sids = [s for s in sids if s in statements]
         pairs: dict[str, list[str]] = defaultdict(list)
         best: dict[str, float | None] = {}
+        sources: dict[str, set[str]] = defaultdict(set)
         for sid in sids:
             acc = statements[sid]
             pairs[acc.pair_id].append(sid)
+            sources[acc.pair_id] |= acc.sources
             old = best.get(acc.pair_id)
             if acc.score is not None and (old is None or acc.score > old):
                 best[acc.pair_id] = acc.score
             else:
                 best.setdefault(acc.pair_id, old)
-        # Best-scored first, unscored last, then by pair id so ties are deterministic.
-        ranked = sorted(pairs, key=lambda p: (best[p] is None, -(best[p] or 0.0), p))
+        ranked = sorted(pairs, key=lambda p: cap_rank(p, best[p], len(sources[p])))
         for pid in ranked[max(capped_limit, 0) :]:
             counts["cap_pairs"] += 1
             for sid in pairs[pid]:
@@ -431,14 +599,14 @@ def select(
     """Run step 1: write the work files and return the scope report."""
     rules = load_rules(rules_file) if rules_file is not None else DEFAULT_RULES
     order = {r.id: i for i, r in enumerate(rules)}
+    by_id = {r.id: r for r in rules}
     # Nodes are read twice: categories now, since rules match on them as edges stream past,
     # and full records at the end, only for the nodes of kept pairs.
     categories = _read_categories(input_dir)
 
-    matches: dict[tuple, Rule | None] = {}
+    matches: dict[tuple, tuple[Rule | None, Rule | None]] = {}
     statements: dict[str, _Accumulator] = {}
     skipped: Counter[tuple[str, str, str, str]] = Counter()
-    matched_edges: Counter[str] = Counter()
     edges_read = earlier = missing = 0
     invalid = InvalidEdges()
     for edges_read, row in enumerate(read_jsonl(graph_file(input_dir, EDGES)), 1):
@@ -455,22 +623,25 @@ def select(
         if s_cats is None or o_cats is None:
             missing += 1
             continue
-        key = (s_cats, edge.predicate, o_cats)
+        key = (s_cats, edge.predicate, o_cats, edge.knowledge_level, edge.agent_type)
         if key not in matches:
-            matches[key] = match_rule(rules, s_cats, edge.predicate, o_cats)
-        rule = matches[key]
-        if rule is None or rule.tier == "skip":
-            label = f"skip:{rule.id}" if rule else "unmatched"
+            matches[key] = decide(rules, *key)
+        rule, lowered_by = matches[key]
+        if rule is None or (lowered_by or rule).tier == "skip":
+            label = f"skip:{(lowered_by or rule).id}" if rule else "unmatched"
             first = (s_cats[0] if s_cats else "", edge.predicate, o_cats[0] if o_cats else "")
             skipped[(*first, label)] += 1
             continue
-        matched_edges[rule.id] += 1
         sid = edge_statement_id(edge)
         acc = statements.get(sid)
         if acc is None:
             acc = statements[sid] = _Accumulator(edge, rule.id)
-        acc.add(edge, edge_score(extras(edge)))
-    matched_statements = Counter(acc.rule for acc in statements.values())
+        acc.add(edge, edge_score(extras(edge)), lowered_by.id if lowered_by else None)
+    matched_edges: Counter[str] = Counter()
+    for acc in statements.values():
+        acc.settle(by_id, order)
+        matched_edges[acc.owner] += acc.edges
+    matched_statements = Counter(acc.owner for acc in statements.values())
 
     dropped = _apply_caps(statements, rules, capped_limit, min_score)
 
@@ -501,6 +672,7 @@ def select(
             qualifiers=acc.qualifiers,
             negated=acc.negated,
             rule=acc.rule,
+            provenance_rule=acc.provenance,
             edge_count=acc.edges,
             sources=sorted(acc.sources),
             source_pmids=sorted(acc.pmids, key=pmid_key),
@@ -517,13 +689,15 @@ def select(
     write_jsonl(work / records.STATEMENTS, statement_records)
     write_jsonl(work / records.PAIRS, pairs)
 
+    # A statement counts under its provenance rule if it has one, so a statement rule's counts
+    # leave out the statements a provenance rule took.
     per_rule: dict[str, dict[str, Any]] = {}
     for rule in rules:
         if rule.tier == "skip":
             n = sum(c for k, c in skipped.items() if k[3] == f"skip:{rule.id}")
             per_rule[rule.id] = {"tier": rule.tier, "skipped_edges": n}
             continue
-        kept = [s for s in statement_records if s.rule == rule.id]
+        kept = [s for s in statement_records if (s.provenance_rule or s.rule) == rule.id]
         entry: dict[str, Any] = {
             "tier": rule.tier,
             "matched_edges": matched_edges[rule.id],
@@ -615,7 +789,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--capped-limit",
         type=int,
         default=config.CAPPED_LIMIT,
-        help=f"pairs kept per capped rule (gene-gene, gene-phenotype), best-scored first "
+        help=f"pairs kept per capped rule (gene-gene, gene-phenotype, and text-co-occurrence "
+        f"and text-mined for edges mined from the literature), best-scored first "
         f"(default {config.CAPPED_LIMIT:,})",
     )
     parser.add_argument(

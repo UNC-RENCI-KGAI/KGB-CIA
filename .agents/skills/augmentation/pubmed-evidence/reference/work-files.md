@@ -38,12 +38,13 @@ Fields by file:
   `symbol`, `synonym` and `full_name`, without the name).
 - **`statements.jsonl`** (`SelectedStatement`): `statement_id`, `pair_id`, `subject`, `predicate`,
   `object`, `qualifiers` (the edge's `qualified_predicate` and `*_qualifier` slots), `negated`,
-  `rule`, `edge_count` (input edges making it), `sources` (their
-  `primary_knowledge_source`s), `source_pmids` (PMIDs in their `publications`), `score`
-  (capped rules; may be absent).
+  `rule` (the statement rule that kept it), `provenance_rule` (the provenance rule that set its
+  tier and cap, when one lowered every kept edge making it; absent otherwise), `edge_count`
+  (input edges making it), `sources` (their `primary_knowledge_source`s), `source_pmids` (PMIDs
+  in their `publications`), `score` (capped rules; may be absent).
 - **`pairs.jsonl`** (`Pair`): `pair_id`, `nodes` (sorted), `statement_ids`, `source_pmids`
-  (union of its statements'), `rules` (the scope rules its statements matched, which set the
-  predicates its claims may use).
+  (union of its statements'), `rules` (the statement rules its statements matched, never a
+  provenance rule, which set the predicates its claims may use).
 - **`pubmed.jsonl`** (`PubmedRecord`): `pair_id`; `query` (`""` for a pair not searched because a
   node has no usable name, kept for its source PMIDs); `retrieved` (ISO date of the search);
   `total` (ESearch hit count); `synonyms` and `mesh` (node id → the `[tiab]` terms and `[mh]`
@@ -119,7 +120,8 @@ Fields by file:
 - **`gold_pairs.jsonl`**: one line per pair `evaluate --draw` drew, in the order drawn, from
   the refined pairs with at least one abstract read (the draw prints how many it left out):
   `pair_id`, the stratum it was drawn for (`outcome`: `unsupported`, `supported` or `refined`;
-  and `family`, the id of the scope rule that kept the edge, or its predicate if none matches),
+  and `family`, the id of the statement rule that kept the edge, or its predicate if none
+  matches),
   and `edges` (each refined edge of the pair: its id and outcome). `label --pairs` reads the
   `pair_id`s.
 - **`evaluate_report.md`**:
@@ -217,8 +219,8 @@ cache's years, publication types and groundings, the UBERON file, the graph,
   SHA-256(prompt text + "\0" + extra)>`, e.g. `label@2fc040f2`. The prompt text has each
   `{{include NAME}}` line replaced by the file it names (`claim-rules.md`: beside the prompt,
   else the skill's `prompts/`). `extra` is the step's `FORMAT_VERSION`, its reply schema (for
-  label, every non-skip scope rule's schema) and the reasoning effort sent, so answers made at
-  one effort are never reused at another. `FORMAT_VERSION` is the version of the request layout
+  label, every scope rule's schema; skip and provenance rules have none) and the reasoning
+  effort sent, so answers made at one effort are never reused at another. `FORMAT_VERSION` is the version of the request layout
   the code builds: `label-message-5` in `label.py`, `review-message-5` in `review.py` and
   `repair-message-2` in `repair.py`. Any edit to a prompt file or a schema starts fresh
   answers (or reviews, or repairs); bump `FORMAT_VERSION` when the code that writes the request

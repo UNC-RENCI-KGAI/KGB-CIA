@@ -268,8 +268,9 @@ def family_of(
     rules: Sequence[scope.Rule],
     categories: Mapping[str, Sequence[str]],
 ) -> str:
-    """A refined edge's predicate family: the id of the scope rule that kept it, matched as
-    select matches it on its nodes' categories; its predicate if none matches."""
+    """A refined edge's predicate family: the id of the statement rule that kept it, matched as
+    select matches it on its nodes' categories (never a provenance rule, which only sets a
+    tier); its predicate if none matches."""
     subject, object = statement["subject"], statement["object"]
     rule = scope.match_rule(
         rules,
