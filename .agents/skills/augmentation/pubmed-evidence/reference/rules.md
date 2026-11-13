@@ -18,12 +18,14 @@ Each edge is decided in three steps:
 
 1. Its **statement rule** is the first statement rule that matches it. If none does, the edge
    is `unmatched`. If it is a skip rule, the edge is skipped as `skip:<statement rule>`,
-   whatever its provenance: a text-mined GO `located_in` edge is `skip:pathway-go`.
+   whatever its provenance: a text-mined GO `participates_in` edge is `skip:pathway-go`. (A
+   text-mined `located_in` edge is caught first, by `text-mined-location`.)
 2. Otherwise, if the first provenance rule whose knowledge levels and agent types the edge's
-   are among has a tier no higher than the statement rule's (skip < capped < query), the edge
-   takes that tier: a `skip` provenance rule skips it as `skip:<provenance rule>`, and a
+   are among has a tier strictly lower than the statement rule's (skip < capped < query), the
+   edge takes that tier: a `skip` provenance rule skips it as `skip:<provenance rule>`, and a
    `capped` one puts it in the provenance rule's own cap (below). A provenance rule never
-   raises a tier.
+   raises a tier, and never moves an edge between caps: an edge a capped statement rule keeps
+   stays in that rule's cap.
 3. Otherwise the statement rule's tier applies.
 
 So order matters among statement rules, and among provenance rules (the first that matches
@@ -82,11 +84,23 @@ shows as `unmatched`.
 | `gene-disease` | query | GeneOrGeneProduct | `associated_with`, `contributes_to` | Disease | | |
 | `gene-gene` | capped | GeneOrGeneProduct | `physically_interacts_with`, `interacts_with` | GeneOrGeneProduct | yes | |
 | `gene-phenotype` | capped | GeneOrGeneProduct | `has_phenotype` | PhenotypicFeature | | |
+| `text-mined-location` | capped | GeneOrGeneProduct | `located_in` | CellularComponent | | `knowledge_level: text_co_occurrence` |
 | `pathway-go` | skip | GeneOrGeneProduct | `participates_in`, `enables`, `located_in` | BiologicalProcessOrActivity, CellularComponent | | |
 | `expression` | skip | GeneOrGeneProduct | `expressed_in` | AnatomicalEntity | | |
 | `by-construction` | skip | any | `orthologous_to`, `has_part`, `part_of`, `subclass_of`, `superclass_of`, `member_of`, `has_member` | any | yes | |
 
 All CURIEs are `biolink:`. Notes:
+
+- **`text-mined-location`** caps JensenLab COMPARTMENTS' text-mining layer: about 5M
+  protein–GO `located_in` pairs in the Nov 9 2026 graph, each with a `has_confidence_score`
+  (0.5 to 4.0). It comes before `pathway-go`, which would otherwise skip them with the curated
+  GO annotations, and it is a statement rule, so its pairs have a cap of their own rather than
+  filling the `text-co-occurrence` cap that DISEASES' gene–disease edges use. Its reply schema
+  (`located_in`) is part of the label prompt version, so adding it changed the version, and
+  claims cached under the old one aren't reused. Open (#97): JensenLab propagates scores up the
+  GO tree, so best-first fills the cap with near-root terms (`cellular_component`,
+  `organelle`) that no paper can contradict; a floor on the GO term's information content is
+  proposed.
 
 - **`gene-disease`** names two roots. `associated_with` covers `gene_associated_with_condition`,
   `genetically_associated_with`, `genetic_association`, the likelihood predicates

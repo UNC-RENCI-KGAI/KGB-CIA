@@ -394,7 +394,7 @@ def test_match_rule_honours_knowledge_level_and_agent_type():
 
 def test_a_provenance_rule_lowers_the_tier_its_statement_rule_set():
     """A provenance rule picks no edge itself; it applies to the edges a statement rule keeps,
-    when its tier is no higher, and its place among the statement rules doesn't matter."""
+    when its tier is strictly lower, and its place among the statement rules doesn't matter."""
     gene_disease = scope.Rule(
         id="gene-disease",
         tier="query",
@@ -430,8 +430,12 @@ def test_a_provenance_rule_lowers_the_tier_its_statement_rule_set():
     # A provenance rule never raises a tier, and the first one that matches decides.
     rules = (raise_, mined, gene_gene)
     assert decide(rules, gene, "biolink:interacts_with", gene) == ("gene-gene", None)
+    # Nor keeps it: a capped statement rule keeps its own cap rather than joining a capped
+    # provenance rule's, but a skip provenance rule still lowers it.
     rules = (mined, raise_, gene_gene)
-    assert decide(rules, gene, "biolink:interacts_with", gene) == ("gene-gene", "mined")
+    assert decide(rules, gene, "biolink:interacts_with", gene) == ("gene-gene", None)
+    drop = scope.Rule(id="drop", tier="skip", knowledge_level=("text_co_occurrence",))
+    assert decide((drop, gene_gene), gene, "biolink:interacts_with", gene) == ("gene-gene", "drop")
 
 
 def _rules_file(directory: Path, rules: list[dict]) -> Path:
@@ -543,18 +547,26 @@ def test_a_capped_provenance_rule_keeps_its_best_scored_pairs(tmp_path):
     assert set(pairs) == kept
 
 
-def test_a_text_mined_go_edge_is_skipped_by_its_statement_rule(tmp_path):
-    """A skip statement rule names the edges it skips whatever their provenance."""
+def test_text_mined_locations_are_capped_and_curated_go_stays_skipped(tmp_path):
+    """COMPARTMENTS' text-mined `located_in` edges go to text-mined-location's own cap, not the
+    text-co-occurrence cap DISEASES' edges share; a curated one, and a text-mined edge
+    pathway-go names with another predicate, are still skip:pathway-go."""
     nodes = [
         Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
         Node(id="GO:0005634", category=["biolink:CellularComponent"], name="nucleus"),
+        Node(id="GO:0006915", category=["biolink:BiologicalProcess"], name="apoptosis"),
     ]
-    edge = _edge("NCBIGene:1", "biolink:located_in", "GO:0005634", **MINED)
-    report, statements, _, _ = _run(_graph(tmp_path / "g", nodes, [edge]), tmp_path / "work")
-    assert statements == []
-    [skipped] = report["skipped"]
-    assert (skipped["rule"], skipped["edges"]) == ("skip:pathway-go", 1)
-    assert report["rules"]["pathway-go"] == {"tier": "skip", "skipped_edges": 1}
+    edges = [
+        _edge("NCBIGene:1", "biolink:located_in", "GO:0005634", **MINED),
+        _edge("NCBIGene:1", "biolink:located_in", "GO:0005634", **CURATED),
+        _edge("NCBIGene:1", "biolink:participates_in", "GO:0006915", **MINED),
+    ]
+    report, statements, _, _ = _run(_graph(tmp_path / "g", nodes, edges), tmp_path / "work")
+    [kept] = statements
+    assert (kept.rule, kept.provenance_rule, kept.edge_count) == ("text-mined-location", None, 1)
+    assert report["rules"]["text-mined-location"]["matched_edges"] == 1
+    assert report["rules"]["pathway-go"] == {"tier": "skip", "skipped_edges": 2}
+    assert report["rules"]["text-co-occurrence"]["matched_edges"] == 0
 
 
 def test_rules_file_can_match_on_provenance(toy_graph, tmp_path):

@@ -89,6 +89,7 @@ contradict it.
 | Query | Gene → `associated_with` (and everything below it: `gene_associated_with_condition`, `genetically_associated_with`, `associated_with_increased_likelihood_of`, `correlated_with`, `biomarker_for`, ...), `contributes_to` (and `causes`) → Disease | DisGeNET, JensenLab, OMIM, Monarch (ClinGen), GWAS Catalog |
 | Query, capped | Gene ↔ `physically_interacts_with`, `interacts_with` ↔ Gene | STRING, BioPlex, Reactome |
 | Query, capped | Gene → `has_phenotype` → PhenotypicFeature | IMPC, MGI, HPO via Monarch |
+| Capped | Gene → `located_in` → CellularComponent, text-mined only (`text_co_occurrence`) | JensenLab COMPARTMENTS |
 | Skip | Gene → `participates_in` → Pathway; Gene → `enables`, `participates_in`, `located_in` → GO terms | Reactome, KEGG, WikiPathways, GO |
 | Skip | Gene → `expressed_in` → AnatomicalEntity/Cell | GTEx, HPA, Jensen TISSUES |
 | Skip | `orthologous_to`, `has_part`, `subclass_of`, `member_of` | Orthologs, Pfam, PANTHER, DTO |
@@ -118,8 +119,10 @@ Group the kept edges by unordered node pair, since one search serves edges in bo
 
 - **Two kinds of rule:** a statement rule names predicates and picks edges by what they say;
   a provenance rule names only a knowledge level or an agent type, and lowers the tier of the
-  edges a statement rule picked, never raising it. A skip statement rule wins over any
-  provenance rule (a text-mined GO edge is skipped as `pathway-go`). An edge a provenance rule
+  edges a statement rule picked to a strictly lower tier, never raising it or moving it to
+  another cap. A skip statement rule wins over any provenance rule (a text-mined GO
+  `participates_in` edge is skipped as `pathway-go`; text-mined locations have their own
+  capped rule, `text-mined-location`, before it). An edge a provenance rule
   lowers keeps its statement rule, whose predicates its pair's claims may use, so a provenance
   rule changes no reply schema and no prompt version. A statement with edges in its statement
   rule's own tier and lowered edges takes the higher tier; every edge counts in its sources,

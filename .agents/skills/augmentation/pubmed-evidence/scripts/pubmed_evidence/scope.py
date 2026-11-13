@@ -24,7 +24,7 @@ agent types matches only an edge whose own is among them.
 A *provenance rule* names knowledge levels or agent types and no predicates (nor a subject, an
 object or `symmetric`). It picks no edges by itself: it lowers the tier of the edges a
 statement rule picked (`decide`). When the statement rule isn't a skip, and the first
-provenance rule that the edge's knowledge level and agent type match has a tier no higher than
+provenance rule that the edge's knowledge level and agent type match has a tier lower than
 the statement rule's (skip < capped < query), the edge takes the provenance rule's tier: a skip
 is reported as `skip:<provenance rule>`, and a capped edge goes into the provenance rule's own
 cap. Its statement still names its statement rule (`SelectedStatement.rule`), which sets the
@@ -135,8 +135,8 @@ SYNONYM_SLOTS = ("symbol", "synonym", "full_name")
 
 PROGRESS_EVERY = 1_000_000
 
-# A provenance rule lowers an edge's tier, never raises it: it applies when its tier is at most
-# the statement rule's.
+# A provenance rule lowers an edge's tier, never raises it or keeps it: it applies only when its
+# tier is strictly below the statement rule's, so a capped statement rule keeps its own cap.
 TIER_RANK = {"skip": 0, "capped": 1, "query": 2}
 
 
@@ -251,6 +251,19 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         subject=(GENE,),
         predicates=("biolink:has_phenotype",),
         object=("biolink:PhenotypicFeature",),
+    ),
+    # Text-mined subcellular locations (JensenLab COMPARTMENTS' text-mining layer: about 5M
+    # protein-GO pairs in the Nov 9 2026 graph, each with a has_confidence_score). Unlike a
+    # curated GO annotation, nothing else checks them, so they are capped here, ahead of
+    # pathway-go, in a cap of their own: the text-co-occurrence provenance rule has the same
+    # tier, so it doesn't take them into the cap it keeps for DISEASES' gene-disease edges.
+    Rule(
+        id="text-mined-location",
+        tier="capped",
+        subject=(GENE,),
+        predicates=("biolink:located_in",),
+        object=("biolink:CellularComponent",),
+        knowledge_level=("text_co_occurrence",),
     ),
     # Pathway and GO names rarely appear verbatim in abstracts, and GO annotations carry their
     # own references and evidence codes. Pathway is below BiologicalProcessOrActivity.
@@ -380,7 +393,8 @@ def decide(
     matches it (`match_rule`), None if none does: the edge is unmatched. The provenance rule,
     if any, sets the edge's tier instead of the statement rule: the first provenance rule the
     edge's knowledge level and agent type match (`provenance_rule`), when the statement rule
-    isn't a skip and the provenance rule's tier is no higher than its (`TIER_RANK`)."""
+    isn't a skip and the provenance rule's tier is lower than its (`TIER_RANK`). A capped
+    statement rule is never lowered to a capped provenance rule, so it keeps its own cap."""
     rules = tuple(rules)
     statement = match_rule(
         rules, subject_categories, predicate, object_categories, knowledge_level, agent_type
@@ -388,7 +402,7 @@ def decide(
     if statement is None or statement.tier == "skip":
         return statement, None
     lower = provenance_rule(rules, knowledge_level, agent_type)
-    if lower is not None and TIER_RANK[lower.tier] <= TIER_RANK[statement.tier]:
+    if lower is not None and TIER_RANK[lower.tier] < TIER_RANK[statement.tier]:
         return statement, lower
     return statement, None
 
