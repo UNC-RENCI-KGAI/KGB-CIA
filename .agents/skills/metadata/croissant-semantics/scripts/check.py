@@ -248,7 +248,12 @@ def check_plan(plan: dict, f: Findings, model: dict | None) -> None:
                 f.error(
                     where, f"id prefix {spec['id_prefix']} is not declared in the plan's prefixes"
                 )
-            undeclared = [v for v in (spec.get("prefix_codes") or {}).values() if v not in declared]
+            # a key mapped to null means "not ids in any namespace" (plan-format.md), not a prefix
+            undeclared = [
+                v
+                for v in (spec.get("prefix_codes") or {}).values()
+                if v is not None and v not in declared
+            ]
             if undeclared:
                 f.error(
                     where,

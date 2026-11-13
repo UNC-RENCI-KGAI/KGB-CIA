@@ -1526,3 +1526,25 @@ def test_item_pattern_is_matched_whole_like_the_runtime():
     f = Findings()
     check_item_pattern([{"k": "ko:K00001"}], "k", spec, "l k", f)
     assert f.items == []
+
+
+def test_a_null_prefix_code_is_not_an_undeclared_prefix():
+    """plan-format.md says to map a prefix_codes key to null when its values aren't ids in any
+    namespace; the plan check reported that null as a prefix not declared (ClinVar's agent had to
+    explain two false errors away)."""
+    errs, _ = errors(
+        plan_with(
+            columns={
+                "xref": {
+                    "property": "biolink:xref",
+                    "id_form": "mixed",
+                    "prefix_column": "source",
+                    "prefix_codes": {"NCBI": "NCBIGene", "Free text": None, "Other": "OTHER"},
+                    "source": "agent",
+                    "confidence": "high",
+                }
+            }
+        )
+    )
+    undeclared = [e for e in errs if "prefix_codes uses prefixes not declared" in e]
+    assert len(undeclared) == 1 and "OTHER" in undeclared[0] and "None" not in undeclared[0]
