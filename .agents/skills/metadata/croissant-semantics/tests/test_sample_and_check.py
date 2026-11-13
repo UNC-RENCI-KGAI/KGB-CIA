@@ -1489,3 +1489,154 @@ def test_a_plans_own_proposed_id_may_appear_in_layouts():
     f = Findings()
     check.check_infores(plan, f, {})
     assert not [m for level, _, m in f.items if level == "error"]
+
+
+def test_item_pattern_is_matched_whole_like_the_runtime():
+    """orion_runtime.py applies item_pattern with re.fullmatch and drops every item that doesn't
+    fit; the check must judge items the same way, and say so when a pattern only fits at the
+    start (eRAM's symptom column: `^(C\\d{7})\\|` passed the check and wrote 0 of 1,663 rows)."""
+    from check import _values, check_item_pattern
+
+    rows = [{"symptom": "C0012345|Fever;C0027497|Nausea"}, {"symptom": "C0030193|Pain"}]
+    spec = {"list_separator": ";", "item_pattern": r"^(C\d{7})\|", "id_prefix": "UMLS"}
+    # an item the pattern fits only at its start is kept whole, so it shows as a misfit
+    assert [v for v, _ in _values(rows, "symptom", spec)] == [
+        "C0012345|Fever",
+        "C0027497|Nausea",
+        "C0030193|Pain",
+    ]
+    f = Findings()
+    check_item_pattern(rows, "symptom", spec, "l symptom", f)
+    assert f.count("error") == 1
+    msg = f.items[0][2]
+    assert "3 of 3 sampled items" in msg and "C0012345|Fever" in msg
+    assert "fullmatch" in msg and r"`^(C\d{7})\|.*$`" in msg
+    # anchored to the end of the item, it fits whole items: ids come out, nothing is reported
+    spec["item_pattern"] = r"^(C\d{7})\|.*$"
+    assert [v for v, _ in _values(rows, "symptom", spec)] == ["C0012345", "C0027497", "C0030193"]
+    f = Findings()
+    check_item_pattern(rows, "symptom", spec, "l symptom", f)
+    assert f.items == []
+    # with drop_unmatched the unanchored pattern drops every item, as the runtime would
+    spec = {"list_separator": ";", "item_pattern": r"^(C\d{7})\|", "drop_unmatched": "on purpose"}
+    assert _values(rows, "symptom", spec) == []
+    # a tag-stripping pattern that already reaches the end of the item is fine as it is
+    spec = {"item_pattern": r"ko:(.+)", "id_prefix": "KEGG.ORTHOLOGY"}
+    assert [v for v, _ in _values([{"k": "ko:K00001"}], "k", spec)] == ["K00001"]
+    f = Findings()
+    check_item_pattern([{"k": "ko:K00001"}], "k", spec, "l k", f)
+    assert f.items == []
+
+
+def test_a_null_prefix_code_is_not_an_undeclared_prefix():
+    """plan-format.md says to map a prefix_codes key to null when its values aren't ids in any
+    namespace; the plan check reported that null as a prefix not declared (ClinVar's agent had to
+    explain two false errors away)."""
+    errs, _ = errors(
+        plan_with(
+            columns={
+                "xref": {
+                    "property": "biolink:xref",
+                    "id_form": "mixed",
+                    "prefix_column": "source",
+                    "prefix_codes": {"NCBI": "NCBIGene", "Free text": None, "Other": "OTHER"},
+                    "source": "agent",
+                    "confidence": "high",
+                }
+            }
+        )
+    )
+    undeclared = [e for e in errs if "prefix_codes uses prefixes not declared" in e]
+    assert len(undeclared) == 1 and "OTHER" in undeclared[0] and "None" not in undeclared[0]
+
+
+def test_a_cached_validator_failure_keeps_its_text(tmp_path, monkeypatch):
+    """The cache used to store the failure as the report showed it, which is nothing when the
+    plan's explained entry had turned it into a note; the next run then raised an empty,
+    unexplainable error (eRAM's agent deleted the cache entry by hand)."""
+    import check
+
+    monkeypatch.setattr(check, "VALIDATE_CACHE", tmp_path / "validate")
+    croissant = tmp_path / "croissant.semantic.json"
+    croissant.write_text("{}")
+    runs = []
+
+    def fake_validate(path, f, timeout):
+        runs.append(path)
+        check.VALIDATION["error"] = "mlcroissant validate failed:\n  -  Field x has no dataType"
+        f.error("croissant", check.VALIDATION["error"])
+        check.VALIDATION["result"] = "failed (see Errors)"
+
+    monkeypatch.setattr(check, "_run_validate", fake_validate)
+    explained = [
+        {
+            "where": "croissant",
+            "message": "mlcroissant validate failed",
+            "level": "error",
+            "reason": "the input context lacks subField",
+            "label": "x",
+        }
+    ]
+    f = Findings(explained)
+    check.run_validate(str(croissant), f, 60)
+    assert f.count("error") == 0 and f.count("note") == 1
+    (entry,) = (tmp_path / "validate").glob("*.json")
+    assert "no dataType" in json.loads(entry.read_text())["error"]
+    # the next run, from the cache: the same text, so the same explanation applies
+    f = Findings(explained)
+    check.run_validate(str(croissant), f, 60)
+    assert runs == [str(croissant)] and f.count("error") == 0 and f.count("note") == 1
+    assert "cached" in check.VALIDATION["result"]
+    # without the explanation the cached failure is an error with its text
+    f = Findings()
+    check.run_validate(str(croissant), f, 60)
+    assert f.count("error") == 1 and "no dataType" in f.items[0][2]
+    # a failure cached without its text by an older check.py is validated again, not re-raised
+    entry.write_text(json.dumps({"result": "failed (see Errors)", "error": ""}))
+    f = Findings()
+    check.run_validate(str(croissant), f, 60)
+    assert len(runs) == 2 and "no dataType" in f.items[0][2]
+
+
+def test_names_are_looked_up_in_chunks_and_a_bad_name_costs_only_itself(monkeypatch, capsys):
+    """eRAM's 8,879 names in one request were an HTTP error, and one chunk kept failing at 500,
+    100 and 10 names. Lookups go in chunks, a failed chunk is retried smaller, and the names that
+    still fail are reported so the run can be resumed with just those."""
+    import requests
+    import vocab
+
+    sizes = []
+
+    class Response:
+        def __init__(self, data, status=200):
+            self.data, self.status = data, status
+
+        def raise_for_status(self):
+            if self.status != 200:
+                raise requests.HTTPError(f"{self.status} Server Error")
+
+        def json(self):
+            return self.data
+
+    def post(url, json, timeout):
+        if url == vocab.NAMERES_URL:
+            sizes.append(len(json["strings"]))
+            if "bad name" in json["strings"]:
+                return Response(None, 500)
+            return Response(
+                {n: [{"curie": f"X:{n[-3:]}", "label": n, "synonyms": []}] for n in json["strings"]}
+            )
+        assert url == vocab.NODENORM_URL
+        return Response({c: {"id": {"identifier": c}} for c in json["curies"]})
+
+    monkeypatch.setattr(vocab.requests, "post", post)
+    names = [f"name {i:03d}" for i in range(450)]
+    names[300] = "bad name"
+    result = vocab.map_names(names, {"biolink_types": [], "limit": 20}, chunk=200)
+    assert result["failed"] == ["bad name"] and result["unmapped"] == []
+    assert len(result["codes"]) == 449 and result["codes"]["name 000"] == "X:000"
+    # 200, 200 (fails: 100, 100 (fails: 50, 50 ... 1, 1)), 50
+    assert sizes[:2] == [200, 200] and sizes[-1] == 50 and 1 in sizes and max(sizes) == 200
+    assert sum(1 for n in sizes if n == 1) <= 4
+    err = capsys.readouterr().err
+    assert "retrying as chunks of 100" in err and "lookup failed for 'bad name'" in err
