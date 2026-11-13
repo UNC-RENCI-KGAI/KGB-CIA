@@ -35,6 +35,7 @@ from kgbcia_mcp.services.neo4j_service import (
     FULLTEXT_INDEX_PROPERTIES,
     Neo4jService,
     ReadResult,
+    _classify_neo4j_failure,
     serialize_neo4j_value,
 )
 from neo4j import GraphDatabase
@@ -140,7 +141,7 @@ def test_check_streams_valid_toy_graph(toy_graph, monkeypatch):
     result = check_graph(graph_dir, [report_path])
     assert result.ok
     assert (result.node_count, result.edge_count) == (10, 15)
-    assert "orion-neo4j-dump" in format_check_result(result)
+    assert "prepare_dump.sh" in format_check_result(result)
 
 
 def test_check_counts_missing_lineage_by_primary_source(toy_graph):
@@ -258,11 +259,51 @@ def _annotation_shape(annotation):
     return (origin.__name__, *(_annotation_shape(item) for item in get_args(annotation)))
 
 
+def _toy_statistics() -> dict:
+    return {
+        "node_count": 10,
+        "edge_count": 15,
+        "categories": [
+            {"category": "biolink:Gene", "count": 5},
+            {"category": "biolink:SmallMolecule", "count": 5},
+        ],
+        "predicates": [{"predicate": "biolink:directly_physically_interacts_with", "count": 15}],
+        "primary_knowledge_sources": [{"primary_knowledge_source": "infores:chembl", "count": 15}],
+        "meta_graph": [
+            {
+                "subject_category": "biolink:SmallMolecule",
+                "predicate": "biolink:directly_physically_interacts_with",
+                "object_category": "biolink:Gene",
+                "count": 15,
+            }
+        ],
+        "properties": [
+            {"category": "biolink:Gene", "property": "name", "example": "Gene 100"},
+            {
+                "category": "biolink:SmallMolecule",
+                "property": "name",
+                "example": "Compound 1",
+            },
+        ],
+        "property_names": {
+            "biolink:Gene": ["id", "name"],
+            "biolink:SmallMolecule": ["id", "name"],
+        },
+        "edge_properties": [
+            {"property": "kgbcia_flags", "example": ["wrong_mechanism"]},
+            {"property": "kgbcia_flag_reasons", "example": ["PMID:1 reports another action"]},
+        ],
+        "flag_counts": [{"flag": "wrong_mechanism", "count": 1}],
+    }
+
+
 def _artifact_directory(root: Path) -> Path:
     report_path = root / "reports" / "chembl" / "transform_report.json"
     report_path.parent.mkdir(parents=True)
     report_path.write_text(_report().model_dump_json())
-    (root / "graph_metadata.json").write_text('{"graph_id": "toy"}')
+    (root / "graph_metadata.json").write_text(
+        json.dumps({"graph_id": "toy", "statistics": _toy_statistics()})
+    )
     (root / "hubs.json").write_text('["NCBIGene:100"]')
     manifest = {
         "graph_version": "toy-1",
@@ -288,7 +329,8 @@ def _tar_bytes(root: Path) -> bytes:
 def test_load_artifacts_from_directory(tmp_path):
     bundle = load_artifacts(_artifact_directory(tmp_path / "artifacts"))
     assert bundle.manifest.graph_version == "toy-1"
-    assert bundle.graph_metadata == {"graph_id": "toy"}
+    assert bundle.graph_metadata["graph_id"] == "toy"
+    assert bundle.graph_metadata["statistics"]["node_count"] == 10
     assert bundle.hubs == ["NCBIGene:100"]
     assert bundle.reports[0].source == "infores:chembl"
 
@@ -411,54 +453,31 @@ class _FakeDriver:
         self.closed = True
 
 
-def test_schema_validation_sets_are_paginated_beyond_presentation_cap(monkeypatch):
-    service = Neo4jService("unused", "unused", "unused", driver=_FakeDriver())
+def test_graph_info_and_schema_use_precomputed_statistics(monkeypatch):
+    service = Neo4jService(
+        "unused",
+        "unused",
+        "unused",
+        driver=_FakeDriver(),
+        graph_metadata={"graph_id": "toy", "statistics": _toy_statistics()},
+    )
 
-    def execute(cypher, parameters=None, **_kwargs):
-        parameters = parameters or {}
-        if "subject_category, type(r)" in cypher:
-            return ReadResult(
-                (
-                    {
-                        "subject_category": "biolink:Gene",
-                        "predicate": "biolink:affects",
-                        "object_category": "biolink:Disease",
-                        "count": 1,
-                    },
-                ),
-                False,
-            )
-        if "head(collect" in cypher:
-            return ReadResult(
-                ({"category": "biolink:Gene", "property": "name", "example": "CDK2"},),
-                False,
-            )
-        offset = parameters.get("offset", 0)
-        if "RETURN DISTINCT category, property" in cypher:
-            page = (
-                ({"category": "biolink:Rare", "property": "rare_property"},)
-                if offset == 500
-                else tuple({"category": f"biolink:C{i:03}", "property": "name"} for i in range(500))
-            )
-        elif "RETURN DISTINCT category" in cypher:
-            page = (
-                ({"category": "biolink:Rare"},)
-                if offset == 500
-                else tuple({"category": f"biolink:C{i:03}"} for i in range(500))
-            )
-        else:
-            page = (
-                ({"predicate": "biolink:rare_predicate"},)
-                if offset == 500
-                else tuple({"predicate": f"biolink:p{i:03}"} for i in range(500))
-            )
-        return ReadResult(page, False)
+    def reject_aggregate_reads(*_args, **_kwargs):
+        raise AssertionError("graph_info and schema must not scan Neo4j")
 
-    monkeypatch.setattr(service, "execute_read", execute)
+    monkeypatch.setattr(service, "execute_read", reject_aggregate_reads)
+    info = service.get_graph_info()
     schema = service.get_schema()
-    assert "biolink:Rare" in schema["categories"]
-    assert "biolink:rare_predicate" in schema["predicates"]
-    assert schema["property_names"]["biolink:Rare"] == ["rare_property"]
+    assert info["node_count"] == 10
+    assert info["edge_count"] == 15
+    assert info["primary_knowledge_sources"] == [
+        {"primary_knowledge_source": "infores:chembl", "count": 15}
+    ]
+    assert info["flag_counts"] == [{"flag": "wrong_mechanism", "count": 1}]
+    assert schema["meta_graph"][0]["subject_category"] == "biolink:SmallMolecule"
+    assert schema["edge_properties"][0]["property"] == "kgbcia_flags"
+    assert schema["flag_values"] == ["wrong_mechanism"]
+    assert schema["property_names"]["biolink:Gene"] == ["id", "name"]
 
 
 def test_single_fuzzy_fulltext_hit_is_not_silently_resolved(monkeypatch):
@@ -604,9 +623,9 @@ def test_server_starts_without_neo4j_and_tools_return_configuration_error(monkey
                 "query_cypher", {"cypher": "MATCH (n) RETURN n LIMIT 1"}
             )
         expected_error = "Neo4j not configured"
-        assert graph_result.data["error"] == expected_error
+        assert "precomputed graph statistics" in graph_result.data["hint"]
         assert cypher_result.data["error"] == expected_error
-        assert "NEO4J_URI" in graph_result.data["hint"]
+        assert "NEO4J_URI" in cypher_result.data["hint"]
         assert driver_calls == []
 
     asyncio.run(exercise())
@@ -625,6 +644,21 @@ def test_run_enters_mcp_transport_without_neo4j_settings(monkeypatch):
     assert calls == [{"transport": "stdio", "show_banner": False}]
 
 
+def test_missing_precomputed_statistics_returns_rebuild_hint(monkeypatch):
+    service = Neo4jService("unused", "unused", "unused", driver=_FakeDriver(), graph_metadata={})
+    monkeypatch.setattr(
+        service,
+        "execute_read",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no aggregate scans")),
+    )
+    info = service.get_graph_info()
+    schema = service.get_schema()
+    assert "precomputed graph statistics" in info["hint"]
+    assert "precomputed graph statistics" in schema["hint"]
+    with pytest.raises(ValueError, match="precomputed graph statistics"):
+        service._validate_name("category", "biolink:Gene")
+
+
 def test_unreachable_neo4j_returns_structured_error():
     async def exercise():
         from fastmcp import Client
@@ -638,11 +672,34 @@ def test_unreachable_neo4j_returns_structured_error():
 
         service = Neo4jService("neo4j://example", "reader", "secret", driver=UnreachableDriver())
         async with Client(create_server(service)) as client:
-            result = await client.call_tool("get_graph_info")
-        assert result.data["error"] == "Neo4j unreachable"
+            result = await client.call_tool("get_node", {"node_id": "NCBIGene:1"})
+        assert result.data["error"] == "Neo4j connection failure"
+        assert result.data["cause"] == "connection_failure"
+        assert "connection refused" in result.data["detail"]
         assert "server is still running" in result.data["hint"]
 
     asyncio.run(exercise())
+
+
+def test_neo4j_failure_classifier_distinguishes_timeout_and_query_error():
+    class TimeoutFailure(Exception):
+        code = "Neo.TransientError.Transaction.TransactionTimedOut"
+
+        def __str__(self):
+            return "transaction timed out after 30s"
+
+    class QueryFailure(Exception):
+        code = "Neo.ClientError.Statement.SyntaxError"
+
+        def __str__(self):
+            return "invalid input"
+
+    timeout = _classify_neo4j_failure(TimeoutFailure())
+    query = _classify_neo4j_failure(QueryFailure())
+    assert timeout.cause == "timeout"
+    assert str(timeout) == "Neo4j query timed out"
+    assert query.cause == "query_error"
+    assert str(query) == "Neo4j query error"
 
 
 def test_fastmcp_error_hint_and_optional_cypher_registration():
@@ -1123,7 +1180,8 @@ def test_helm_chart_lints_and_templates_all_values_files():
 
 
 requires_neo4j = pytest.mark.skipif(
-    not os.getenv("NEO4J_URI"), reason="set NEO4J_URI to run the Neo4j integration smoke test"
+    not os.getenv("NEO4J_URI") or not os.getenv("KGB_MCP_ARTIFACTS"),
+    reason="set NEO4J_URI and KGB_MCP_ARTIFACTS to run the Neo4j integration smoke test",
 )
 
 
@@ -1215,7 +1273,15 @@ def test_dump_scripts_pin_images_and_create_idempotent_indexes():
     )
     assert orion_image in preparation
     assert "orion-neo4j-dump /input/nodes.jsonl /input/edges.jsonl /work/orion" in preparation
+    assert "--artifacts-only" in preparation
+    assert "--existing-dump" in preparation
+    assert 'cp "$existing_dump" "$output_dir/kgb.dump"' in preparation
     assert "kgbcia-mcp hubs" in preparation
+    assert "precomputed meta_graph rows" in preparation
+    assert "category_order" in preparation
+    assert "primary_knowledge_sources" in preparation
+    assert "MAX_STRING = 100" in preparation
+    assert "MAX_LIST = 3" in preparation
     assert "cypher-shell --format plain" in preparation
     assert "sed '1d'" in preparation
     assert 'docker exec "$container_name" mkdir -p /data/dump-export' in preparation

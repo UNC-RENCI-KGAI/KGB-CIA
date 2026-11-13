@@ -31,6 +31,27 @@ uv run kgb-mcp check --input <dir with nodes.jsonl and edges.jsonl>
 uv run kgb-mcp check --input <graph-dir> --report <transform_report.json>
 ```
 
+Prepare or refresh release artifacts:
+
+```bash
+# Full graph-to-dump release: runs ORION, then computes MCP statistics on a temporary Neo4j.
+bash agents/mcp_interface/deploy/prepare_dump.sh \
+  --graph-dir <dir with nodes.jsonl and edges.jsonl> \
+  --reports-dir <dir containing transform_report.json files> \
+  --graph-metadata <merge-metadata.json or graph metadata JSON> \
+  --output-dir <prepared-output-dir> \
+  --graph-version <version>
+
+# Artifacts-only refresh for an already deployed kgb.dump: skips ORION and copies the dump unchanged.
+bash agents/mcp_interface/deploy/prepare_dump.sh \
+  --artifacts-only \
+  --existing-dump <existing kgb.dump> \
+  --reports-dir <dir containing transform_report.json files> \
+  --graph-metadata <merge-metadata.json or graph metadata JSON> \
+  --output-dir <prepared-output-dir> \
+  --graph-version <version>
+```
+
 MCP server, against a running Neo4j:
 
 ```bash
@@ -64,7 +85,11 @@ files under `data/transformation/`.
 
 **Output:** `check` writes no graph files. `kgbcia-mcp hubs` writes `hubs.json`; the server
 returns JSON-serializable, read-only query results. `deploy/prepare_dump.sh` produces the
-Neo4j dump and artifact tarball (`manifest.json`, graph metadata, hubs and reports).
+Neo4j dump and artifact tarball (`manifest.json`, graph metadata, hubs and reports). The graph
+metadata now includes precomputed counts for `get_graph_info`, `get_schema`, and argument
+validation, so the running server does not scan the whole deployed graph for aggregate answers.
+In `--artifacts-only` mode the script recomputes the artifact tarball from an existing dump and
+copies that dump to the output unchanged.
 
 ## Neo4j notes
 

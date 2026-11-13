@@ -22,7 +22,38 @@ bash agents/mcp_interface/deploy/prepare_dump.sh \
   --graph-version litcoin-200-synthetic
 ```
 
-For a real release, use the cleaning output and its actual TransformReports instead.
+For a real release, use the cleaning output and its actual TransformReports instead. The script
+loads the dump into a temporary writable Neo4j and precomputes the graph summary, schema
+meta-graph, node-property examples, edge-property examples, predicate/category/source counts,
+and quality-flag counts into `graph_metadata.json`; the deployed read-only database is not asked
+to run those whole-graph aggregates at startup or per request.
+
+When the deployed dump is already correct and only the MCP artifacts need refreshing, skip ORION
+and start from the existing dump:
+
+```bash
+bash agents/mcp_interface/deploy/prepare_dump.sh \
+  --artifacts-only \
+  --existing-dump data/mcp_interface/dev_artifacts/kgb.dump \
+  --reports-dir data/transformation/graphs \
+  --graph-metadata data/transformation/merged/merge-metadata.json \
+  --output-dir data/mcp_interface/prepared-artifacts-only \
+  --graph-version real-cleaned-2026-11-09
+```
+
+`--artifacts-only` still loads the dump into temporary Neo4j to recompute hubs and statistics,
+but it copies the input dump to the output unchanged. Publishing only the new
+`artifacts.tar.gz` and checksum is therefore enough; do not reinstall the dump or change the
+Helm dump checksum for an artifacts-only refresh.
+
+For the real graph's build description follow-up, generate `data/describe/description.json` on
+the VM that has the Nov 9 transformation workspaces and cleaning report, for example by running
+`.agents/skills/filter/describe-graph/scripts/describe_graph.py` there against the 11-09
+transformation output and `data/cleaning/cleaning_report.json`. A later checkpoint wires that
+file into `prepare_dump.sh` through an explicit argument (defaulting to
+`data/describe/description.json`); when the file is supplied, the dump-preparation script will
+copy and sanitize it rather than re-running the skill.
+
 Record the graph version, dump checksum, artifact checksum, source version, and download
 date in `data/README.md`. The current sample release is:
 

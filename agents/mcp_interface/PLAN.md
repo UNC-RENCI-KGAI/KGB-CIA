@@ -380,3 +380,119 @@ were rejected. `CREATE USER` is not a safe authorization boundary: it created a 
 until the test removed it, and such a user would matter if authentication were ever re-enabled.
 No-auth AWS is therefore acceptable only while the maintainer restricts Bolt network exposure;
 read-only mode protects graph data but not all system administration.
+
+## Proposed checkpoint 1: real-graph aggregate artifacts and remaining follow-ups
+
+The real cleaned graph is already deployed on AWS with Bolt auth disabled. Exact indexed node
+lookups work, but `get_graph_info()` and `get_schema()` time out because they currently issue
+whole-graph aggregate Cypher against the deployed read-only database, and the graph's
+943,412 nodes / 11,701,010 edges exceed the 30-second `db.transaction.timeout`. This plan keeps
+all changes inside the MCP-interface paths allowed by the spec, plus `tests/test_mcp_interface.py`.
+No transformation, cleaning, shared schema, AWS account, or data-file changes are planned.
+
+### Piece 1: precomputed statistics and artifacts-only dump preparation
+
+1. **Define the artifact contract.** Extend `graph_metadata.json` to carry precomputed service
+   statistics under stable keys, without removing existing metadata:
+   - headline `node_count` and `edge_count`;
+   - `categories`: counts per node category, excluding only the `biolink:NamedThing` anchor;
+   - `predicates`: counts per relationship type;
+   - `meta_graph`: counts by `(subject_category, predicate, object_category)`;
+   - `properties`: per node category and property name, with one example value;
+   - `property_names`: per node category;
+   - `edge_properties`: relationship property names plus example values, including
+     `kgbcia_flags` and `kgbcia_flag_reasons` when present;
+   - `flag_counts`: counts by each `kgbcia_flags` value.
+   The server will tolerate either the new wrapped shape or a legacy artifact missing these
+   keys, so older dev artifacts still produce a clear degraded response instead of crashing.
+2. **Move expensive Cypher to `prepare_dump.sh`.** After the temporary writable Neo4j is loaded
+   and indexed, run a bounded set of aggregate queries there, before dumping. They are allowed to
+   run without the deployed 30-second timeout and can scan the graph once during release build.
+   Write their results into the artifact `graph_metadata.json` before manifest/tarball creation.
+   Keep the hub computation unchanged, because it already belongs to build time.
+3. **Add `--artifacts-only` to `prepare_dump.sh`.** In this mode require an existing
+   `--existing-dump <kgb.dump>` (or equivalent explicit argument name in the implementation),
+   skip ORION, load that dump into the same temporary writable Neo4j container, recompute
+   indexes/statistics/hubs/artifacts, and copy the original dump to the output as `kgb.dump`.
+   This lets the maintainer publish a replacement artifact tarball for the currently deployed
+   database without reinstalling or reloading AWS Neo4j. Non-`--artifacts-only` keeps the current
+   ORION `nodes.jsonl`/`edges.jsonl` path.
+4. **Load and cache schema/statistics from artifacts.** Change `Neo4jService.get_graph_info()`,
+   `get_schema()`, `_validate_name()`, `_validate_predicates()`, and `_validate_where()` to read
+   from artifact-backed metadata instead of issuing whole-graph category/predicate/property
+   scans at startup or per request. `get_graph_info()` may still report build/release metadata
+   and knowledge sources from artifacts; it must not run aggregate graph scans. If the stats are
+   absent, return a structured hint explaining that the artifact bundle is too old and must be
+   rebuilt, rather than falling back to an unsafe scan on the real graph.
+5. **Keep exact/anchored queries live.** `get_node`, `search_nodes`, neighbor/path tools,
+   `explain_edge`, `query_cypher`, and hub use continue to query Neo4j with bounded/indexed
+   patterns. `explain_edge` should iterate artifact predicates rather than calling a Cypher-built
+   schema.
+6. **Improve error reporting.** Replace the generic `Neo4jUnavailable("Neo4j unreachable")`
+   path with exception classification that preserves the cause category and message: connection
+   failure, transaction timeout, or query error. The FastMCP wrappers should return those causes
+   in `error`/`hint` so aggregate timeouts no longer masquerade as connectivity failures.
+7. **Tests for piece 1.** Extend the in-code toy fixture with flagged edges and a sample
+   `description.json` placeholder, then add tests for loading precomputed stats, metadata-driven
+   validation, no aggregate Cypher from `get_graph_info()`/`get_schema()`, legacy-missing-stats
+   hints, classified timeout/connection/query errors, and `prepare_dump.sh` text/behavior guards
+   for `--artifacts-only`. Existing mocked-service and integration tests should keep passing.
+8. **Validation checkpoint.** Run `make lint`, `make test`, and `make demo`. Stop and report the
+   exact `prepare_dump.sh --artifacts-only ...` command plus the rollout sequence: upload only
+   the new `artifacts.tar.gz`, record its SHA-256, update the local MCP client configuration's
+   `KGB_MCP_ARTIFACTS` / `KGB_MCP_ARTIFACTS_SHA256`, and restart local stdio MCP processes. No
+   Helm upgrade, dump checksum change, PVC deletion, or dump reinstall is part of this checkpoint.
+
+### Piece 2: build-description follow-up
+
+After the maintainer confirms the rebuilt artifacts make `get_graph_info()` and `get_schema()`
+work on AWS, implement the already-specified build-description follow-up:
+
+1. In `prepare_dump.sh`, locate and run the `describe-graph` skill against the provided real
+   transformation/cleaning inputs (`data/transformation/graphs`, `data/transformation/merged`,
+   `data/cleaning`) when available. If `data/describe/description.json` already exists or the
+   caller supplies a description path, copy that instead; otherwise warn and continue.
+2. Strip local-only paths from `description.json` before adding it to the artifacts: remove the
+   top-level `graphs` value and each source's `normalized_dir`, preserving counts, source
+   statuses, unresolved-node data, publication share, and failure reasons.
+3. Teach `artifacts.py` to load optional `description.json` and pass it to the service. Add the
+   `build` section to `get_graph_info()`, clearly labeling these as build statistics distinct
+   from live/deployed graph counts.
+4. Update `SERVER_INSTRUCTIONS` rule 6 so agents check the build section before concluding that
+   a missing connection is absent from the evidence, and update README/RUNBOOK command examples.
+5. Add tests for description loading, missing-description behavior, path stripping, and the
+   `get_graph_info().build` shape.
+
+### Piece 3: quality-flags follow-up / issue #63
+
+Implement after piece 2, in the same post-AWS-confirmation checkpoint:
+
+1. Add a single serializer helper that converts `kgbcia_flags` and `kgbcia_flag_reasons` into
+   `[{"flag": ..., "reason": ...}]` for every returned edge, including neighbors, direct
+   edges, paths, connected-node paths, and `explain_edge`. Pair aligned values, use
+   `reason: null` for unmatched flags, and log a warning for mismatched list lengths.
+2. Add `exclude_flags` arguments to `get_node_edges`, `find_paths`, and `find_connected_nodes`,
+   validate them against artifact `flag_counts`, and inject bounded Cypher filters that skip any
+   edge carrying one of the excluded values.
+3. Include `flag_counts` in `get_graph_info()` and flag-value/property information in
+   `get_schema()` from the precomputed artifacts; no startup/request scan is allowed.
+4. Update server instructions and affected tool docstrings with rule 7: if an answer uses a
+   flagged edge, report the flag and reason verbatim, including PMID text.
+5. Extend `make_dev_artifacts.py` synthetic output and the toy fixture to cover no flags, one
+   flag, multiple flags, and mismatched flag/reason lengths.
+6. Add tests for unflagged edges, one/several flags, mismatched lists, a flagged hop in a path,
+   `exclude_flags`, schema flag values, and graph-info flag counts.
+7. Run `make lint`, `make test`, and `make demo`, then stop with the full rebuild and rollout
+   commands for the maintainer.
+
+### Final verification/documentation checkpoint
+
+After the maintainer reports the second rollout results, guide laptop checks against AWS:
+
+1. Call `get_graph_info()` and confirm the build section is present and sensible.
+2. Call `get_graph_info()` / `get_schema()` and confirm nonzero flag counts and flag values.
+3. Ask the live MCP server why olodaterol connects to ADRB2 and verify the answer includes the
+   `wrong_mechanism` flag and its PMID from the edge's `kgbcia_flag_reasons`.
+4. Record only the outcomes in `agents/mcp_interface/README.md` under **Status**: build-section
+   check, flag-count check, and olodaterol/ADRB2 flag/PMID check. Do not record hosts,
+   credentials, presigned URLs, AWS account identifiers, or generated data.

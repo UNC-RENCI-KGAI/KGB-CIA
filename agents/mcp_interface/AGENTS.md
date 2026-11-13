@@ -113,9 +113,10 @@ tests/test_mcp_interface.py   # repo tests live in the root tests/ dir
   package's `requires-python` (≥ 3.12) to the root project's.
 
 **Side artifacts** are one tarball, published next to the dump (the same file server or bucket):
-the `TransformReport` JSONs, ORION's graph metadata (graph ID, build and release version), the
-hub list for path search, and the build description (`description.json` from the filter stage's
-`describe-graph` skill, if present). `KGB_MCP_ARTIFACTS` is a local directory or an `http(s)` URL to the
+the `TransformReport` JSONs, ORION's graph metadata (graph ID, build and release version),
+precomputed graph statistics for aggregate tools and validation, the hub list for path search,
+and the build description (`description.json` from the filter stage's `describe-graph` skill,
+if present). `KGB_MCP_ARTIFACTS` is a local directory or an `http(s)` URL to the
 tarball; URLs are downloaded with the standard library, cached per checksum, and loaded once at
 startup. The URL must be **public and long-lived**, because every user's server fetches it with
 no credentials. Use a GitHub Release asset on this repo (free, no AWS setup), or an S3 object
@@ -279,19 +280,27 @@ release, on a workstation with Docker:
 3. Run `extra_indexes.cypher` (below), then `CALL db.awaitIndexes()`.
 4. Run `kgbcia-mcp hubs` against the container, writing the hub list into the artifacts
    directory.
-5. Stop the container and run `neo4j-admin database dump`: this is the **kgb dump**.
-6. If the `describe-graph` skill exists (`.agents/skills/filter/describe-graph/`), run its
+5. Precompute graph statistics into `graph_metadata.json`: node counts per category, edge
+   counts per predicate and `primary_knowledge_source`, one-category-per-node meta-graph counts
+   by `(subject_category, predicate, object_category)`, node and edge property names with
+   truncated examples, and edge counts per `kgbcia_flags` value. For the meta-graph, choose one
+   category per node using the graph-wide rarest label (smallest category count) so ancestor
+   labels do not cross-multiply; log the resulting row count as a sanity check.
+6. Stop the container and run `neo4j-admin database dump`: this is the **kgb dump**.
+7. If the `describe-graph` skill exists (`.agents/skills/filter/describe-graph/`), run its
    `describe_graph.py` against the transformation output, and add its `description.json` to the
    artifacts **with local file paths removed** (its top-level `graphs` and each source's
    `normalized_dir`). It's built on the builder's machine, which has the ORION workspaces that
    MCP users don't. If the skill is absent or fails, warn and continue without it.
-7. Pack the artifacts (`TransformReport`s, ORION graph metadata, hub list, build description)
-   into a tarball.
-8. Print the SHA-256 of the dump and the tarball, for the chart values and
+8. Pack the artifacts (`TransformReport`s, ORION graph metadata/statistics, hub list, build
+   description) into a tarball.
+9. Print the SHA-256 of the dump and the tarball, for the chart values and
    `KGB_MCP_ARTIFACTS_SHA256`.
 
 Publishing the files (to the HTTP file server for k8s, to S3 for AWS) and updating the values are
-manual steps; document them in `RUNBOOK.md`.
+manual steps; document them in `RUNBOOK.md`. `prepare_dump.sh --artifacts-only --existing-dump
+<kgb.dump>` skips ORION and recomputes only the artifacts from an existing dump; use it when the
+deployed dump is unchanged and the MCP artifact tarball needs a replacement.
 
 ORION's dump already contains a range index on `biolink:NamedThing.name`, and a uniqueness
 constraint on `id` for every node label. `extra_indexes.cypher` adds what the server needs:

@@ -193,12 +193,16 @@ def _safe(function: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]
                 "NEO4J_USER and NEO4J_PASSWORD; then restart the MCP server."
             ),
         }
-    except Neo4jUnavailable:
+    except Neo4jUnavailable as exc:
         return {
-            "error": "Neo4j unreachable",
+            "error": str(exc),
+            "cause": exc.cause,
+            "detail": exc.detail,
             "hint": (
-                "Check the Neo4j URI, credentials, network access, and service health; the MCP "
-                "server is still running."
+                "Neo4j returned a classified failure. For connection failures, check the URI, "
+                "network access, credentials if enabled, and service health. For timeouts or "
+                "query errors, narrow the request or rebuild artifacts so aggregate answers are "
+                "precomputed. The MCP server is still running."
             ),
         }
     except (ValueError, LookupError) as exc:
