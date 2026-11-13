@@ -394,6 +394,60 @@ def test_run_returns_1_when_a_pair_fails(tmp_path, monkeypatch, capsys):
     assert set(by_pair(tmp_path / "work")) == {DRUG_DISEASE, DRUG_GENE}
 
 
+def test_run_says_when_the_key_is_missing_and_stops_above_the_keyless_limit(
+    tmp_path, monkeypatch, capsys
+):
+    write_work(tmp_path / "work")
+    fake = default_ncbi()
+    default_client(monkeypatch, fake)
+    monkeypatch.delenv(eutils_module.NCBI_API_KEY, raising=False)
+    monkeypatch.setattr(pubmed, "KEYLESS_SEARCHES", 1)
+    args = _args(tmp_path, "--no-nodenorm")
+    assert pubmed.run(args) == 1
+    err = capsys.readouterr().err
+    assert f"pubmed: {eutils_module.NCBI_API_KEY} is not set: NCBI allows 3 requests" in err
+    assert "pubmed: error: 2 pairs would be searched without" in err and "--without-key" in err
+    assert fake.calls == [] and not (tmp_path / "work" / PUBMED).exists()
+
+    # --without-key goes ahead at the lower rate; once the searches are cached, a rerun (to
+    # retry a failed pair, say) needs no flag.
+    assert pubmed.run(_args(tmp_path, "--no-nodenorm", "--without-key")) == 0
+    assert len(fake.endpoint_calls("esearch.fcgi")) == 2
+    assert "is not set" in capsys.readouterr().err
+    assert pubmed.run(args) == 0
+    assert len(fake.endpoint_calls("esearch.fcgi")) == 2
+
+
+def test_run_with_a_key_neither_warns_nor_stops(tmp_path, monkeypatch, capsys):
+    write_work(tmp_path / "work")
+    default_client(monkeypatch, default_ncbi())
+    monkeypatch.setenv(eutils_module.NCBI_API_KEY, "key")
+    monkeypatch.setattr(pubmed, "KEYLESS_SEARCHES", 1)
+    assert pubmed.run(_args(tmp_path, "--no-nodenorm")) == 0
+    assert f"{eutils_module.NCBI_API_KEY} is not set" not in capsys.readouterr().err
+
+
+def test_uncached_searches_counts_what_the_search_would_send(tmp_path):
+    work = write_work(tmp_path / "work")
+    pairs = list(read_records(work / PAIRS, Pair))
+    entities = list(read_records(work / ENTITIES, Entity))
+    nodenorm = FakeNodeNorm()
+    with PubMedCache() as cache:
+        assert pubmed.uncached_searches(pairs, entities, cache, nodenorm=nodenorm) == 2
+        # NodeNorm's entries are cached for the search that follows.
+        assert len(nodenorm.calls) == 1
+    pubmed.search(work, client=eutils(default_ncbi()), nodenorm=nodenorm)
+    assert len(nodenorm.calls) == 1
+    with PubMedCache() as cache:
+        assert pubmed.uncached_searches(pairs, entities, cache, nodenorm=nodenorm) == 0
+        assert (
+            pubmed.uncached_searches(pairs, entities, cache, nodenorm=nodenorm, refresh=True) == 2
+        )
+        # A pair whose node has no usable name isn't searched, so it doesn't count.
+        unnamed = [Entity(id=e.id) for e in entities]
+        assert pubmed.uncached_searches(pairs, unnamed, cache, use_nodenorm=False) == 0
+
+
 def test_run_tolerates_a_small_share_of_failed_pairs(tmp_path, monkeypatch, capsys):
     write_work(tmp_path / "work")
     default_client(monkeypatch, default_ncbi(fail=[httpx.Response(502)] * 4))

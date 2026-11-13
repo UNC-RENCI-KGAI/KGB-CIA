@@ -179,9 +179,13 @@ sort=relevance, retmax=20
 
 - **Rate limits:** 3 requests a second without an API key and 10 with one (one key per NCBI
   account). The client sends `tool` and `email` with every request, and reads the key and
-  email from `NCBI_API_KEY` and `NCBI_EMAIL`.
+  email from `NCBI_API_KEY` and `NCBI_EMAIL`. Without the key the step says so at its start,
+  and stops before sending anything when more than `KEYLESS_SEARCHES` (500) searches aren't
+  cached, unless `--without-key`: the Nov 12 2026 run searched 2,957 pairs in 42 minutes
+  without a key and 500 in 75 seconds with one, because one shell lacked it.
 - **Throughput:** one ESearch per pair plus one EFetch per ~200 deduplicated PMIDs, so roughly
-  30,000 pairs an hour with a key. ESearch returns at most 10,000 IDs per query.
+  25,000 pairs an hour with a key and 4,000 without, as measured on Nov 12 2026. ESearch
+  returns at most 10,000 IDs per query.
 - **Off-peak:** NCBI asks that large jobs run on weekends or between 9pm and 5am ET on weekdays.
 
 Kept in reserve:

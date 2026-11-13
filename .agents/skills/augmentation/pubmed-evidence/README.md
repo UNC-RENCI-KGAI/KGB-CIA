@@ -70,7 +70,7 @@ after the step's name.
 | Step | Main options (default) |
 | --- | --- |
 | `select` | `--rules FILE` (built-in rules), `--capped-limit` (10,000), `--min-score` (none) |
-| `pubmed` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm` |
+| `pubmed` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm`, `--without-key` (search more than 500 uncached pairs without `NCBI_API_KEY`; the step stops otherwise) |
 | `label` | `--model` (gpt-6-luna), `--reasoning-effort E` (the model's: low for gpt-6-luna), `--prompt FILE`, `--sample N --seed S` or `--pairs FILE`, `--dry-run`, `--no-repair`, `--abstracts-per-call` (20), `--workers` (8), `--limit N` |
 | `ground` | `--refresh` |
 | `review` | `--model` (gpt-5.6-terra), `--reasoning-effort E`, `--prompt FILE`, `--limit N`, `--review-support-only` (off: `config.REVIEW_SUPPORT_ONLY`) |
@@ -83,7 +83,8 @@ for labeling and review with the Azure OpenAI models (not for `--dry-run`), and
 `AZURE_OPENAI_BASE_URL` to point them at your own endpoint; `ANTHROPIC_API_KEY` or an
 `ant auth login` profile with Claude models. Labeling also needs the review model's,
 `AZURE_OPENAI_API_KEY` by default, for the sentence repair pass. `NCBI_EMAIL`, and
-`NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search. `KGB_PUBMED_CACHE`
+`NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search (without it the
+step says so, and stops above 500 uncached searches unless `--without-key`). `KGB_PUBMED_CACHE`
 is the PubMed cache file, `shared.pubmed`'s, which every agent that reads PubMed shares
 (default `data/cache/pubmed.sqlite`); a `pubmed.sqlite` from an older `--cache-dir` opens as it
 is, so move it there or point `KGB_PUBMED_CACHE` at it. `NAMERES_URL` points the ground step at
