@@ -133,7 +133,8 @@ def predicates_of(rules: Sequence[Rule], ids: Iterable[str]) -> tuple[str, ...]:
     `opposite_of` partners, each as Biolink reads it from the rule's subject to its object
     (`rule_predicate`). Predicates a skip rule drops whatever the categories and the edge's
     provenance (literature co-occurrence, which is under `associated_with`) are left out: they
-    never make a claim."""
+    never make a claim. A provenance rule names no predicates, so it adds none and drops none:
+    a pair's `rules` are its statement rules."""
     wanted = set(ids)
     found: set[str] = set()
     for rule in rules:
@@ -227,13 +228,18 @@ def reply_schema(predicates: tuple[str, ...]) -> llm.Schema:
     return llm.Schema("label_reply", body)
 
 
+def _labeled(rule: Rule) -> bool:
+    """Whether a pair's claims may come from the rule: a statement rule that isn't a skip. A
+    provenance rule names no predicates, and its statements' pairs name their statement rule."""
+    return rule.tier != "skip" and not rule.is_provenance
+
+
 def rule_schemas(rules: Sequence[Rule]) -> dict[str, llm.Schema]:
-    """Each scope rule's reply schema, by rule id (skip rules have none). A pair matching
-    several rules gets the schema of their predicates together, which these determine."""
+    """Each scope rule's reply schema, by rule id (skip and provenance rules have none, so no
+    schema has an empty predicate enum). A pair matching several rules gets the schema of their
+    predicates together, which these determine."""
     return {
-        rule.id: reply_schema(predicates_of(rules, [rule.id]))
-        for rule in rules
-        if rule.tier != "skip"
+        rule.id: reply_schema(predicates_of(rules, [rule.id])) for rule in rules if _labeled(rule)
     }
 
 
@@ -245,8 +251,10 @@ def label_prompt(
 ) -> tuple[str, str]:
     """(system prompt, prompt version) of a label run with this prompt file, model and scope
     rules. The version covers the prompt with its includes, FORMAT_VERSION, every rule's reply
-    schema and the run's effort (`llm.run_effort`), so claims made at one effort are never
-    reused at another. Anything that needs the version of a label run can call this."""
+    schema (`rule_schemas`: skip and provenance rules have none, so adding or changing one
+    leaves the version alone) and the run's effort (`llm.run_effort`), so claims made at one
+    effort are never reused at another. Anything that needs the version of a label run can
+    call this."""
     effort = llm.run_effort(model, reasoning_effort)
     schemas = "\0".join(s.text() for _, s in sorted(rule_schemas(rules).items()))
     extra = f"{FORMAT_VERSION}\0{schemas}\0effort={effort}"
@@ -333,7 +341,7 @@ def build_jobs(inputs: Inputs, pubmed: PubMedCache) -> tuple[list[PairJob], Coun
     """A job per pair with abstracts to read, in `pairs.jsonl` order, and the counts of what
     was skipped."""
     skipped: Counter = Counter()
-    known = {r.id for r in inputs.rules if r.tier != "skip"}
+    known = {r.id for r in inputs.rules if _labeled(r)}
     jobs: list[PairJob] = []
     for pair in inputs.pairs:
         record = inputs.pubmed.get(pair.pair_id)

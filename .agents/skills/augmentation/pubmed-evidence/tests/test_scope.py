@@ -317,6 +317,171 @@ def test_match_rule_honours_knowledge_level_and_agent_type():
     assert match(None, None) == "rest"
 
 
+def test_a_provenance_rule_lowers_the_tier_its_statement_rule_set():
+    """A provenance rule picks no edge itself; it applies to the edges a statement rule keeps,
+    when its tier is no higher, and its place among the statement rules doesn't matter."""
+    gene_disease = scope.Rule(
+        id="gene-disease",
+        tier="query",
+        subject=("biolink:Gene",),
+        predicates=("biolink:associated_with",),
+        object=("biolink:Disease",),
+    )
+    gene_gene = scope.Rule(
+        id="gene-gene", tier="capped", predicates=("biolink:interacts_with",), symmetric=True
+    )
+    go = scope.Rule(id="go", tier="skip", predicates=("biolink:located_in",))
+    mined = scope.Rule(id="mined", tier="capped", knowledge_level=("text_co_occurrence",))
+    raise_ = scope.Rule(id="raise", tier="query", agent_type=("text_mining_agent",))
+    gene, disease, cc = ("biolink:Gene",), ("biolink:Disease",), ("biolink:CellularComponent",)
+    mined_edge = ("text_co_occurrence", "text_mining_agent")
+
+    def decide(rules, subject, predicate, object, made=mined_edge):
+        statement, lowered = scope.decide(rules, subject, predicate, object, *made)
+        return (statement.id if statement else None, lowered.id if lowered else None)
+
+    associated = (gene, "biolink:gene_associated_with_condition", disease)
+    for rules in [(mined, gene_disease, go), (gene_disease, go, mined)]:
+        assert decide(rules, *associated) == ("gene-disease", "mined")
+        assert decide(rules, *associated, made=("knowledge_assertion", None)) == (
+            "gene-disease",
+            None,
+        )
+        # A skip statement rule keeps its own name in the report.
+        assert decide(rules, gene, "biolink:located_in", cc) == ("go", None)
+        # No statement rule: unmatched, whatever the provenance.
+        assert decide(rules, disease, "biolink:affects", gene) == (None, None)
+        assert scope.match_rule(rules, *associated, *mined_edge) is gene_disease
+    # A provenance rule never raises a tier, and the first one that matches decides.
+    rules = (raise_, mined, gene_gene)
+    assert decide(rules, gene, "biolink:interacts_with", gene) == ("gene-gene", None)
+    rules = (mined, raise_, gene_gene)
+    assert decide(rules, gene, "biolink:interacts_with", gene) == ("gene-gene", "mined")
+
+
+def _rules_file(directory: Path, rules: list[dict]) -> Path:
+    path = directory / "rules.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rules))
+    return path
+
+
+GENE_DISEASE_RULE = {
+    "id": "gene-disease",
+    "tier": "query",
+    "subject": ["biolink:GeneOrGeneProduct"],
+    "predicates": ["biolink:associated_with"],
+    "object": ["biolink:Disease"],
+}
+# Placed after the statement rule: a provenance rule's place among them doesn't matter.
+MINED_RULES = [
+    GENE_DISEASE_RULE,
+    {"id": "mined", "tier": "capped", "knowledge_level": ["text_co_occurrence"]},
+]
+MINED = dict(
+    primary_knowledge_source="infores:eram",
+    knowledge_level="text_co_occurrence",
+    agent_type="text_mining_agent",
+)
+CURATED = dict(
+    primary_knowledge_source="infores:omim",
+    knowledge_level="knowledge_assertion",
+    agent_type="manual_agent",
+)
+
+
+def test_a_statement_with_curated_and_mined_edges_takes_the_higher_tier(tmp_path):
+    nodes = [
+        Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
+        Node(id="MONDO:1", category=["biolink:Disease"], name="d"),
+    ]
+    predicate = "biolink:gene_associated_with_condition"
+    edges = [
+        _edge("NCBIGene:1", predicate, "MONDO:1", score=0.3, **MINED),
+        _edge("NCBIGene:1", predicate, "MONDO:1", publications=["PMID:7"], **CURATED),
+    ]
+    graph = _graph(tmp_path / "g", nodes, edges)
+    rules = _rules_file(tmp_path, MINED_RULES)
+    report, statements, pairs, _ = _run(graph, tmp_path / "work", rules_file=rules)
+    [s] = statements
+    assert (s.rule, s.provenance_rule) == ("gene-disease", None)
+    # Both edges count, the mined one included.
+    assert (s.edge_count, s.sources, s.source_pmids, s.score) == (
+        2,
+        ["infores:eram", "infores:omim"],
+        ["7"],
+        0.3,
+    )
+    assert pairs[s.pair_id].rules == ["gene-disease"]
+    gene_disease = report["rules"]["gene-disease"]
+    assert (gene_disease["matched_edges"], gene_disease["edges"]) == (2, 2)
+    assert report["rules"]["mined"]["matched_statements"] == 0
+    # Without the curated edge, the statement is the provenance rule's, still under its own
+    # statement rule.
+    graph = _graph(tmp_path / "g2", nodes, edges[:1])
+    _, [s], _, _ = _run(graph, tmp_path / "work2", rules_file=rules)
+    assert (s.rule, s.provenance_rule, s.edge_count) == ("gene-disease", "mined", 1)
+
+
+def test_a_capped_provenance_rule_keeps_its_best_scored_pairs(tmp_path):
+    """The mined pairs have a cap of their own, ranked by score, and a pair the query rule
+    keeps too takes a place in it: its mined statements widen what review sends."""
+    genes = [Node(id=f"NCBIGene:{i}", category=["biolink:Gene"], name=f"G{i}") for i in range(5)]
+    disease = Node(id="MONDO:1", category=["biolink:Disease"], name="d")
+    associated = "biolink:gene_associated_with_condition"
+    edges = [
+        _edge("NCBIGene:1", associated, "MONDO:1", score=0.9, **MINED),
+        _edge("NCBIGene:2", associated, "MONDO:1", score=0.5, **MINED),
+        _edge("NCBIGene:3", associated, "MONDO:1", score=0.7, **MINED),
+        # Pair 4 has a curated statement, and a mined one with the best score.
+        _edge("NCBIGene:4", associated, "MONDO:1", **CURATED),
+        _edge("NCBIGene:4", "biolink:correlated_with", "MONDO:1", score=0.95, **MINED),
+    ]
+    graph = _graph(tmp_path / "g", [*genes, disease], edges)
+    rules = _rules_file(tmp_path, MINED_RULES)
+    report, statements, pairs, _ = _run(graph, tmp_path / "work", rules_file=rules, capped_limit=2)
+    kept = {pair_id(f"NCBIGene:{i}", "MONDO:1") for i in (1, 4)}
+    assert set(pairs) == kept
+    four = pairs[pair_id("NCBIGene:4", "MONDO:1")]
+    assert len(four.statement_ids) == 2 and four.rules == ["gene-disease"]
+    assert {(s.rule, s.provenance_rule) for s in statements} == {
+        ("gene-disease", None),
+        ("gene-disease", "mined"),
+    }
+    assert report["rules"]["mined"] == {
+        "tier": "capped",
+        "matched_edges": 4,
+        "matched_statements": 4,
+        "edges": 2,
+        "statements": 2,
+        "pairs": 2,
+        "dropped_by_min_score": {"statements": 0, "edges": 0},
+        "dropped_by_cap": {"pairs": 2, "statements": 2, "edges": 2},
+    }
+    # The statement rule's counts leave out what the provenance rule took.
+    gene_disease = report["rules"]["gene-disease"]
+    assert (gene_disease["matched_edges"], gene_disease["statements"]) == (1, 1)
+    assert any(line.startswith("  mined: 2 edges") for line in scope.summary(report))
+    # --min-score applies to a provenance rule's cap too, and never to a query rule.
+    report, _, pairs, _ = _run(graph, tmp_path / "work2", rules_file=rules, min_score=0.8)
+    assert report["rules"]["mined"]["dropped_by_min_score"] == {"statements": 2, "edges": 2}
+    assert set(pairs) == kept
+
+
+def test_a_text_mined_go_edge_is_skipped_by_its_statement_rule(tmp_path):
+    """A skip statement rule names the edges it skips whatever their provenance."""
+    nodes = [
+        Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
+        Node(id="GO:0005634", category=["biolink:CellularComponent"], name="nucleus"),
+    ]
+    edge = _edge("NCBIGene:1", "biolink:located_in", "GO:0005634", **MINED)
+    report, statements, _, _ = _run(_graph(tmp_path / "g", nodes, [edge]), tmp_path / "work")
+    assert statements == []
+    [skipped] = report["skipped"]
+    assert (skipped["rule"], skipped["edges"]) == ("skip:pathway-go", 1)
+    assert report["rules"]["pathway-go"] == {"tier": "skip", "skipped_edges": 1}
+
+
 def test_rules_file_can_match_on_provenance(toy_graph, tmp_path):
     rules = tmp_path / "rules.json"
     rules.write_text(
@@ -414,6 +579,17 @@ def test_rules_file_replaces_the_defaults(toy_graph, tmp_path):
         ('[{"id": "x", "tier": "skip", "knowledge_level": ["text_mined"]}]', "knowledge_level"),
         ('[{"id": "x", "tier": "skip", "agent_type": ["robot"]}]', "agent_type"),
         ('[{"id": "x", "tier": "skip"}]', "needs predicates"),
+        # A provenance rule (no predicates) picks no edges, so it can't name what they join.
+        (
+            '[{"id": "x", "tier": "capped", "agent_type": ["text_mining_agent"],'
+            ' "subject": ["biolink:Gene"]}]',
+            "provenance rule .* can't set subject, object or symmetric",
+        ),
+        (
+            '[{"id": "x", "tier": "skip", "knowledge_level": ["text_co_occurrence"],'
+            ' "symmetric": true}]',
+            "provenance rule",
+        ),
     ],
 )
 def test_bad_rules_file(tmp_path, content, problem):

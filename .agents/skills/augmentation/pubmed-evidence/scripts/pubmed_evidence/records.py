@@ -64,7 +64,13 @@ class SelectedStatement(BaseModel):
         default=False, description="The edges deny it: a negated source edge, judged as one"
     )
     rule: str = Field(
-        description="Id of the scope rule that kept it, e.g. 'chemical-treats-disease'"
+        description="Id of the statement rule that kept it, e.g. 'chemical-treats-disease', "
+        "whose predicates its pair's claims may use"
+    )
+    provenance_rule: str | None = Field(
+        default=None,
+        description="Id of the provenance rule that set its tier and cap instead, e.g. "
+        "'text-co-occurrence', when one lowered every kept edge making it; None otherwise",
     )
     edge_count: int = Field(description="Edges in the input graph that make this statement")
     sources: list[str] = Field(
@@ -79,7 +85,9 @@ class SelectedStatement(BaseModel):
 
 
 class Pair(shared.pubmed.Pair):
-    """A kept node pair, with its statements; its `source_pmids` are the union of theirs."""
+    """A kept node pair, with its statements; its `source_pmids` are the union of theirs, and
+    its `rules` their statement rules (never a provenance rule), which set the predicates its
+    claims may use."""
 
     statement_ids: list[str]
     rules: list[str] = Field(default_factory=list)

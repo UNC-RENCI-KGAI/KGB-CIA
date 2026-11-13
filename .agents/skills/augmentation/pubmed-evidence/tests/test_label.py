@@ -453,6 +453,33 @@ def test_prompt_version_covers_rules_effort_and_the_included_rules(tmp_path, mon
     assert version != low and "One more rule." in text
 
 
+def test_provenance_rules_have_no_schema_and_leave_the_version_alone():
+    """A provenance rule names no predicates: it has no reply schema (its predicate enum would
+    be empty), a pair never names it, and adding one, in any tier, leaves the prompt version
+    and so the cached claims as they were. Only the statement rules that aren't skips make
+    the version, the same five as before provenance rules existed."""
+    statement_rules = tuple(r for r in scope.DEFAULT_RULES if not r.is_provenance)
+    more = (
+        scope.Rule(id="mined", tier="capped", agent_type=("text_mining_agent",)),
+        *scope.DEFAULT_RULES,
+        scope.Rule(id="co-mentioned", tier="query", knowledge_level=("text_co_occurrence",)),
+    )
+    schemas = label.rule_schemas(more)
+    assert set(schemas) == {
+        "chemical-treats-disease",
+        "chemical-affects-gene",
+        "gene-disease",
+        "gene-gene",
+        "gene-phenotype",
+    }
+    for schema in schemas.values():
+        assert schema.body["$defs"]["statement"]["properties"]["predicate"]["enum"]
+    assert label.predicates_of(more, ["mined"]) == ()
+    version = label.label_prompt(model=MODEL, rules=statement_rules)[1]
+    assert label.label_prompt(model=MODEL)[1] == version
+    assert label.label_prompt(model=MODEL, rules=more)[1] == version
+
+
 # --- Checks ---------------------------------------------------------------------------------
 
 NODES = {"X": IMATINIB, "Y": ABL1}

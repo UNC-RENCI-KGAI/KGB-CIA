@@ -111,6 +111,14 @@ contradict it.
 
 Group the kept edges by unordered node pair, since one search serves edges in both directions.
 
+- **Two kinds of rule:** a statement rule names predicates and picks edges by what they say;
+  a provenance rule names only a knowledge level or an agent type, and lowers the tier of the
+  edges a statement rule picked, never raising it. A skip statement rule wins over any
+  provenance rule (a text-mined GO edge is skipped as `pathway-go`). An edge a provenance rule
+  lowers keeps its statement rule, whose predicates its pair's claims may use, so a provenance
+  rule changes no reply schema and no prompt version. A statement with edges in its statement
+  rule's own tier and lowered edges takes the higher tier; every edge counts in its sources,
+  PMIDs and score (`reference/rules.md`).
 - **Matching:** "Gene" and "Gene/Protein" match `biolink:GeneOrGeneProduct`, so proteins
   NodeNorm didn't conflate into genes still match. "ChemicalEntity/Drug" matches
   `biolink:ChemicalEntity`. An edge also matches in reverse when Biolink marks its predicate
@@ -337,8 +345,8 @@ qualifier value is an enum, so code checks only what a schema can't say (above).
   fails the call. An abstract the reply leaves out stays unanswered and is asked again next
   run; it is counted, not a failed call.
 - **The prompt version** hashes the prompt with the files it includes, `FORMAT_VERSION`, every
-  non-skip rule's schema and the reasoning effort, so one run has one version, and runs on two
-  graphs with the same rules share it. A deployment that doesn't support strict output fails
+  non-skip statement rule's schema (provenance rules have none) and the reasoning effort, so
+  one run has one version, and runs on two graphs with the same rules share it. A deployment that doesn't support strict output fails
   with its own error rather than falling back to JSON mode.
 - The message shows each abstract's PubMed publication types, which helps the model's design
   answer.
