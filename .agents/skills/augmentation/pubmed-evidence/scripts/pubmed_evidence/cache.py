@@ -4,7 +4,7 @@ label cache.
 - `PubMedCache` is `shared.pubmed`'s cache (ESearch results by query string, abstracts by PMID,
   NodeNorm entries by CURIE), with the groundings of the anatomy names claims give, by name. It
   is the file `shared.pubmed.default_cache_path()` names: KGB_PUBMED_CACHE, or
-  ~/.cache/pubmed/pubmed.sqlite. A rerun makes no requests for anything already there.
+  data/cache/pubmed/pubmed.sqlite. A rerun makes no requests for anything already there.
 - `LabelCache` keeps each abstract's answer for a pair by (pair, PMID, prompt version, model):
   the study design and the claims. Code's checks of a claim, the review's verdicts and the
   sentence repairs are keyed by that and the claim's `claim_id`, and a verdict or repair by its
@@ -13,7 +13,7 @@ label cache.
   again. It also logs each call's token use. Step 6 reads it, with the article types in the
   PubMed cache and the work files, so the graph can be rebuilt without calling a model. It lives
   in the cache directory (`config.default_cache_dir()`: KGB_AUGMENT_CACHE_DIR, or
-  ~/.cache/augmentation); point it at a shared directory to share it.
+  data/cache/augmentation); point it at a shared directory to share it.
 - An older label cache also has the tables of the statement labels that came before the claims
   (`labels`, `proposals`, `reviews`, `repairs`). No code reads or writes them any more, and they
   stay as they are.

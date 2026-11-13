@@ -5,12 +5,12 @@
 CURIE. A rerun makes no requests for anything already there, so agents that share one cache
 file share what each fetched: whichever runs first fills it.
 
-The file is `~/.cache/pubmed/pubmed.sqlite`, one per user wherever a command runs, unless
-KGB_PUBMED_CACHE names another; point it at a shared directory to share it between people.
-The old default, `data/cache/pubmed.sqlite` relative to where the command runs, is still used
-(with a warning to move it) while it exists and the new one doesn't. It uses SQLite's default
-rollback journal rather than WAL, which is unsafe on network filesystems. Write from one process
-at a time.
+The file is `pubmed/pubmed.sqlite` under the cache root (`shared.paths`: KGB_CACHE_DIR, else the
+repository's `data/cache/`) unless KGB_PUBMED_CACHE names another; point it at a shared
+directory to share it between people. The old default, `data/cache/pubmed.sqlite`, is still
+used (with a warning to move it) while it exists and the new one doesn't. It uses SQLite's
+default rollback journal rather than WAL, which is unsafe on network filesystems. Write from one
+process at a time.
 
 The tables match the augmentation agent's `pubmed.sqlite`, which opens as it is; tables this
 module doesn't know (that cache's `groundings`) are left alone. A subclass can add its own
@@ -28,30 +28,35 @@ from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
+from shared.paths import DEFAULT_CACHE_ROOT, REPO_ROOT, cache_dir
 from shared.pubmed._util import chunks, now, today, warn
 from shared.pubmed.eutils import EFETCH_BATCH, EUtils, EUtilsError
 from shared.pubmed.records import Abstract, Search
 
 CACHE_ENV = "KGB_PUBMED_CACHE"
-# Beside the other caches (~/.cache/augmentation, ~/.cache/croissant-semantics); `~` is
-# expanded when the path is used (`default_cache_path`).
-DEFAULT_CACHE_PATH = Path("~/.cache/pubmed/pubmed.sqlite")
-# The default before Nov 13 2026, relative to where the command runs. While it exists and the
-# new default doesn't, it is used still, so what it holds isn't fetched again.
-LEGACY_CACHE_PATH = Path("data/cache/pubmed.sqlite")
+CACHE_FILE = "pubmed.sqlite"
+# The default with KGB_CACHE_DIR unset (`default_cache_path`).
+DEFAULT_CACHE_PATH = DEFAULT_CACHE_ROOT / "pubmed" / CACHE_FILE
+# The default before Nov 13 2026: data/cache/pubmed.sqlite, relative to where the command ran,
+# which for the pipeline is the repository root. While one of these exists and the new default
+# doesn't, it is used still, so what it holds isn't fetched again.
+LEGACY_CACHE_PATHS = (Path("data/cache") / CACHE_FILE, REPO_ROOT / "data" / "cache" / CACHE_FILE)
 # Ids per `IN (...)` query, well under SQLite's limit on bound parameters.
 QUERY_CHUNK = 500
 
 
 def default_cache_path() -> Path:
-    """KGB_PUBMED_CACHE if set (`~` expanded), else ~/.cache/pubmed/pubmed.sqlite. But while
-    only the old default, data/cache/pubmed.sqlite, exists, that one, with a warning to move it."""
+    """KGB_PUBMED_CACHE if set (`~` expanded), else pubmed/pubmed.sqlite under the cache root
+    (`shared.paths.cache_dir`). But while only the old default, data/cache/pubmed.sqlite, exists,
+    that one, with a warning to move it."""
     if value := os.environ.get(CACHE_ENV):
         return Path(value).expanduser()
-    path = DEFAULT_CACHE_PATH.expanduser()
-    if not path.exists() and LEGACY_CACHE_PATH.exists():
-        _warn_legacy(LEGACY_CACHE_PATH.resolve(), path)
-        return LEGACY_CACHE_PATH
+    path = cache_dir("pubmed") / CACHE_FILE
+    if not path.exists():
+        for old in LEGACY_CACHE_PATHS:
+            if old.exists():
+                _warn_legacy(old.resolve(), path)
+                return old
     return path
 
 

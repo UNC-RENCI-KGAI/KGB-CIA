@@ -19,7 +19,7 @@ implements it).
 
 ## Input / output
 
-**Input:** a RoboCroissant `croissant.json` per source.
+**Input:** a RoboCroissant `croissant.json` per source, kept in `data/cache/croissant/`.
 
 **Output:** per source, `croissant.semantic.json` with `semantics_plan.json` and the check
 reports, which `kgb-transform` reads (see `agents/transformation/README.md`).

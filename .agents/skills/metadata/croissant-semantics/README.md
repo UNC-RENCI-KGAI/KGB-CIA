@@ -47,7 +47,10 @@ scripts/check.py path/to/croissant.json OUT/semantics_plan.json OUT/croissant.se
     --report OUT/check_report.md --load-records
 ```
 
-Every script has `--help`. Downloads are cached in `~/.cache/croissant-semantics/`.
+Every script has `--help`. Downloads, validation results and the Biolink vocabulary are cached
+in the KGB-CIA repository's `data/cache/croissant-semantics/` (`KGB_CACHE_DIR` moves the root;
+run outside the repository, in `~/.cache/croissant-semantics/`). Keep the raw RoboCroissant files
+this skill reads in `data/cache/croissant/`.
 
 ## Use it as a skill
 

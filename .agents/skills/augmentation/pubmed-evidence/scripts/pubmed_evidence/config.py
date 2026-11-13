@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from shared.paths import DEFAULT_CACHE_ROOT, REPO_ROOT, cache_dir
+
 # The augmentation agent's infores ID. Every edge it proposes gets it as
 # `primary_knowledge_source`, with PubMed, where its claims come from, as the one
 # `supporting_data_source` (a list: the Biolink slot is multivalued); and is a knowledge
@@ -30,28 +32,33 @@ DEFAULT_INPUT = Path(os.environ.get("KGB_AUGMENT_INPUT", "data/filter"))
 DEFAULT_OUTPUT = Path(os.environ.get("KGB_AUGMENT_OUTPUT", "data/augmentation"))
 # Intermediate files of each step: `<output>/work` unless given.
 WORK_SUBDIR = "work"
-# The label cache and the UBERON release: KGB_AUGMENT_CACHE_DIR, else ~/.cache/augmentation,
-# one per user wherever a command runs, beside ~/.cache/pubmed and ~/.cache/croissant-semantics
-# (`default_cache_dir`). Point it at a shared directory to share them across a team. The PubMed
-# cache is shared.pubmed's: KGB_PUBMED_CACHE, else ~/.cache/pubmed/pubmed.sqlite.
+# The label cache and the UBERON release: KGB_AUGMENT_CACHE_DIR, else augmentation/ under the
+# cache root (`shared.paths`: KGB_CACHE_DIR, else the repository's data/cache), whatever
+# directory a command runs from (`default_cache_dir`). Point it at a shared directory to share
+# them across a team. The PubMed cache is shared.pubmed's: KGB_PUBMED_CACHE, else
+# pubmed/pubmed.sqlite under the same root.
 CACHE_DIR_ENV = "KGB_AUGMENT_CACHE_DIR"
-DEFAULT_CACHE_DIR = Path("~/.cache/augmentation")
-# The default before Nov 13 2026, relative to where the command runs. While it holds a label
-# cache and the new default doesn't, it is used still, so its claims aren't paid for again.
-LEGACY_CACHE_DIR = Path("data/augmentation/cache")
+# The default with KGB_CACHE_DIR unset.
+DEFAULT_CACHE_DIR = DEFAULT_CACHE_ROOT / "augmentation"
+# The default before Nov 13 2026: data/augmentation/cache, relative to where the command ran,
+# which for the pipeline is the repository root. While one of these holds a label cache and the
+# new default doesn't, it is used still, so its claims aren't paid for again.
+LEGACY_CACHE_DIRS = (Path("data/augmentation/cache"), REPO_ROOT / "data" / "augmentation" / "cache")
 LABEL_CACHE = "labels.sqlite"
 
 
 def default_cache_dir() -> Path:
-    """KGB_AUGMENT_CACHE_DIR if set (`~` expanded), else ~/.cache/augmentation. But while only
-    the old default, data/augmentation/cache, holds a label cache, that one, with a warning to
-    move it."""
+    """KGB_AUGMENT_CACHE_DIR if set (`~` expanded), else augmentation/ under the cache root
+    (`shared.paths.cache_dir`). But while only the old default, data/augmentation/cache, holds a
+    label cache, that one, with a warning to move it."""
     if value := os.environ.get(CACHE_DIR_ENV):
         return Path(value).expanduser()
-    path = DEFAULT_CACHE_DIR.expanduser()
-    if not (path / LABEL_CACHE).exists() and (LEGACY_CACHE_DIR / LABEL_CACHE).exists():
-        _warn_legacy(LEGACY_CACHE_DIR.resolve(), path)
-        return LEGACY_CACHE_DIR
+    path = cache_dir("augmentation")
+    if not (path / LABEL_CACHE).exists():
+        for old in LEGACY_CACHE_DIRS:
+            if (old / LABEL_CACHE).exists():
+                _warn_legacy(old.resolve(), path)
+                return old
     return path
 
 

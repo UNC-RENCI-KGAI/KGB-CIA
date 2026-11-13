@@ -27,7 +27,7 @@ from pubmed_evidence.cache import LabelCache
 from toy import ABL1, CML, EDGES, IMATINIB, NODES, UBERON_OBO, UBERON_VERSION
 
 from agents.augmentation import cli as stage
-from shared import nodenorm
+from shared import nodenorm, paths
 from shared.pubmed import EUtils, default_cache_path
 from shared.pubmed import eutils as eutils_module
 from shared.pubmed import pairs as pairs_module
@@ -556,39 +556,48 @@ def test_one_bad_edge_does_not_stop_the_run(tmp_path, capsys, fakes):
         assert json.loads((out / "work" / report).read_text())["invalid_edges"]["edges"] == 1
 
 
-def test_the_cache_dir_is_the_users_unless_the_environment_names_one(tmp_path, monkeypatch):
+def test_the_cache_dir_is_under_the_cache_root_unless_the_environment_names_one(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv(config.CACHE_DIR_ENV, "~/team/augmentation")
     assert config.default_cache_dir() == tmp_path / "home" / "team" / "augmentation"
     monkeypatch.delenv(config.CACHE_DIR_ENV)
-    assert config.default_cache_dir() == tmp_path / "home" / ".cache" / "augmentation"
+    monkeypatch.setattr(config, "LEGACY_CACHE_DIRS", ())
+    monkeypatch.setenv(paths.CACHE_ROOT_ENV, "~/caches")
+    assert config.default_cache_dir() == tmp_path / "home" / "caches" / "augmentation"
+    monkeypatch.delenv(paths.CACHE_ROOT_ENV)
+    assert config.default_cache_dir() == paths.REPO_ROOT / "data" / "cache" / "augmentation"
+    assert config.default_cache_dir() == config.DEFAULT_CACHE_DIR
 
 
 def test_an_old_label_cache_is_used_until_it_is_moved(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv(config.CACHE_DIR_ENV)
+    monkeypatch.setenv(paths.CACHE_ROOT_ENV, str(tmp_path / "data" / "cache"))
     monkeypatch.chdir(tmp_path)
+    old_default = Path("data/augmentation/cache")
+    monkeypatch.setattr(config, "LEGACY_CACHE_DIRS", (old_default,))
     config._warn_legacy.cache_clear()
-    new = tmp_path / "home" / ".cache" / "augmentation"
-    old = tmp_path / config.LEGACY_CACHE_DIR
+    new = tmp_path / "data" / "cache" / "augmentation"
+    old = tmp_path / old_default
     old.mkdir(parents=True)
     (old / config.UBERON_FILE).write_text("")
     # Without a label cache, the old directory holds nothing worth keeping to.
     assert config.default_cache_dir() == new
     (old / config.LABEL_CACHE).write_bytes(b"")
-    assert config.default_cache_dir() == config.LEGACY_CACHE_DIR
-    assert config.default_cache_dir() == config.LEGACY_CACHE_DIR
+    assert config.default_cache_dir() == old_default
+    assert config.default_cache_dir() == old_default
     err = capsys.readouterr().err
     assert err.count("old default") == 1  # once a process
-    assert "data/augmentation/cache" in err and f"mkdir -p {new}" in err
+    assert f"mkdir -p {new} && mv {old}/* {new}/" in err
 
     # --cache-dir given: that one, and no warning.
     config._warn_legacy.cache_clear()
     args = cli._resolve(cli._parser().parse_args(["--cache-dir", str(tmp_path / "x"), "select"]))
     assert args.cache_dir == tmp_path / "x" and capsys.readouterr().err == ""
     # Neither given: resolved after parsing.
-    assert cli._resolve(cli._parser().parse_args(["select"])).cache_dir == config.LEGACY_CACHE_DIR
+    assert cli._resolve(cli._parser().parse_args(["select"])).cache_dir == old_default
 
     # Moved: the new one.
     new.mkdir(parents=True)

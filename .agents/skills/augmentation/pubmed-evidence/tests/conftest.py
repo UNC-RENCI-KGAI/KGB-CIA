@@ -31,14 +31,14 @@ from shared.pubmed import CACHE_ENV  # noqa: E402
 @pytest.fixture(autouse=True)
 def own_pubmed_cache(monkeypatch, tmp_path_factory):
     """Every test reads and writes a PubMed cache of its own (`PubMedCache()`,
-    `default_cache_path()`), never the user's ~/.cache/pubmed/pubmed.sqlite."""
+    `default_cache_path()`), never the repository's data/cache/pubmed."""
     monkeypatch.setenv(CACHE_ENV, str(tmp_path_factory.mktemp("pubmed") / "pubmed.sqlite"))
 
 
 @pytest.fixture(autouse=True)
 def own_cache_dir(monkeypatch, tmp_path_factory):
     """Every run without --cache-dir uses a label cache directory of the test's own
-    (`config.default_cache_dir()`), never the user's ~/.cache/augmentation."""
+    (`config.default_cache_dir()`), never the repository's data/cache/augmentation."""
     monkeypatch.setenv(config.CACHE_DIR_ENV, str(tmp_path_factory.mktemp("augmentation")))
 
 
