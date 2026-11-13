@@ -93,7 +93,7 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    cover) may deserve a rule. Edges mined from the literature (`knowledge_level:
    text_co_occurrence`, `agent_type: text_mining_agent`) that a query or capped rule keeps are
    capped whatever their predicate, in caps of their own (`text-co-occurrence`, `text-mined`,
-   provenance rules): they carry no publications or supporting sentence, so no other step can
+   provenance rules; COMPARTMENTS' text-mined locations in `text-mined-location`'s): they carry no publications or supporting sentence, so no other step can
    check them, and the label step asks whether an abstract states the claim, not whether it
    mentions both entities; the cap bounds the cost. Their statements keep the rule that chose
    them (`gene-disease`), whose counts in the report leave them out. To change the scope, write
