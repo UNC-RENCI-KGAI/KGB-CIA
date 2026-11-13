@@ -78,6 +78,12 @@ Tools that don't know them still read the file; they just don't act on them.
   `{"@id": ...}` crashes mlcroissant when it builds its graph.
 - `value` must map to `sc:value` in `@context`; with `cr:value` the constant reads back empty.
 - `annotation` needs `"annotation": "cr:annotation"` in `@context`; older RoboCroissant files lack it.
+- RoboCroissant's `@context` has only the 15 keys its own output uses. Without `subField`,
+  `references`, `equivalentProperty`, `transform`, ... (which then expand to schema.org terms)
+  mlcroissant can't see entity groups, and the validator fails on every one of them.
+  `apply_plan.py` adds every key of the standard Croissant context (as mlcroissant 1.1.1
+  defines it) that the input lacks, and prints a note naming them; a key the input defines keeps
+  its definition.
 - Inline `data` rows must have every field of the record set, even when empty.
 - Sub-fields can keep their original `@id`s; they don't need the parent's id as a prefix.
 - Sub-fields with JSON-path sources fail to load (`Column "$.id" does not exist`), so entities

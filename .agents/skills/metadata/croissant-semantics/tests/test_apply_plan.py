@@ -255,6 +255,52 @@ def test_context_gets_croissant_terms_and_prefixes():
     )
 
 
+def test_context_gets_the_standard_croissant_keys_the_input_lacks(capsys):
+    """RoboCroissant's @context has 15 keys; without subField, references, equivalentProperty,
+    transform, ... mlcroissant can't see entity groups and the validator fails on every one. All
+    three Nov 12 agents patched the context by hand."""
+    c = croissant()
+    c["@context"] = {  # RoboCroissant's 15 keys
+        "@language": "en",
+        "@vocab": "https://schema.org/",
+        "sc": "https://schema.org/",
+        "cr": "http://mlcommons.org/croissant/",
+        "dct": "http://purl.org/dc/terms/",
+        "conformsTo": "dct:conformsTo",
+        "recordSet": "cr:recordSet",
+        "field": "cr:field",
+        "source": "cr:source",
+        "fileObject": "cr:fileObject",
+        "extract": "cr:extract",
+        "column": "cr:column",
+        "fileProperty": "cr:fileProperty",
+        "dataType": {"@id": "cr:dataType", "@type": "@id"},
+        "containedIn": "cr:containedIn",
+    }
+    out, _ = apply_plan(c, plan())
+    ctx = out["@context"]
+    for key in (
+        "citeAs", "equivalentProperty", "fileSet", "format", "includes", "isLiveDataset",
+        "jsonPath", "key", "md5", "parentField", "path", "references", "regex", "repeated",
+        "replace", "samplingRate", "separator", "subField", "transform",
+    ):  # fmt: skip
+        assert ctx[key] == f"cr:{key}"
+    assert ctx["examples"] == {"@id": "cr:examples", "@type": "@json"}
+    assert ctx["rai"] == "http://mlcommons.org/croissant/RAI/"
+    # what the input defined stands; what the semantics need is forced
+    assert ctx["dataType"] == {"@id": "cr:dataType", "@type": "@id"}
+    assert ctx["containedIn"] == "cr:containedIn"
+    assert ctx["data"] == {"@id": "cr:data", "@type": "@json"}
+    assert "standard Croissant keys" in capsys.readouterr().err
+    # a context that has them all gets no note
+    from apply_plan import CROISSANT_CONTEXT
+
+    c = croissant()
+    c["@context"] = dict(CROISSANT_CONTEXT)
+    apply_plan(c, plan())
+    assert "standard Croissant keys" not in capsys.readouterr().err
+
+
 def test_conflicting_prefix_is_an_error():
     c = croissant()
     c["@context"]["biolink"] = "http://example.org/other/"
