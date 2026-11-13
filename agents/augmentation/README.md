@@ -44,7 +44,7 @@ endpoint) for labeling and review with the Azure OpenAI models (`ANTHROPIC_API_K
 `ant auth login` profile, with Claude models), and `NCBI_EMAIL` (plus `NCBI_API_KEY` for 10
 requests a second) for the PubMed search. The search, its client and its cache are
 `shared.pubmed`'s; `KGB_PUBMED_CACHE` names the cache file (default
-`data/cache/pubmed.sqlite`), which every agent that reads PubMed shares. With a `label_run.json`
+`~/.cache/pubmed/pubmed.sqlite`), which all agents reading PubMed share. With a `label_run.json`
 in the work directory, the full run continues that run (its model, prompt, reasoning effort,
 reviewer and review effort) and reuses its cached claims and verdicts; `--reasoning-effort`
 labels at another effort (default: the model's own, low for gpt-6-luna). The full run labels
@@ -86,8 +86,8 @@ Uses the KGX records in `shared/schema.py`.
 - **Work directory** (`--work`, default `<output>/work`): among each step's files,
   `refinements.jsonl` (each refined pair's edges, proposed edges and links) and
   `apply_report.json`. These and the **caches** (the PubMed cache, `KGB_PUBMED_CACHE`, default
-  `data/cache/pubmed.sqlite`; the label cache, `--cache-dir`, default `data/augmentation/cache`)
-  are described in the skill's
+  `~/.cache/pubmed/pubmed.sqlite`; the label cache, `--cache-dir` or `KGB_AUGMENT_CACHE_DIR`,
+  default `~/.cache/augmentation`) are described in the skill's
   [`reference/work-files.md`](../../.agents/skills/augmentation/pubmed-evidence/reference/work-files.md).
 
 ## Status

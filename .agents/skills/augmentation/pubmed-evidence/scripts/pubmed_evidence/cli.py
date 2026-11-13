@@ -80,9 +80,9 @@ def _add_common(parser: argparse.ArgumentParser, *, top: bool) -> None:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=default(config.DEFAULT_CACHE_DIR),
+        default=default(None),
         help=f"the label cache and the UBERON release (default {config.DEFAULT_CACHE_DIR}; "
-        f"env KGB_AUGMENT_CACHE_DIR). The PubMed cache is the file env {CACHE_ENV} names "
+        f"env {config.CACHE_DIR_ENV}). The PubMed cache is the file env {CACHE_ENV} names "
         f"(default {DEFAULT_CACHE_PATH})",
     )
 
@@ -138,6 +138,10 @@ def _parser(prog: str = "kgb-augment") -> argparse.ArgumentParser:
 
 def _resolve(args: argparse.Namespace) -> argparse.Namespace:
     args.work = config.work_dir(args.output, args.work)
+    # Resolved here, not as the option's default, so it warns about an old cache directory only
+    # when no --cache-dir is given.
+    if args.cache_dir is None:
+        args.cache_dir = config.default_cache_dir()
     return args
 
 

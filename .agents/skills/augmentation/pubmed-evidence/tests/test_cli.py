@@ -205,7 +205,7 @@ def test_main_with_no_arguments_runs_every_step(tmp_path, monkeypatch, fakes):
     assert stage.main([]) == 0
 
     out = tmp_path / config.DEFAULT_OUTPUT
-    cache_dir = tmp_path / config.DEFAULT_CACHE_DIR
+    cache_dir = config.default_cache_dir()
     assert (cache_dir / config.LABEL_CACHE).exists()
     assert not (out / "work" / "sentences.jsonl").exists()  # no sentences step any more
 
@@ -554,3 +554,43 @@ def test_one_bad_edge_does_not_stop_the_run(tmp_path, capsys, fakes):
     assert bad in edges
     for report in ("scope_report.json", "apply_report.json"):
         assert json.loads((out / "work" / report).read_text())["invalid_edges"]["edges"] == 1
+
+
+def test_the_cache_dir_is_the_users_unless_the_environment_names_one(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(config.CACHE_DIR_ENV, "~/team/augmentation")
+    assert config.default_cache_dir() == tmp_path / "home" / "team" / "augmentation"
+    monkeypatch.delenv(config.CACHE_DIR_ENV)
+    assert config.default_cache_dir() == tmp_path / "home" / ".cache" / "augmentation"
+
+
+def test_an_old_label_cache_is_used_until_it_is_moved(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(config.CACHE_DIR_ENV)
+    monkeypatch.chdir(tmp_path)
+    config._warn_legacy.cache_clear()
+    new = tmp_path / "home" / ".cache" / "augmentation"
+    old = tmp_path / config.LEGACY_CACHE_DIR
+    old.mkdir(parents=True)
+    (old / config.UBERON_FILE).write_text("")
+    # Without a label cache, the old directory holds nothing worth keeping to.
+    assert config.default_cache_dir() == new
+    (old / config.LABEL_CACHE).write_bytes(b"")
+    assert config.default_cache_dir() == config.LEGACY_CACHE_DIR
+    assert config.default_cache_dir() == config.LEGACY_CACHE_DIR
+    err = capsys.readouterr().err
+    assert err.count("old default") == 1  # once a process
+    assert "data/augmentation/cache" in err and f"mkdir -p {new}" in err
+
+    # --cache-dir given: that one, and no warning.
+    config._warn_legacy.cache_clear()
+    args = cli._resolve(cli._parser().parse_args(["--cache-dir", str(tmp_path / "x"), "select"]))
+    assert args.cache_dir == tmp_path / "x" and capsys.readouterr().err == ""
+    # Neither given: resolved after parsing.
+    assert cli._resolve(cli._parser().parse_args(["select"])).cache_dir == config.LEGACY_CACHE_DIR
+
+    # Moved: the new one.
+    new.mkdir(parents=True)
+    (new / config.LABEL_CACHE).write_bytes(b"")
+    assert config.default_cache_dir() == new

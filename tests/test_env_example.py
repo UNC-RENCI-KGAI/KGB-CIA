@@ -11,7 +11,7 @@ ROOT = Path(__file__).parents[1]
 EXAMPLE = ROOT / ".env.example"
 # every *_API_KEY, *_TOKEN or *_SECRET name, plus the few non-secret settings scripts read
 PATTERN = re.compile(
-    r"\b([A-Z][A-Z0-9_]*_(?:API_KEY|TOKEN|SECRET)|AZURE_OPENAI_BASE_URL|NCBI_EMAIL|KGB_PUBMED_CACHE)\b"
+    r"\b([A-Z][A-Z0-9_]*_(?:API_KEY|TOKEN|SECRET)|AZURE_OPENAI_BASE_URL|NCBI_EMAIL|KGB_[A-Z_]*CACHE[A-Z_]*)\b"
 )
 SKIP_DIRS = {".venv", ".git", "node_modules", "data", "__pycache__", ".pytest_cache", ".ruff_cache"}
 SUFFIXES = {".py", ".md", ".json", ".toml", ".yml", ".yaml", ".sh"}

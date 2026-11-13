@@ -5,10 +5,12 @@
 CURIE. A rerun makes no requests for anything already there, so agents that share one cache
 file share what each fetched: whichever runs first fills it.
 
-The file is `data/cache/pubmed.sqlite` (relative to where the command runs) unless
+The file is `~/.cache/pubmed/pubmed.sqlite`, one per user wherever a command runs, unless
 KGB_PUBMED_CACHE names another; point it at a shared directory to share it between people.
-It uses SQLite's default rollback journal rather than WAL, which is unsafe on network
-filesystems. Write from one process at a time.
+The old default, `data/cache/pubmed.sqlite` relative to where the command runs, is still used
+(with a warning to move it) while it exists and the new one doesn't. It uses SQLite's default
+rollback journal rather than WAL, which is unsafe on network filesystems. Write from one process
+at a time.
 
 The tables match the augmentation agent's `pubmed.sqlite`, which opens as it is; tables this
 module doesn't know (that cache's `groundings`) are left alone. A subclass can add its own
@@ -17,6 +19,7 @@ tables by extending `SCHEMA`.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import sqlite3
@@ -30,14 +33,35 @@ from shared.pubmed.eutils import EFETCH_BATCH, EUtils, EUtilsError
 from shared.pubmed.records import Abstract, Search
 
 CACHE_ENV = "KGB_PUBMED_CACHE"
-DEFAULT_CACHE_PATH = Path("data/cache/pubmed.sqlite")
+# Beside the other caches (~/.cache/augmentation, ~/.cache/croissant-semantics); `~` is
+# expanded when the path is used (`default_cache_path`).
+DEFAULT_CACHE_PATH = Path("~/.cache/pubmed/pubmed.sqlite")
+# The default before Nov 13 2026, relative to where the command runs. While it exists and the
+# new default doesn't, it is used still, so what it holds isn't fetched again.
+LEGACY_CACHE_PATH = Path("data/cache/pubmed.sqlite")
 # Ids per `IN (...)` query, well under SQLite's limit on bound parameters.
 QUERY_CHUNK = 500
 
 
 def default_cache_path() -> Path:
-    """KGB_PUBMED_CACHE if set, else data/cache/pubmed.sqlite."""
-    return Path(os.environ.get(CACHE_ENV) or DEFAULT_CACHE_PATH)
+    """KGB_PUBMED_CACHE if set (`~` expanded), else ~/.cache/pubmed/pubmed.sqlite. But while
+    only the old default, data/cache/pubmed.sqlite, exists, that one, with a warning to move it."""
+    if value := os.environ.get(CACHE_ENV):
+        return Path(value).expanduser()
+    path = DEFAULT_CACHE_PATH.expanduser()
+    if not path.exists() and LEGACY_CACHE_PATH.exists():
+        _warn_legacy(LEGACY_CACHE_PATH.resolve(), path)
+        return LEGACY_CACHE_PATH
+    return path
+
+
+@functools.cache
+def _warn_legacy(old: Path, new: Path) -> None:
+    """Once a process for each old cache: where it should go."""
+    warn(
+        f"using the PubMed cache at its old default, {old}; move it to the new one "
+        f"(mkdir -p {new.parent} && mv {old} {new}), or set {CACHE_ENV} to it"
+    )
 
 
 class PubMedCache:

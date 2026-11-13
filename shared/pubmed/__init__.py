@@ -5,7 +5,7 @@ PMIDs an edge cites.
   limited and retried. Environment: NCBI_API_KEY (10 requests a second instead of 3),
   NCBI_EMAIL (NCBI asks for one), EUTILS_URL (another server).
 - `cache`: `PubMedCache`, searches by query, abstracts by PMID (misses too) and NodeNorm entries
-  by CURIE, at KGB_PUBMED_CACHE or data/cache/pubmed.sqlite; `fetch_abstracts` and
+  by CURIE, at KGB_PUBMED_CACHE or ~/.cache/pubmed/pubmed.sqlite; `fetch_abstracts` and
   `cached_search` go through it, so only what it lacks goes over the network.
 - `pairs`: `search_pairs`, one query per node pair from the nodes' names, synonyms, MeSH
   headings and NodeNorm labels, with the abstracts of its hits and of the PMIDs its edges cite.

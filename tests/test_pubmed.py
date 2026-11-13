@@ -630,8 +630,30 @@ def test_cache_path_from_the_environment(monkeypatch, tmp_path: Path):
     monkeypatch.setenv(cache_module.CACHE_ENV, str(tmp_path / "shared" / "x.sqlite"))
     with PubMedCache() as cache:
         assert cache.path == tmp_path / "shared" / "x.sqlite" and cache.path.exists()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv(cache_module.CACHE_ENV, "~/team/pubmed.sqlite")
+    assert pubmed.default_cache_path() == tmp_path / "home" / "team" / "pubmed.sqlite"
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(cache_module.CACHE_ENV)
+    assert pubmed.default_cache_path() == tmp_path / "home" / ".cache" / "pubmed" / "pubmed.sqlite"
+
+
+def test_an_old_cache_is_used_until_it_is_moved(monkeypatch, tmp_path: Path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(cache_module.CACHE_ENV)
+    monkeypatch.chdir(tmp_path)
+    cache_module._warn_legacy.cache_clear()
+    new = tmp_path / "home" / ".cache" / "pubmed" / "pubmed.sqlite"
+    old = tmp_path / "data" / "cache" / "pubmed.sqlite"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"")
     assert pubmed.default_cache_path() == Path("data/cache/pubmed.sqlite")
+    assert pubmed.default_cache_path() == Path("data/cache/pubmed.sqlite")
+    err = capsys.readouterr().err
+    assert err.count("old default") == 1 and f"mv {old} {new}" in err  # once a process
+    new.parent.mkdir(parents=True)
+    new.write_bytes(b"")
+    assert pubmed.default_cache_path() == new
 
 
 # --- Through the cache --------------------------------------------------------------------------

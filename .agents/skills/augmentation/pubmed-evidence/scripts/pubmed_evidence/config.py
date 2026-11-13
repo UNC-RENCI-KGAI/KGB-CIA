@@ -8,7 +8,9 @@ PubMed's settings (the cache file, the NCBI key and email) are `shared.pubmed`'s
 
 from __future__ import annotations
 
+import functools
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -28,10 +30,42 @@ DEFAULT_INPUT = Path(os.environ.get("KGB_AUGMENT_INPUT", "data/filter"))
 DEFAULT_OUTPUT = Path(os.environ.get("KGB_AUGMENT_OUTPUT", "data/augmentation"))
 # Intermediate files of each step: `<output>/work` unless given.
 WORK_SUBDIR = "work"
-# The label cache and the UBERON release. Point this at a shared directory to share them across
-# a team. The PubMed cache is shared.pubmed's: KGB_PUBMED_CACHE, or data/cache/pubmed.sqlite.
-DEFAULT_CACHE_DIR = Path(os.environ.get("KGB_AUGMENT_CACHE_DIR", "data/augmentation/cache"))
+# The label cache and the UBERON release: KGB_AUGMENT_CACHE_DIR, else ~/.cache/augmentation,
+# one per user wherever a command runs, beside ~/.cache/pubmed and ~/.cache/croissant-semantics
+# (`default_cache_dir`). Point it at a shared directory to share them across a team. The PubMed
+# cache is shared.pubmed's: KGB_PUBMED_CACHE, else ~/.cache/pubmed/pubmed.sqlite.
+CACHE_DIR_ENV = "KGB_AUGMENT_CACHE_DIR"
+DEFAULT_CACHE_DIR = Path("~/.cache/augmentation")
+# The default before Nov 13 2026, relative to where the command runs. While it holds a label
+# cache and the new default doesn't, it is used still, so its claims aren't paid for again.
+LEGACY_CACHE_DIR = Path("data/augmentation/cache")
 LABEL_CACHE = "labels.sqlite"
+
+
+def default_cache_dir() -> Path:
+    """KGB_AUGMENT_CACHE_DIR if set (`~` expanded), else ~/.cache/augmentation. But while only
+    the old default, data/augmentation/cache, holds a label cache, that one, with a warning to
+    move it."""
+    if value := os.environ.get(CACHE_DIR_ENV):
+        return Path(value).expanduser()
+    path = DEFAULT_CACHE_DIR.expanduser()
+    if not (path / LABEL_CACHE).exists() and (LEGACY_CACHE_DIR / LABEL_CACHE).exists():
+        _warn_legacy(LEGACY_CACHE_DIR.resolve(), path)
+        return LEGACY_CACHE_DIR
+    return path
+
+
+@functools.cache
+def _warn_legacy(old: Path, new: Path) -> None:
+    """Once a process for each old cache directory: where it should go."""
+    print(
+        f"[augmentation] warning: using the label cache at its old default, {old}; move its "
+        f"files to the new one (mkdir -p {new} && mv {old}/* {new}/), or set {CACHE_DIR_ENV} "
+        "to it",
+        file=sys.stderr,
+    )
+
+
 # UBERON's release, whose is_a/part_of closure decides whether one anatomical context is at or
 # below another. The ground step fetches the release UBERON_URL pins into the cache directory
 # once; delete the file there to fetch it again after changing the pin.

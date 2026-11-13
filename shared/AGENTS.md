@@ -17,7 +17,9 @@ it touches.
 - `pubmed/` calls NCBI's E-utilities (and NodeNorm, for the pair search) over the network, and
   caches what it fetches in SQLite. Set `NCBI_API_KEY` (10 requests a second instead of 3) and
   `NCBI_EMAIL` (NCBI asks for one); `EUTILS_URL` points it at another server and
-  `KGB_PUBMED_CACHE` at another cache file (default `data/cache/pubmed.sqlite`). Agents that
+  `KGB_PUBMED_CACHE` at another cache file (default `~/.cache/pubmed/pubmed.sqlite`, one per
+  user wherever a command runs; the old default, `data/cache/pubmed.sqlite` relative to where
+  the command runs, is still used, with a warning, while only it exists). Agents that
   share the cache file share what each fetched. Only one process may write to a cache file at
   a time: SQLite's locking isn't reliable on a network drive, so two people running
   augmentation and the evidence check at once against a cache on the RENCI drive can hit lock
