@@ -14,8 +14,8 @@ twice. Text-mined edges are checked whatever augmentation did: they are the ones
 it, and only this check flags one whose abstracts don't support it.
 
 Abstracts come from NCBI E-utilities through `shared.pubmed`, whose cache the augmentation agent
-shares (KGB_PUBMED_CACHE, default data/cache/pubmed.sqlite), so only what neither has fetched
-goes over the network.
+shares (KGB_PUBMED_CACHE, else `shared.pubmed.default_cache_path()`), so only what neither
+has fetched goes over the network.
 
 Writes data/cleaning/evidence/<name>/evidence.jsonl: one line per (edge, article) with the edge's
 key (subject, predicate, object, primary knowledge source and statement id, so edges that

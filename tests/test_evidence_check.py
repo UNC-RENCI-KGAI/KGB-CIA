@@ -386,6 +386,7 @@ def test_gold_row_verdict_and_confidence(record, verdict, confidence):
     row = build.gold_row({"name": "q"}, record)
     assert (row["verdict"], row["confidence"]) == (verdict, confidence)
     assert row["evidence_check"] == record["verdict"]
+    assert row["statement_id"] == record["key"][4]
     assert row["publications"] == "|".join(f"PMID:{a['pmid']}" for a in record["articles"])
 
 
@@ -495,6 +496,11 @@ def test_edges_that_differ_only_in_qualifiers_are_judged_and_dropped_apart(works
     )
     assert [mechanism for mechanism, _ in a_p2] == ["biolink:agonism", "biolink:inhibition"]
     assert a_p2[0][1] != a_p2[1][1]
+    with open("data/cleaning/evidence/drug_target/gold_set.tsv") as f:
+        gold = [r for r in csv.DictReader(f, delimiter="\t") if r["subject"] == "C:A"]
+    assert sorted(r["statement_id"] for r in gold if r["object"] == "P:2") == sorted(
+        sid for _, sid in a_p2
+    )  # one gold-set row per qualifier version
 
     from agents.cleaning import garbage
 

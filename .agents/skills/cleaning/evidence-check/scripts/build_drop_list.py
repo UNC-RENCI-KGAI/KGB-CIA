@@ -12,8 +12,9 @@ Reads evidence.jsonl and answers.jsonl in data/cleaning/evidence/<name>/ and wri
   with the judge's confidence, which kgb-clean carries into its pruned_edges.tsv;
 - data/cleaning/flag_lists/<name>.jsonl: the flagged edges, each with its flag and a reason
   naming the articles, which kgb-clean writes onto the edge for the MCP interface to show;
-- gold_set.tsv beside verdicts.jsonl: every judged edge as a KGX TSV row with a keep or prune
-  verdict and a confidence, the form the challenge's pruning gold set takes (see gold_row).
+- gold_set.tsv beside verdicts.jsonl: every judged edge as a KGX TSV row with its statement_id
+  (two edges that differ only in qualifiers are two rows), a keep or prune verdict and a
+  confidence, the form the challenge's pruning gold set takes (see gold_row).
 
 Each drop and flag line names its edge by subject, predicate, object, primary knowledge source
 and `statement_id` (`shared.schema.edge_statement_id`), with the edge's qualifiers beside it to
@@ -41,6 +42,7 @@ GOLD_COLUMNS = (
     "predicate",
     "object",
     "primary_knowledge_source",
+    "statement_id",
     "publications",
     "verdict",
     "confidence",
@@ -74,12 +76,13 @@ def gold_row(q: dict, record: dict) -> dict:
         confidence = best(lambda a: a["supports"] + (a.get("flags") or {}).get(flag, 0.0))
     else:
         confidence = best(lambda a: a["supports"])
-    subject, predicate, obj, source, _ = record["key"]
+    subject, predicate, obj, source, statement_id = record["key"]
     return {
         "subject": subject,
         "predicate": predicate,
         "object": obj,
         "primary_knowledge_source": source,
+        "statement_id": statement_id,
         "publications": "|".join(f"PMID:{a['pmid']}" for a in articles),
         "verdict": "prune" if verdict == "drop" else "keep",
         "confidence": f"{min(confidence, 1.0):.3f}",
