@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
-from pubmed_evidence import config, graphio, records, scope
+from pubmed_evidence import config, graphio, label, records, scope
 from pubmed_evidence.graphio import pair_id, write_jsonl
 from pubmed_evidence.records import Entity, Pair, SelectedStatement
 from toy import (
@@ -251,47 +251,93 @@ def test_symmetric_predicate_matches_reversed_and_missing_nodes(tmp_path):
     ]
 
 
-def test_text_mined_edges_are_skipped_whatever_their_predicate(tmp_path):
+def test_text_mined_edges_are_capped_whatever_their_predicate(tmp_path):
     """eRAM writes a co-mention as `gene_associated_with_condition`, under the gene-disease
-    rule's `associated_with`; its knowledge level and agent type say what it is."""
+    rule's `associated_with`; its knowledge level and agent type say what it is. The default
+    provenance rules cap such edges, and a rules file can skip them instead."""
     nodes = [
         Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
+        Node(id="NCBIGene:2", category=["biolink:Gene"], name="h"),
         Node(id="MONDO:1", category=["biolink:Disease"], name="d"),
         Node(id="CHEBI:1", category=["biolink:SmallMolecule"], name="c"),
     ]
+    associated = "biolink:gene_associated_with_condition"
     mined = dict(knowledge_level="text_co_occurrence", agent_type="text_mining_agent")
+    read = dict(knowledge_level="statistical_association", agent_type="text_mining_agent")
     edges = [
-        _edge("NCBIGene:1", "biolink:gene_associated_with_condition", "MONDO:1", **mined),
+        _edge("NCBIGene:1", associated, "MONDO:1", **mined),
+        _edge("NCBIGene:1", associated, "MONDO:1", **read),
         _edge(
             "NCBIGene:1",
-            "biolink:gene_associated_with_condition",
-            "MONDO:1",
-            knowledge_level="statistical_association",
-            agent_type="text_mining_agent",
-        ),
-        _edge(
-            "NCBIGene:1",
-            "biolink:gene_associated_with_condition",
+            associated,
             "MONDO:1",
             knowledge_level="knowledge_assertion",
             agent_type="manual_agent",
         ),
         _edge("CHEBI:1", "biolink:treats", "MONDO:1", **mined),
+        _edge("NCBIGene:2", associated, "MONDO:1", **read),
     ]
     graph = _graph(tmp_path / "g", nodes, edges)
-    report, statements, _, _ = _run(graph, tmp_path / "work")
-    # Only the curated assertion is checked; the statement counts it alone.
+    report, statements, pairs, _ = _run(graph, tmp_path / "work")
+    by_subject = {s.subject: s for s in statements}
+    # The curated assertion keeps its statement in the query tier, with the mined edges counted.
+    curated = by_subject["NCBIGene:1"]
+    assert (curated.rule, curated.provenance_rule, curated.edge_count) == ("gene-disease", None, 3)
+    # Mined alone, a statement is capped by the first provenance rule its edges match.
+    treats, read_only = by_subject["CHEBI:1"], by_subject["NCBIGene:2"]
+    assert (treats.rule, treats.provenance_rule) == (
+        "chemical-treats-disease",
+        "text-co-occurrence",
+    )
+    assert (read_only.rule, read_only.provenance_rule) == ("gene-disease", "text-mined")
+    assert pairs[treats.pair_id].rules == ["chemical-treats-disease"]
+    rules = report["rules"]
+    assert {k: rules["text-co-occurrence"][k] for k in ("tier", "edges", "pairs")} == {
+        "tier": "capped",
+        "edges": 1,
+        "pairs": 1,
+    }
+    assert (rules["text-mined"]["matched_edges"], rules["text-mined"]["statements"]) == (1, 1)
+    assert (rules["gene-disease"]["matched_edges"], rules["gene-disease"]["statements"]) == (3, 1)
+    assert rules["chemical-treats-disease"]["statements"] == 0
+    assert report["skipped"] == []
+    assert any(line.startswith("  text-co-occurrence: 1 edges") for line in scope.summary(report))
+
+    # Set to skip, the provenance rules skip what they match, as the defaults did before.
+    as_skips = [
+        r.model_dump(mode="json") | ({"tier": "skip"} if r.is_provenance else {})
+        for r in scope.DEFAULT_RULES
+    ]
+    rules_file = _rules_file(tmp_path, as_skips)
+    report, statements, _, _ = _run(graph, tmp_path / "work2", rules_file=rules_file)
     [kept] = statements
-    assert (kept.rule, kept.edge_count, kept.sources) == ("gene-disease", 1, ["infores:string"])
+    assert (kept.rule, kept.edge_count, kept.provenance_rule) == ("gene-disease", 1, None)
     assert report["rules"]["text-co-occurrence"] == {"tier": "skip", "skipped_edges": 2}
-    assert report["rules"]["text-mined"] == {"tier": "skip", "skipped_edges": 1}
-    assert report["rules"]["gene-disease"]["matched_edges"] == 1
+    assert report["rules"]["text-mined"] == {"tier": "skip", "skipped_edges": 2}
     assert {(e["predicate"], e["rule"], e["edges"]) for e in report["skipped"]} == {
-        ("biolink:gene_associated_with_condition", "skip:text-co-occurrence", 1),
-        ("biolink:gene_associated_with_condition", "skip:text-mined", 1),
+        (associated, "skip:text-co-occurrence", 1),
+        (associated, "skip:text-mined", 2),
         ("biolink:treats", "skip:text-co-occurrence", 1),
     }
-    assert "3 by skip rules" in scope.summary(report)[-1]
+    assert "4 by skip rules" in scope.summary(report)[-1]
+
+
+def test_a_text_mined_gene_disease_edge_is_capped_as_gene_disease(tmp_path):
+    """The provenance rule sets the edge's tier, and its statement rule what its pair's
+    claims may say: the same predicates as for a curated gene-disease edge."""
+    nodes = [
+        Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
+        Node(id="MONDO:1", category=["biolink:Disease"], name="d"),
+    ]
+    edge = _edge("NCBIGene:1", "biolink:gene_associated_with_condition", "MONDO:1", **MINED)
+    report, [s], pairs, _ = _run(_graph(tmp_path / "g", nodes, [edge]), tmp_path / "work")
+    assert (s.rule, s.provenance_rule) == ("gene-disease", "text-co-occurrence")
+    pair = pairs[s.pair_id]
+    assert pair.rules == ["gene-disease"]
+    claimed = label.predicates_of(scope.DEFAULT_RULES, pair.rules)
+    assert claimed and claimed == label.predicates_of(scope.DEFAULT_RULES, ["gene-disease"])
+    assert report["rules"]["text-co-occurrence"]["pairs"] == 1
+    assert report["rules"]["gene-disease"]["matched_statements"] == 0
 
 
 def test_match_rule_honours_knowledge_level_and_agent_type():

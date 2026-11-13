@@ -804,9 +804,12 @@ def test_abstracts_per_call_is_at_most_20(w, capsys):
     assert "at most 20 abstracts per call" in capsys.readouterr().err
 
 
-def test_pairs_without_pubmed_rules_or_abstracts_are_skipped(w):
+# A provenance rule names no predicates, so a pair naming one (select never writes one) has
+# none to offer from it.
+@pytest.mark.parametrize("unknown", ["no-such-rule", "text-mined"])
+def test_pairs_without_pubmed_rules_or_abstracts_are_skipped(w, unknown):
     pairs = list(records.read_records(w.work / records.PAIRS, Pair))
-    pairs[1] = pairs[1].model_copy(update={"rules": ["no-such-rule"]})
+    pairs[1] = pairs[1].model_copy(update={"rules": [unknown]})
     third = Pair(pair_id="A:1|B:1", nodes=("A:1", "B:1"), statement_ids=["s3"], rules=["gene-gene"])
     write_jsonl(w.work / records.PAIRS, [*pairs, third])
     w.write_pubmed(["1001", "9999"], ["2001"])

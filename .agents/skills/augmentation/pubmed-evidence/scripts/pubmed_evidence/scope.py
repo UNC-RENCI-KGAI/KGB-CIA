@@ -34,6 +34,13 @@ whose kept edges were all lowered takes the highest tier among them, then the pr
 first in rule order. Every kept edge counts in the statement's edges, sources, PMIDs and score.
 So order matters among statement rules, and among provenance rules, but not between the two.
 
+The default provenance rules cap edges mined from the literature (`text-co-occurrence` on
+`knowledge_level: text_co_occurrence`, `text-mined` on `agent_type: text_mining_agent`),
+whatever their predicate: eRAM writes a co-mention as `gene_associated_with_condition`. They
+carry no publications or supporting sentence, so this step is the only one that can check
+them, and it isn't circular: label asks whether an abstract states the relationship, not
+whether it mentions both entities. The cap bounds the cost. A rules file can still skip them.
+
 A negated source edge (`negated: true`) is kept like any other, as its own statement apart from
 the positive one. Nothing is narrower than a negated statement (`refine.Lattice.entails`), so
 step 6 never supports it. The edges step 6 added on an earlier run (their `id` starts with
@@ -177,12 +184,17 @@ class Rule(BaseModel):
 
 
 DEFAULT_RULES: tuple[Rule, ...] = (
-    # An edge mined from the literature isn't a claim a paper could contradict: a co-mention,
-    # or a text-mining pipeline's reading of one, whatever predicate the source writes it as
-    # (eRAM: `gene_associated_with_condition` on text co-occurrence). Checking it against
-    # PubMed would be circular, so these come before every rule on the statement.
-    Rule(id="text-co-occurrence", tier="skip", knowledge_level=("text_co_occurrence",)),
-    Rule(id="text-mined", tier="skip", agent_type=("text_mining_agent",)),
+    # Provenance rules: an edge mined from the literature (a co-mention, or a text-mining
+    # pipeline's reading of one) is capped, whatever statement rule keeps it. Such edges are the
+    # least trustworthy, and carry no publications or supporting sentence, so the cleaning
+    # stage's evidence check can't judge them: this step is the only one that can. Checking
+    # them isn't circular, since label asks whether an abstract states the relationship, not
+    # whether it mentions both entities. The cap bounds the cost: eRAM writes its co-mentions
+    # as `gene_associated_with_condition`, and in gene-disease's query tier they made 127,774
+    # of the Nov 12 2026 run's 131,195 pairs. Their place in this list doesn't matter, only
+    # their order between themselves.
+    Rule(id="text-co-occurrence", tier="capped", knowledge_level=("text_co_occurrence",)),
+    Rule(id="text-mined", tier="capped", agent_type=("text_mining_agent",)),
     # Two entities mentioned together isn't a claim, and checking co-mention against PubMed
     # would be circular. It is under `associated_with`, so it is skipped before the rules below.
     Rule(
@@ -763,7 +775,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--capped-limit",
         type=int,
         default=config.CAPPED_LIMIT,
-        help=f"pairs kept per capped rule (gene-gene, gene-phenotype), best-scored first "
+        help=f"pairs kept per capped rule (gene-gene, gene-phenotype, and text-co-occurrence "
+        f"and text-mined for edges mined from the literature), best-scored first "
         f"(default {config.CAPPED_LIMIT:,})",
     )
     parser.add_argument(

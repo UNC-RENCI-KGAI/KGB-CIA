@@ -93,21 +93,26 @@ contradict it.
 | Skip | Gene → `expressed_in` → AnatomicalEntity/Cell | GTEx, HPA, Jensen TISSUES |
 | Skip | `orthologous_to`, `has_part`, `subclass_of`, `member_of` | Orthologs, Pfam, PANTHER, DTO |
 | Skip | `occurs_together_in_literature_with` | Literature co-occurrence |
-| Skip | any edge with `knowledge_level: text_co_occurrence` or `agent_type: text_mining_agent`, whatever its predicate | eRAM's text mining (`gene_associated_with_condition`) |
+| Capped, by provenance | any edge a query or capped rule above keeps with `knowledge_level: text_co_occurrence` or `agent_type: text_mining_agent`, whatever its predicate | eRAM's text mining (`gene_associated_with_condition`) |
 
 - **Capped:** gene–gene interactions are numerous and symmetric, and many come from a single
   high-throughput screen. Query only pairs above a confidence cutoff, and dedupe unordered
   pairs. Phenotype names are long and varied, so expect low recall.
+- **Text-mined edges are capped,** in caps of their own, whatever statement rule keeps them.
+  They are the least trustworthy edges in the graph, and they carry no publications or
+  supporting sentence, so the cleaning stage's evidence check can't judge them: this step is
+  the only one that can. Checking them isn't circular, since step 3 asks whether an abstract
+  states the relationship as a claim, not whether it mentions both entities. The cap bounds
+  the cost: eRAM writes 113,706 co-mentions as `gene_associated_with_condition` with
+  `knowledge_level: text_co_occurrence`, and the Nov 12 2026 run, which skipped only
+  `occurs_together_in_literature_with`, put 127,774 of its 131,195 pairs in the query tier
+  that way. How many pairs the capped default keeps on the whole graph needs a rerun. Two
+  provenance rules (below) set the cap; a rules file can make them skip rules instead.
 - **Skipped:** pathway and GO names rarely appear verbatim in abstracts, and GO annotations
   already carry their own references and evidence codes. Expression edges are measurements
   rather than claims and are very numerous. Literature co-occurrence isn't a claim, and
   checking it against PubMed would be circular. It sits under `associated_with`, so its skip
-  rule comes first. Nor is an edge a text-mining pipeline made, whatever predicate it carries:
-  its evidence is the literature itself. eRAM writes 113,706 co-mentions as
-  `gene_associated_with_condition` with `knowledge_level: text_co_occurrence`, and the Nov 12
-  2026 run put 127,774 of its 131,195 pairs in the query tier that way, so two skip rules on
-  the edge's provenance come before every rule on its statement. The rest are true by
-  construction.
+  rule comes first. The rest are true by construction.
 
 Group the kept edges by unordered node pair, since one search serves edges in both directions.
 
@@ -809,7 +814,7 @@ saves little. Revisit if we move to full text and need to choose which paragraph
 - Transformation team: whether TCRD's PMID columns are carried into `publications`.
 - Who holds the NCBI API key.
 - Score scales differ by source (STRING's raw combined score is 0–1000), so one `--min-score`
-  for both capped rules is crude.
+  for every capped rule, the text-mined edges' included, is crude.
 - Recall: MeSH supplementary concepts (`MESH:C…`, many ChEMBL compounds) could be searched
   with `[nm]`, and gene symbols under 3 characters (F2, C3) are dropped from queries.
 - Deferred until the cleaning or MCP stage needs them: flat fields beside `lit_evidence` for a

@@ -38,7 +38,8 @@ LABEL_CACHE = "labels.sqlite"
 UBERON_FILE = "uberon-basic.obo"
 UBERON_URL = "http://purl.obolibrary.org/obo/uberon/releases/2026-11-05/uberon-basic.obo"
 
-# Step 1: pairs kept per capped rule (gene-gene, gene-phenotype), best-scored first.
+# Step 1: pairs kept per capped rule (gene-gene, gene-phenotype; text-co-occurrence and
+# text-mined, for edges mined from the literature), best-scored first.
 CAPPED_LIMIT = 10_000
 
 # Step 4: the RENCI Name Resolver, which grounds the anatomy claims name.

@@ -74,8 +74,8 @@ shows as `unmatched`.
 
 | id | tier | subject | predicates (with descendants) | object | sym. | provenance |
 | --- | --- | --- | --- | --- | --- | --- |
-| `text-co-occurrence` | skip | any | any | any | | `knowledge_level: text_co_occurrence` |
-| `text-mined` | skip | any | any | any | | `agent_type: text_mining_agent` |
+| `text-co-occurrence` | capped (provenance rule) | | | | | `knowledge_level: text_co_occurrence` |
+| `text-mined` | capped (provenance rule) | | | | | `agent_type: text_mining_agent` |
 | `literature-co-occurrence` | skip | any | `occurs_together_in_literature_with` | any | yes | |
 | `chemical-treats-disease` | query | ChemicalEntity | `treats`, `contraindicated_in`, `treats_or_applied_or_studied_to_treat` | Disease | | |
 | `chemical-affects-gene` | query | ChemicalEntity | `affects`, `directly_physically_interacts_with`, `binds` | GeneOrGeneProduct | | |
@@ -93,12 +93,20 @@ All CURIEs are `biolink:`. Notes:
   (`associated_with_increased_likelihood_of` is how Monarch writes ClinGen's "Likely
   Pathogenic"; "Pathogenic" is `causes`), `correlated_with` and its positive and negative
   forms, and `biomarker_for`. `contributes_to` covers `causes`.
-- **`text-co-occurrence`** and **`text-mined`** come first, before any rule on the statement:
-  an edge mined from the literature (a co-mention, or a text-mining pipeline's reading of one)
-  isn't a claim a paper could contradict, whatever predicate its source writes it as (eRAM
-  writes `gene_associated_with_condition`, under `gene-disease`'s `associated_with`, on 113,706
-  text co-occurrence edges), and checking it against PubMed would be circular. The Nov 12 2026
-  run, without these rules, put 127,774 of its 131,195 pairs in the query tier that way.
+- **`text-co-occurrence`** and **`text-mined`** are provenance rules: they cap an edge mined
+  from the literature (a co-mention, or a text-mining pipeline's reading of one) that a
+  statement rule keeps, whatever predicate its source writes it as. Such edges are the least
+  trustworthy in the graph, and they carry no publications or supporting sentence, so the
+  cleaning stage's evidence check can't judge them; this step is the only one that can. Nor is
+  checking them circular: the label step asks whether an abstract states the relationship as a
+  claim, not whether it mentions both entities. The cap bounds the cost. eRAM writes
+  `gene_associated_with_condition`, under `gene-disease`'s `associated_with`, on 113,706 text
+  co-occurrence edges, and the Nov 12 2026 run, which skipped only
+  `occurs_together_in_literature_with`, put 127,774 of its 131,195 pairs in the query tier that
+  way. How many pairs the capped default keeps on the whole graph needs a rerun. A text-mined
+  edge that a skip statement rule covers stays skipped by it (`skip:pathway-go`), and a
+  text-mined edge in a statement that a curated edge keeps in its query tier is checked with
+  it. To skip them instead, as before, set these two rules' `tier` to `skip` in a rules file.
 - **`literature-co-occurrence`** comes next because its predicate is also below
   `associated_with`: two entities mentioned together is not a claim, and checking co-mention
   against PubMed would be circular.
@@ -109,7 +117,8 @@ All CURIEs are `biolink:`. Notes:
 ## Capped rules
 
 Gene–gene interactions are numerous and symmetric, and many come from one high-throughput
-screen; phenotype names are long and rarely found. So a `capped` rule keeps at most
+screen; phenotype names are long and rarely found; edges mined from the literature are
+numerous and the least trustworthy (above). So a `capped` rule keeps at most
 `--capped-limit` pairs (default 10,000, `config.CAPPED_LIMIT`), per rule. A statement is in
 the cap of its provenance rule if it has one, else in its statement rule's; a query statement
 is never capped, and a statement a provenance rule took is never in its statement rule's cap.
@@ -139,8 +148,8 @@ built-in rules entirely, so copy the ones you keep.
 
 ```json
 {"rules": [
-  {"id": "text-co-occurrence", "tier": "skip", "knowledge_level": ["text_co_occurrence"]},
-  {"id": "text-mined", "tier": "skip", "agent_type": ["text_mining_agent"]},
+  {"id": "text-co-occurrence", "tier": "capped", "knowledge_level": ["text_co_occurrence"]},
+  {"id": "text-mined", "tier": "capped", "agent_type": ["text_mining_agent"]},
   {"id": "literature-co-occurrence", "tier": "skip",
    "predicates": ["biolink:occurs_together_in_literature_with"], "symmetric": true},
   {"id": "gene-disease", "tier": "query",
@@ -152,6 +161,10 @@ built-in rules entirely, so copy the ones you keep.
    "object": ["biolink:PhenotypicFeature"]}
 ]}
 ```
+
+A provenance rule may also be a `skip` rule: `{"id": "text-mined", "tier": "skip",
+"agent_type": ["text_mining_agent"]}` skips every text-mined edge that a query or capped
+statement rule would keep, reported as `skip:text-mined`.
 
 | Field | Required | Meaning |
 | --- | --- | --- |

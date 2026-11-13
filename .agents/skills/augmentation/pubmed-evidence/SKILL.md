@@ -87,17 +87,21 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 ## Workflow
 
 1. **Select the edges.** `augment.py select`. Read `work/scope_report.json`: pairs kept per rule,
-   pairs dropped by the gene–gene and gene–phenotype caps, the negated edges kept, and the
-   `skipped` list of edge types with the skip rule that covered them or `unmatched`. Look at the
-   largest `unmatched` types: one that states a claim a paper could contradict (a predicate or
-   category the rules don't cover) may deserve a rule. Edges mined from the literature
-   (`knowledge_level: text_co_occurrence`, `agent_type: text_mining_agent`) are skipped
-   whatever their predicate (`text-co-occurrence`, `text-mined`): checking them against PubMed
-   would be circular. To change the scope, write `work/rules.json` (`reference/rules.md`: rules
-   match on categories, predicates, knowledge level and agent type) and rerun with
-   `--rules work/rules.json`; say why in `notes.md`. If `kept.misdirected_edges` isn't 0, note those edges for the transformation
-   team: claims rarely reach them. Record the pair count per rule in `notes.md`: it sets the
-   cost.
+   pairs dropped by the caps, the negated edges kept, and the `skipped` list of edge types with
+   the skip rule that covered them or `unmatched`. Look at the largest `unmatched` types: one
+   that states a claim a paper could contradict (a predicate or category the rules don't
+   cover) may deserve a rule. Edges mined from the literature (`knowledge_level:
+   text_co_occurrence`, `agent_type: text_mining_agent`) that a query or capped rule keeps are
+   capped whatever their predicate, in caps of their own (`text-co-occurrence`, `text-mined`,
+   provenance rules): they carry no publications or supporting sentence, so no other step can
+   check them, and the label step asks whether an abstract states the claim, not whether it
+   mentions both entities; the cap bounds the cost. Their statements keep the rule that chose
+   them (`gene-disease`), whose counts in the report leave them out. To change the scope, write
+   `work/rules.json` (`reference/rules.md`: rules match on categories, predicates, knowledge
+   level and agent type; a provenance rule can also skip) and rerun with
+   `--rules work/rules.json`; say why in `notes.md`. If `kept.misdirected_edges` isn't 0, note
+   those edges for the transformation team: claims rarely reach them. Record the pair count per
+   rule in `notes.md`: it sets the cost.
 
 2. **Search PubMed.** `augment.py pubmed`. One search per pair plus one fetch per ~200
    abstracts: about 25,000 pairs an hour with an API key, 4,000 without (and above 500 uncached
