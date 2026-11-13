@@ -18,11 +18,12 @@ shares (KGB_PUBMED_CACHE, default data/cache/pubmed.sqlite), so only what neithe
 goes over the network.
 
 Writes data/cleaning/evidence/<name>/evidence.jsonl: one line per (edge, article) with the edge's
-key, its subject and object (name, other names, identifier), the claim in words, and the
-article's title and abstract. The other names come from NodeNorm (cached with the abstracts):
-papers often name a drug by its development code ("FYX-051" for topiroxostat) or a protein by its
-gene symbol, and without them the judge can't tell the paper is about this edge.
-Run it from the repository root with `uv run python`.
+key (subject, predicate, object, primary knowledge source and statement id, so edges that
+differ only in qualifiers are judged apart), its qualifiers, its subject and object (name, other
+names, identifier), the claim in words, and the article's title and abstract. The other names
+come from NodeNorm (cached with the abstracts): papers often name a drug by its development
+code ("FYX-051" for topiroxostat) or a protein by its gene symbol, and without them the judge
+can't tell the paper is about this edge. Run it from the repository root with `uv run python`.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from shared.pubmed import (  # noqa: E402
     load_nodenorm,
 )
 from shared.pubmed.records import Entity  # noqa: E402
+from shared.schema import edge_negated, edge_qualifiers, edge_statement_id  # noqa: E402
 
 OTHER_NAMES = 5  # other names shown per node
 # Babel names UniProtKB entries "ABL1_HUMAN Tyrosine-protein kinase ABL1 (sprot)".
@@ -80,16 +82,22 @@ def graph_files(graph: Path) -> tuple[Path, Path]:
 
 
 def claim(edge: dict, names: dict[str, str]) -> str:
-    """The edge in words: 'imatinib interacts with (inhibition) ABL1'."""
+    """The edge in words, every part of its statement included: 'imatinib interacts with
+    (inhibition) ABL1', and 'NOT ...' for a negated edge."""
     predicate = edge["predicate"].removeprefix("biolink:").replace("_", " ")
     qualifiers = [
-        str(v).removeprefix("biolink:").replace("_", " ")
-        for k, v in sorted(edge.items())
-        if k.endswith("_qualifier") and v
+        str(v).removeprefix("biolink:").replace("_", " ") for v in edge_qualifiers(edge).values()
     ]
     middle = predicate + (f" ({', '.join(qualifiers)})" if qualifiers else "")
     subject = names.get(edge["subject"], edge["subject"])
-    return f"{subject} {middle} {names.get(edge['object'], edge['object'])}"
+    text = f"{subject} {middle} {names.get(edge['object'], edge['object'])}"
+    return f"NOT {text}" if edge_negated(edge) else text
+
+
+def statement(edge: dict) -> dict:
+    """The edge's qualifiers, and `negated` when it is, as the drop and flag lines carry them
+    beside its statement_id so a person can read which edge a line means."""
+    return {**edge_qualifiers(edge), **({"negated": True} if edge_negated(edge) else {})}
 
 
 def spread(key: tuple) -> str:
@@ -116,6 +124,7 @@ def candidate_edges(q: dict, edges_path: Path, skipped: dict | None = None):
                     edge["predicate"],
                     edge["object"],
                     edge.get("primary_knowledge_source", ""),
+                    edge_statement_id(edge),
                 )
                 yield {"edge": edge, "key": key, "pmids": ids}
 
@@ -125,8 +134,11 @@ def select_edges(
 ) -> list[dict]:
     """Candidate edges, one per key, or with a limit the same spread-out sample on every run.
 
-    An unmerged source can repeat an edge (one row per citation); those become one edge citing
-    all of their articles, as ORION's merge would make them.
+    The key is the edge's statement (`shared.schema.edge_statement_id`: subject, predicate,
+    object, qualifiers and `negated`, as the augmentation agent identifies edges) and its primary
+    knowledge source, so edges that differ only in qualifiers are judged one by one. An unmerged
+    source can repeat an edge (one row per citation); those become one edge citing all of their
+    articles, as ORION's merge would make them.
     """
     by_key: dict[tuple, dict] = {}
     for record in candidate_edges(q, edges_path, skipped):
@@ -229,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
                     json.dumps(
                         {
                             "key": r["key"],
+                            "statement": statement(edge),
                             "pmid": pmid,
                             "based_on_text": question.text_based(edge),
                             "subject": describe(edge["subject"], names, others),

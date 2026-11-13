@@ -15,8 +15,11 @@ Reads evidence.jsonl and answers.jsonl in data/cleaning/evidence/<name>/ and wri
 - gold_set.tsv beside verdicts.jsonl: every judged edge as a KGX TSV row with a keep or prune
   verdict and a confidence, the form the challenge's pruning gold set takes (see gold_row).
 
-The verdict rules are in question.edge_verdict. Rerun with another threshold in the question file
-to try it without asking Jev again. Standard library only.
+Each drop and flag line names its edge by subject, predicate, object, primary knowledge source
+and `statement_id` (`shared.schema.edge_statement_id`), with the edge's qualifiers beside it to
+read, so kgb-clean drops or flags only the edge that was judged, not others that differ from it
+only in qualifiers. The verdict rules are in question.edge_verdict. Rerun with another threshold
+in the question file to try it without asking Jev again. Standard library only.
 """
 
 from __future__ import annotations
@@ -31,6 +34,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import question  # noqa: E402
 
+# subject, predicate, object, primary knowledge source, statement id (gather_evidence.py)
+KEY_LENGTH = 5
 GOLD_COLUMNS = (
     "subject",
     "predicate",
@@ -69,7 +74,7 @@ def gold_row(q: dict, record: dict) -> dict:
         confidence = best(lambda a: a["supports"] + (a.get("flags") or {}).get(flag, 0.0))
     else:
         confidence = best(lambda a: a["supports"])
-    subject, predicate, obj, source = record["key"]
+    subject, predicate, obj, source, _ = record["key"]
     return {
         "subject": subject,
         "predicate": predicate,
@@ -107,13 +112,19 @@ def main(argv: list[str] | None = None) -> int:
     with open(work / "evidence.jsonl") as f:
         for e in map(json.loads, f):
             key = tuple(e["key"])
+            if len(key) != KEY_LENGTH:
+                print(
+                    f"{work / 'evidence.jsonl'} is from before edges were keyed by statement; "
+                    "rerun gather_evidence.py and judge_evidence.py."
+                )
+                return 1
             answer = answers.get((key, e["pmid"]))
             if answer is None:
                 unanswered += 1
                 continue
             record = edges.setdefault(
-                key, {"key": list(key), "claim": e["claim"], "based_on_text": e["based_on_text"],
-                      "articles": []},
+                key, {"key": list(key), "statement": e.get("statement", {}), "claim": e["claim"],
+                      "based_on_text": e["based_on_text"], "articles": []},
             )  # fmt: skip
             record["articles"].append(
                 {
@@ -148,12 +159,14 @@ def main(argv: list[str] | None = None) -> int:
             for a in record["articles"]:
                 choices[verdict][a["choice"]] += 1
             out.write(json.dumps(record) + "\n")
-            subject, predicate, obj, source = record["key"]
+            subject, predicate, obj, source, statement_id = record["key"]
             key = {
                 "subject": subject,
                 "predicate": predicate,
                 "object": obj,
                 "primary_knowledge_source": source,
+                "statement_id": statement_id,
+                **record["statement"],
             }
             pmids = [a["pmid"] for a in record["articles"]]
             if verdict == "drop":

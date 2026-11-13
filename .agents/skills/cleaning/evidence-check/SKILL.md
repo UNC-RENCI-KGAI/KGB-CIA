@@ -16,7 +16,10 @@ each time.
 The method follows the Translator TMKP treats filter (NCATSTranslator/translator-ingests#560):
 one multiple-choice question per piece of text, put to Jev, which returns a probability for each
 option instead of free text. A model judges each piece of evidence once. The drop list is a
-fixed file, so the graph can be rebuilt without calling the model again.
+fixed file, so the graph can be rebuilt without calling the model again. An edge is judged by
+its statement (subject, predicate, object, qualifiers and `negated`, as the augmentation agent
+identifies edges) and source, so two edges that differ only in a qualifier get a claim, a
+verdict and a drop or flag line each, and `kgb-clean` applies each line to its own edge.
 
 ## 1. Pick the edges
 
