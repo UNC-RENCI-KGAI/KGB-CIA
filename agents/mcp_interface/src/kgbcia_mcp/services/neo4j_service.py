@@ -348,6 +348,7 @@ class Neo4jService:
         WITH n, r, neighbor,
              CASE WHEN startNode(r) = n THEN 'outgoing' ELSE 'incoming' END AS direction
         RETURN neighbor, r AS edge, direction,
+               startNode(r).id AS edge_subject, endNode(r).id AS edge_object,
                size(coalesce(r.publications, [])) AS publication_count
         SKIP $offset LIMIT $fetch
         """
@@ -360,7 +361,10 @@ class Neo4jService:
             "offset": offset,
             "fetch": limit + 1,
         }
-        rows = list(self.execute_read(query, params, row_limit=limit + 1).rows)
+        rows = [
+            _with_edge_ends(row)
+            for row in self.execute_read(query, params, row_limit=limit + 1).rows
+        ]
         anchor = _node_label(resolved["node"])
         for row in rows:
             if fixed_direction:
@@ -394,11 +398,13 @@ class Neo4jService:
               {{id: $target_id}})
         RETURN r AS edge,
                CASE WHEN startNode(r) = a THEN 'outgoing' ELSE 'incoming' END AS direction,
+               startNode(r).id AS edge_subject, endNode(r).id AS edge_object,
                size(coalesce(r.publications, [])) AS publication_count
         SKIP $offset LIMIT $limit
         """
         rows = list(
-            self.execute_read(
+            _with_edge_ends(row)
+            for row in self.execute_read(
                 query,
                 {
                     "source_id": source["node"]["id"],
@@ -566,8 +572,8 @@ class Neo4jService:
                 f"MATCH (subject:`{NAMED_THING_LABEL}`)-"
                 f"[r:`{relationship_type}` {{id: $edge_id}}]->"
                 f"(object:`{NAMED_THING_LABEL}`) "
-                "RETURN r AS edge, labels(subject) AS subject_categories, "
-                "labels(object) AS object_categories"
+                "RETURN r AS edge, subject.id AS edge_subject, object.id AS edge_object, "
+                "labels(subject) AS subject_categories, labels(object) AS object_categories"
             )
         query = "CALL { " + " UNION ALL ".join(branches) + " } RETURN * LIMIT 2"
         rows = self.execute_read(query, {"edge_id": edge_id}, row_limit=2).rows
@@ -575,7 +581,7 @@ class Neo4jService:
             return {"hint": "No edge has this ID. Copy edge_id verbatim from an edge result."}
         if len(rows) > 1:
             return {"hint": "The edge ID is not unique in Neo4j; confirm the dump indexes."}
-        row = rows[0]
+        row = _with_edge_ends(rows[0])
         return self.lineage.resolve_source_records(
             row["edge"], row["subject_categories"], row["object_categories"]
         )
@@ -706,6 +712,25 @@ class Neo4jService:
             raise _classify_neo4j_failure(exc) from exc
         except OSError as exc:
             raise _classify_neo4j_failure(exc) from exc
+
+
+def _with_edge_ends(row: Mapping[str, Any]) -> dict[str, Any]:
+    """The row with its edge's `subject` and `object` set from the `edge_subject` and
+    `edge_object` columns. A query that returns a relationship without its nodes gets stub
+    nodes with no properties from the driver, so `serialize_neo4j_value` can't read the ends'
+    ids from them; each query that returns `r AS edge` returns `startNode(r).id` and
+    `endNode(r).id` beside it."""
+    row = dict(row)
+    subject, object_ = row.pop("edge_subject", None), row.pop("edge_object", None)
+    edge = row.get("edge")
+    if isinstance(edge, dict):
+        edge = dict(edge)
+        if subject is not None:
+            edge["subject"] = subject
+        if object_ is not None:
+            edge["object"] = object_
+        row["edge"] = edge
+    return row
 
 
 def serialize_neo4j_value(value: Any) -> Any:

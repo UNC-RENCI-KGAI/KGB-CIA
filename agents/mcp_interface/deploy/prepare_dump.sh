@@ -142,6 +142,8 @@ docker exec -i "$container_name" cypher-shell -u neo4j -p "$password" -d "$DATAB
 
 # Neo4j range relationship indexes are per type. Generate safe, idempotent DDL here
 # rather than relying on APOC (which Community images do not include).
+# `--format plain` prints each string quoted ("biolink:treats"); the sed drops the header row
+# and the quotes, or every index would be on a quoted type that has no edges.
 while IFS= read -r relationship_type; do
   [[ -n "$relationship_type" ]] || continue
   index_suffix=$(printf '%s' "$relationship_type" | tr -cs '[:alnum:]' '_' | tr '[:upper:]' '[:lower:]')
@@ -153,7 +155,7 @@ while IFS= read -r relationship_type; do
     | docker exec -i "$container_name" cypher-shell -u neo4j -p "$password" -d "$DATABASE"
 done < <(docker exec "$container_name" cypher-shell --format plain -u neo4j -p "$password" -d "$DATABASE" \
   'CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType' \
-  | sed '1d')
+  | sed '1d; s/^"//; s/"$//')
 docker exec "$container_name" cypher-shell -u neo4j -p "$password" -d "$DATABASE" 'CALL db.awaitIndexes()'
 
 artifacts_dir="$work_dir/artifacts"

@@ -65,6 +65,10 @@ uv run kgbcia-mcp serve --enable-cypher            # stdio
 uvx kgbcia-mcp serve --enable-cypher               # once published to PyPI
 ```
 
+An artifacts URL is downloaded and unpacked once, by checksum, into `$KGB_CACHE_DIR/mcp-artifacts/`
+when `KGB_CACHE_DIR` is set (the pipeline's cache root, `shared/paths.py`), else
+`~/.cache/kgbcia-mcp/artifacts/`.
+
 For the local authenticated cluster, port-forward Bolt and source the local ignored deployment
 environment before starting Pi or the server:
 

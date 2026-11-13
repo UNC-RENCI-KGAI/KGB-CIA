@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import runpy
 import shutil
 import subprocess
@@ -1282,6 +1283,72 @@ def test_helm_chart_lints_and_templates_all_values_files():
     assert "name: NEO4J_PASSWORD" not in no_auth_mcp.stdout
 
 
+def test_relationship_id_indexes_are_on_unquoted_types():
+    """cypher-shell --format plain quotes strings; the index loop must read biolink:treats,
+    not "biolink:treats", or every relationship-ID index is on a type with no edges."""
+    script = (Path(__file__).parents[1] / "agents/mcp_interface/deploy/prepare_dump.sh").read_text()
+    loop = script[script.index("kgbcia_relationship_id_") :]
+    expression = re.search(r"\| sed '([^']*)'\)", loop).group(1)
+    plain = 'relationshipType\n"biolink:treats"\n"biolink:interacts_with"\n'
+    out = subprocess.run(
+        ["sed", expression], input=plain, capture_output=True, text=True, check=True
+    )
+    assert out.stdout.splitlines() == ["biolink:treats", "biolink:interacts_with"]
+
+
+def test_edges_get_their_ends_when_the_driver_gives_stub_nodes(monkeypatch):
+    """A relationship returned without its nodes has no subject or object; the queries return
+    the ends' ids beside it, and lineage then gets the subject's categories, not the object's."""
+    service = _service_with_cached_schema()
+
+    def resolve(node_id):
+        category = "biolink:SmallMolecule" if node_id.startswith("CHEBI:") else "biolink:Gene"
+        return _resolved_node(node_id, category)
+
+    monkeypatch.setattr(service, "_resolve_node", resolve)
+    stub = {"edge_id": "edge-1", "predicate": "biolink:interacts_with", "subject": None,
+            "object": None, "primary_knowledge_source": "infores:chembl"}  # fmt: skip
+    queries = []
+
+    def execute(cypher, parameters=None, **_kwargs):
+        queries.append(cypher)
+        row = {"edge": dict(stub), "edge_subject": "CHEBI:1", "edge_object": "NCBIGene:1017"}
+        if "subject_categories" in cypher:
+            row |= {"subject_categories": ["biolink:SmallMolecule"],
+                    "object_categories": ["biolink:Gene"]}  # fmt: skip
+        else:
+            row |= {"direction": "incoming", "publication_count": 0}
+        return ReadResult((row,), False)
+
+    monkeypatch.setattr(service, "execute_read", execute)
+    seen = {}
+
+    def resolve_records(edge, subject_categories, object_categories):
+        seen["categories"] = (list(subject_categories), list(object_categories))
+        return {"edge": edge}
+
+    monkeypatch.setattr(service.lineage, "resolve_source_records", resolve_records)
+
+    # NCBIGene:1017 is the source, so the edge is incoming: its subject is the target.
+    between = service.get_edges_between("NCBIGene:1017", "CHEBI:1", include_lineage=True)
+    [row] = between["results"]
+    assert (row["edge"]["subject"], row["edge"]["object"]) == ("CHEBI:1", "NCBIGene:1017")
+    assert "edge_subject" not in row
+    assert (
+        seen["categories"][0]
+        == _resolved_node("CHEBI:1", "biolink:SmallMolecule")["node"]["categories"]
+    )
+    explained = service.explain_edge("edge-1")
+    assert (explained["edge"]["subject"], explained["edge"]["object"]) == (
+        "CHEBI:1",
+        "NCBIGene:1017",
+    )
+    neighbors = service.get_node_edges("NCBIGene:1017")
+    assert neighbors["results"][0]["edge"]["subject"] == "CHEBI:1"
+    assert all("startNode(r).id AS edge_subject" in q or "subject.id AS edge_subject" in q
+               for q in queries)  # fmt: skip
+
+
 requires_neo4j = pytest.mark.skipif(
     not os.getenv("NEO4J_URI") or not os.getenv("KGB_MCP_ARTIFACTS"),
     reason="set NEO4J_URI and KGB_MCP_ARTIFACTS to run the Neo4j integration smoke test",
@@ -1393,7 +1460,7 @@ def test_dump_scripts_pin_images_and_create_idempotent_indexes():
     assert "MAX_STRING = 100" in preparation
     assert "MAX_LIST = 3" in preparation
     assert "cypher-shell --format plain" in preparation
-    assert "sed '1d'" in preparation
+    assert """sed '1d; s/^"//; s/"$//'""" in preparation  # header row and quotes
     assert 'docker exec "$container_name" mkdir -p /data/dump-export' in preparation
     assert 'neo4j-admin database dump "$DATABASE" --to-path=/data/dump-export' in preparation
     assert 'docker cp "$dump_container:/data/dump-export/$DATABASE.dump"' in preparation
