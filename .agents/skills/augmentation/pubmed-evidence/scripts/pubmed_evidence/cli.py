@@ -276,6 +276,34 @@ def _label_limit(common: argparse.Namespace, estimate: dict) -> int | None:
     return n
 
 
+def _finish_labeling(common: argparse.Namespace, run, label, args: argparse.Namespace) -> int:
+    """After a label run that returned 0: if pairs are still not fully labeled (a call failed,
+    or a reply left an abstract out), run label once more, since answers already made are
+    cached; if pairs still are, stop with 1 instead of going on to write their edges
+    unchecked. The count is the dry run's `pairs_to_call` on the same pairs."""
+    left = _label_estimate(common, run, args.limit)["pairs_to_call"]
+    if not left:
+        return 0
+    print(
+        f"[augmentation] {left:,} pairs aren't fully labeled (a call failed, or a reply left "
+        "an abstract out); running label again",
+        file=sys.stderr,
+    )
+    rc = label.run(args)
+    if rc:
+        return rc
+    left = _label_estimate(common, run, args.limit)["pairs_to_call"]
+    if left:
+        print(
+            f"[augmentation] error: {left:,} pairs still aren't fully labeled after a second "
+            "label run, so their edges can't be checked; stopping before ground, review and "
+            "apply. Rerun to retry; answers already made are cached.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def run_all(common: argparse.Namespace) -> int:
     run = records.read_label_run(common.work)
     steps = [s for s in FULL_RUN if not (common.skip_review and s == "review")]
@@ -295,6 +323,8 @@ def run_all(common: argparse.Namespace) -> int:
             if limit is not None:
                 args.limit = limit
         rc = module.run(args)
+        if name == "label" and not rc:
+            rc = _finish_labeling(common, run, module, args)
         if rc:
             print(f"[augmentation] {name} failed (exit {rc}); later steps not run", file=sys.stderr)
             return rc

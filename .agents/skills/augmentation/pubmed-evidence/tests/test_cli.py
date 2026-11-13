@@ -523,6 +523,55 @@ def test_full_run_labels_only_what_the_budget_allows(tmp_path, capsys, fakes):
     assert "budget" not in capsys.readouterr().err
 
 
+def leaving_one_out(fakes: list[str], times: int | None = None):
+    """A fake model that answers every label request but leaves PMID 101's abstract out of the
+    reply, the first `times` times it is asked (every time if None), as a model sometimes
+    does."""
+    inner = fake_model(fakes)
+    dropped = 0
+
+    def answer(sent: Sent):
+        nonlocal dropped
+        body = inner.answer(sent)
+        position = dict(re.findall(r"^## (A\d+) \(PMID:(\d+)", sent.user, re.M))
+        if "101" in position.values() and (times is None or dropped < times):
+            dropped += 1
+            body["abstracts"] = [a for a in body["abstracts"] if position[a["abstract"]] != "101"]
+        return body
+
+    return FakeClient(answer)
+
+
+def test_full_run_labels_again_when_a_reply_left_an_abstract_out(
+    tmp_path, capsys, fakes, monkeypatch
+):
+    client = leaving_one_out(fakes, times=1)
+    monkeypatch.setattr(llm, "client_for", lambda model, **kw: client)
+    argv = common_args(tmp_path)
+    assert cli.main(argv) == 0
+    err = capsys.readouterr().err
+    assert "label: warning: 1 abstracts were left out" in err
+    assert "1 pairs aren't fully labeled" in err and "running label again" in err
+    # Two pairs, then the one left unfinished; the graph is written with every edge checked.
+    assert fakes.count("label") == 3 and fakes.count("review") == 2
+    report = json.loads((tmp_path / "out" / "work" / "apply_report.json").read_text())
+    assert report["unchecked"]["pairs_not_fully_labeled"] == 0
+    assert report["edges_checked"] == 9
+
+
+def test_full_run_stops_when_pairs_stay_not_fully_labeled(tmp_path, capsys, fakes, monkeypatch):
+    monkeypatch.setattr(llm, "client_for", lambda model, **kw: leaving_one_out(fakes))
+    argv = common_args(tmp_path)
+    assert cli.main(argv) == 1
+    err = capsys.readouterr().err
+    assert "running label again" in err
+    assert "1 pairs still aren't fully labeled after a second label run" in err
+    assert "label failed (exit 1); later steps not run" in err
+    # One run, one retry, and nothing after: no review, no graph written unchecked.
+    assert fakes.count("label") == 3 and "review" not in fakes
+    assert not (tmp_path / "out" / "edges.jsonl").exists()
+
+
 def test_full_run_stops_over_its_budget(tmp_path, capsys, fakes):
     argv = common_args(tmp_path)
     assert cli.main([*argv, "select"]) == 0 and cli.main([*argv, "pubmed"]) == 0

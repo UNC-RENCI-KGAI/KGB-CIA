@@ -35,7 +35,10 @@ one module of the library in `scripts/pubmed_evidence/`. The agent runs the labe
 sample, reads the results, tunes the prompt, then runs the full set. It calls the models listed
 in `config.MODELS`: the Azure OpenAI deployments Pi uses, and Claude models on Anthropic's own API.
 `kgb-augment` (`agents/augmentation/cli.py`) runs the same library. With no subcommand it runs
-every step with its defaults, which is what `shared/pipeline.py` does.
+every step with its defaults, which is what `shared/pipeline.py` does: it estimates labeling
+with the dry run first (`--budget` stops it there, `--max-label-cost` trims it to the pairs
+that fit), runs label a second time when the first leaves pairs not fully labeled, and stops
+with exit 1 when they still are, since step 6 would otherwise write their edges unchecked.
 
 - **Bulk extraction:** step 3 calls a cheap model directly rather than through subagents. A
   subagent carries the harness's system prompt and tool definitions and re-sends its context
