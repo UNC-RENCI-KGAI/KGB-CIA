@@ -10,7 +10,9 @@ Reads evidence.jsonl and answers.jsonl in data/cleaning/evidence/<name>/ and wri
   flag, the role probabilities for each article, and the claim, so a person can read why;
 - data/cleaning/drop_lists/<name>.jsonl: the dropped edges, which kgb-clean then removes;
 - data/cleaning/flag_lists/<name>.jsonl: the flagged edges, each with its flag and a reason
-  naming the articles, which kgb-clean writes onto the edge for the MCP interface to show.
+  naming the articles, which kgb-clean writes onto the edge for the MCP interface to show;
+- gold_set.tsv beside verdicts.jsonl: every judged edge as a KGX TSV row with a keep or prune
+  verdict and a confidence, the form the challenge's pruning gold set takes (see gold_row).
 
 The verdict rules are in question.edge_verdict. Rerun with another threshold in the question file
 to try it without asking Jev again. Standard library only.
@@ -19,6 +21,7 @@ to try it without asking Jev again. Standard library only.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from collections import Counter, defaultdict
@@ -26,6 +29,58 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import question  # noqa: E402
+
+GOLD_COLUMNS = (
+    "subject",
+    "predicate",
+    "object",
+    "primary_knowledge_source",
+    "publications",
+    "verdict",
+    "confidence",
+    "evidence_check",
+    "flag",
+    "question",
+)
+
+
+def gold_row(q: dict, record: dict) -> dict:
+    """An edge's gold-set row. Only a dropped edge is `prune`; flagged and unconfirmed edges stay
+    in the graph, so they are `keep`. The confidence is the judge's probability, from the article
+    that says most, for what the verdict rests on:
+
+    - keep: that an article supports the edge;
+    - flag: for a wrong detail, that the edge is real (supports plus the flagging options); for
+      an unsupported text-mined edge, that an article supports it, which is low;
+    - unconfirmed: that an article supports it, also low: kept because nothing contradicts it,
+      not because the abstracts confirm it;
+    - drop (prune): that an article contradicts it.
+    """
+    articles = record["articles"]
+    verdict, flag = record["verdict"], record["flag"]
+
+    def best(score) -> float:
+        return round(max(score(a) for a in articles), 3)
+
+    if verdict == "drop":
+        confidence = best(lambda a: a["contradicts"] + sum((a.get("flags") or {}).values()))
+    elif verdict == "flag" and flag != question.UNSUPPORTED_FLAG:
+        confidence = best(lambda a: a["supports"] + (a.get("flags") or {}).get(flag, 0.0))
+    else:
+        confidence = best(lambda a: a["supports"])
+    subject, predicate, obj, source = record["key"]
+    return {
+        "subject": subject,
+        "predicate": predicate,
+        "object": obj,
+        "primary_knowledge_source": source,
+        "publications": "|".join(f"PMID:{a['pmid']}" for a in articles),
+        "verdict": "prune" if verdict == "drop" else "keep",
+        "confidence": f"{min(confidence, 1.0):.3f}",
+        "evidence_check": verdict,
+        "flag": flag or "",
+        "question": q["name"],
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,15 +129,20 @@ def main(argv: list[str] | None = None) -> int:
     drop_path.parent.mkdir(parents=True, exist_ok=True)
     flag_path.parent.mkdir(parents=True, exist_ok=True)
     choices = defaultdict(Counter)
+    gold_path = work / "gold_set.tsv"
     with (
         open(work / "verdicts.jsonl", "w") as out,
         open(drop_path, "w") as drops,
         open(flag_path, "w") as flags,
+        open(gold_path, "w", newline="") as gold_file,
     ):
+        gold = csv.DictWriter(gold_file, GOLD_COLUMNS, delimiter="\t", lineterminator="\n")
+        gold.writeheader()
         for record in edges.values():
             verdict, flag = question.edge_verdict(q, record["based_on_text"], record["articles"])
             record["verdict"], record["flag"] = verdict, flag
             verdicts[verdict] += 1
+            gold.writerow(gold_row(q, record))
             for a in record["articles"]:
                 choices[verdict][a["choice"]] += 1
             out.write(json.dumps(record) + "\n")
@@ -114,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         print("  flags: " + ", ".join(f"{f} {n:,}" for f, n in flagged.most_common()))
     print(
         f"Wrote {work / 'verdicts.jsonl'}, {drop_path} ({verdicts['drop']:,} edges) and "
-        f"{flag_path} ({verdicts['flag']:,} edges)"
+        f"{flag_path} ({verdicts['flag']:,} edges), and the gold set {gold_path}"
     )
     return 0
 

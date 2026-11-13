@@ -3,12 +3,17 @@
 
     gather_evidence.py QUESTION [GRAPH] [--limit N]
 
-GRAPH is a directory with nodes.jsonl and edges.jsonl (default data/transformation/merged), or a
-source's ORION normalized_nodes.jsonl / normalized_edges.jsonl. An edge is selected when it
-matches the question's `select` and cites at least one PubMed article, in `publications` (PMID:
-CURIEs) or as a PubMed URL in any of its fields. Abstracts come from NCBI E-utilities through
-`shared.pubmed`, whose cache the augmentation agent shares (KGB_PUBMED_CACHE, default
-data/cache/pubmed.sqlite), so only what neither has fetched goes over the network.
+GRAPH is a directory with nodes.jsonl and edges.jsonl, or a source's ORION normalized_nodes.jsonl
+/ normalized_edges.jsonl. Without it, the latest stage's graph that exists: data/augmentation,
+data/filter, data/cleaning, then data/transformation/merged, so the check runs on what the final
+cleaning pass will apply its drop lists to. An edge is selected when it matches the question's
+`select` and cites at least one PubMed article, in `publications` (PMID: CURIEs) or as a PubMed
+URL in any of its fields. Edges the augmentation stage has already checked against PubMed or
+proposed (they carry `augmentation`) are skipped and counted, so no edge is paid for twice.
+
+Abstracts come from NCBI E-utilities through `shared.pubmed`, whose cache the augmentation agent
+shares (KGB_PUBMED_CACHE, default data/cache/pubmed.sqlite), so only what neither has fetched
+goes over the network.
 
 Writes data/cleaning/evidence/<name>/evidence.jsonl: one line per (edge, article) with the edge's
 key, its subject and object (name, other names, identifier), the claim in words, and the
@@ -44,6 +49,22 @@ from shared.pubmed.records import Entity  # noqa: E402
 OTHER_NAMES = 5  # other names shown per node
 # Babel names UniProtKB entries "ABL1_HUMAN Tyrosine-protein kinase ABL1 (sprot)".
 UNIPROT_LABEL = re.compile(r"^[A-Z0-9]+_[A-Z0-9]+\s+(.+?)(?:\s*\((?:sprot|trembl)\))?$")
+# the stages' outputs, latest first: the evidence check runs on the latest one there is
+DEFAULT_GRAPHS = (
+    Path("data/augmentation"),
+    Path("data/filter"),
+    Path("data/cleaning"),
+    Path("data/transformation/merged"),
+)
+
+
+def default_graph() -> Path:
+    for graph in DEFAULT_GRAPHS:
+        if (graph / "edges.jsonl").exists():
+            return graph
+    raise SystemExit(
+        "No graph given and none of " + ", ".join(map(str, DEFAULT_GRAPHS)) + " has edges.jsonl"
+    )
 
 
 def graph_files(graph: Path) -> tuple[Path, Path]:
@@ -74,12 +95,17 @@ def spread(key: tuple) -> str:
     return hashlib.sha1("\t".join(key).encode()).hexdigest()
 
 
-def candidate_edges(q: dict, edges_path: Path):
-    """Selected edges that cite PubMed, as {edge, key, pmids}."""
+def candidate_edges(q: dict, edges_path: Path, skipped: dict | None = None):
+    """Selected edges that cite PubMed, as {edge, key, pmids}. Selected edges augmentation already
+    checked or proposed are counted in `skipped` instead."""
     with open(edges_path) as f:
         for line in f:
             edge = json.loads(line)
             if not question.selects(q, edge):
+                continue
+            if edge.get("augmentation"):
+                if skipped is not None:
+                    skipped["augmentation"] = skipped.get("augmentation", 0) + 1
                 continue
             ids = cited_pmids(edge)
             if ids:
@@ -92,14 +118,16 @@ def candidate_edges(q: dict, edges_path: Path):
                 yield {"edge": edge, "key": key, "pmids": ids}
 
 
-def select_edges(q: dict, edges_path: Path, limit: int | None) -> list[dict]:
+def select_edges(
+    q: dict, edges_path: Path, limit: int | None, skipped: dict | None = None
+) -> list[dict]:
     """Candidate edges, one per key, or with a limit the same spread-out sample on every run.
 
     An unmerged source can repeat an edge (one row per citation); those become one edge citing
     all of their articles, as ORION's merge would make them.
     """
     by_key: dict[tuple, dict] = {}
-    for record in candidate_edges(q, edges_path):
+    for record in candidate_edges(q, edges_path, skipped):
         seen = by_key.get(record["key"])
         if seen:
             seen["pmids"] = sorted(set(seen["pmids"]) | set(record["pmids"]))
@@ -158,15 +186,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("question", type=Path, help="question file (reference/question-format.md)")
     parser.add_argument(
-        "graph", type=Path, nargs="?", default=Path("data/transformation/merged"),
-        help="graph directory (default: data/transformation/merged)",
+        "graph", type=Path, nargs="?",
+        help="graph directory (default: the first of data/augmentation, data/filter, "
+        "data/cleaning, data/transformation/merged that has edges.jsonl)",
     )  # fmt: skip
     parser.add_argument("--limit", type=int, help="check only this many edges (a trial run)")
     args = parser.parse_args(argv)
 
     q = question.load(args.question)
-    nodes_path, edges_path = graph_files(args.graph)
-    records = select_edges(q, edges_path, args.limit)
+    graph = args.graph or default_graph()
+    print(f"Graph: {graph}")
+    nodes_path, edges_path = graph_files(graph)
+    skipped: dict[str, int] = {}
+    records = select_edges(q, edges_path, args.limit, skipped)
+    if skipped:
+        print(f"Skipped {skipped['augmentation']:,} selected edges augmentation already checked.")
     if not records:
         print("No selected edge cites a PubMed article; nothing to check.")
         return 0

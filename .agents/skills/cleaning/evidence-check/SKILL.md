@@ -60,10 +60,14 @@ uv run --env-file .env --script $S/judge_evidence.py QUESTION   # .env holds TYP
 uv run python $S/build_drop_list.py QUESTION
 ```
 
-- `gather_evidence.py QUESTION [GRAPH]` reads the merged graph (default
-  `data/transformation/merged`). Pass a graph directory when the edges you want to check are in
-  one source's ORION output instead (`normalized_edges.jsonl`). It fetches abstracts from PubMed
-  (NCBI E-utilities, no key needed) and caches them, so reruns only fetch new ones.
+- `gather_evidence.py QUESTION [GRAPH]` reads the latest stage's graph there is:
+  `data/augmentation`, else `data/filter`, else `data/cleaning`, else
+  `data/transformation/merged`; it prints which. That is the graph the final cleaning pass
+  applies the drop lists to. Pass a graph directory to check another one, such as one source's
+  ORION output (`normalized_edges.jsonl`). Edges the augmentation stage already checked against
+  PubMed or proposed (they carry `augmentation`) are skipped and counted, so none is paid for
+  twice. It fetches abstracts from PubMed (NCBI E-utilities, no key needed) and caches them,
+  so reruns only fetch new ones.
 - `--limit N` checks a fixed, spread-out sample of N edges. Always start with one: read about
   ten answers in `verdicts.jsonl` against the abstracts, fix the question if Jev misreads it, and
   only then run without `--limit`.
@@ -73,7 +77,11 @@ uv run python $S/build_drop_list.py QUESTION
   It is resumable, and a failed call is retried on the next run.
 - `build_drop_list.py` writes `verdicts.jsonl` (every edge, its verdict, and the answer for each
   article), `data/cleaning/drop_lists/<name>.jsonl` and `data/cleaning/flag_lists/<name>.jsonl`,
-  which `kgb-clean` applies.
+  which `kgb-clean` applies. It also writes `gold_set.tsv` beside `verdicts.jsonl`: one KGX TSV
+  row per judged edge with `verdict` (`prune` for a dropped edge, `keep` for the rest, flagged
+  and unconfirmed included), `confidence`, and the finer `evidence_check` verdict and `flag`.
+  This is the form the challenge scores pruning in; hand it over when a user asks for the
+  verdicts as a gold set.
 
 Jev costs $0.042 per million input tokens: 1,257 DrugCentral drug-target abstracts come to about
 a million tokens, or 4 cents.
@@ -93,14 +101,36 @@ contradicting.
   read" is not "wrong", so it is kept for the user to weigh rather than dropped as the TMKP
   filter does.
 
+The gold set's `confidence` is the judge's probability, from the article that says most, for
+what the verdict rests on: support for `keep`, contradiction for `prune`, the edge being real
+for a wrong-detail flag. An `unconfirmed` edge is kept with its (low) support probability:
+nothing contradicts it, but nothing confirms it either.
+
 Report the counts of keep, unconfirmed, flag and drop to the user with two or three dropped or
 flagged edges and the abstract sentences behind them, so they can judge the call. To try another threshold,
 change it in the question file and rerun `build_drop_list.py`; Jev isn't asked again.
+
+## Measure precision
+
+Before you report how well the check works, have a person label a sample:
+
+```bash
+uv run python $S/label_sample.py QUESTION          # draws 50 edges into label_sample.tsv
+uv run python $S/label_sample.py QUESTION --score  # once the `label` column is filled
+```
+
+The sample takes every flagged and dropped edge (up to half of it), then splits the rest
+between keep and unconfirmed, one article per edge, shuffled. It is blind: the judge's answers
+go to `label_key.tsv`, so don't show the person that file. The person reads the abstract and fills
+`label` with the role it has for the edge (`supports`, `contradicts`, `silent`, or a flag name),
+which `--score` compares with the judge's, by verdict. Use `--size` when a different sample size
+is wanted (more when the result will be reported per verdict), and `--seed` only to draw a fresh
+sample instead of the same one again. Report agreement by verdict with the sample size, and keep
+the labelled file out of git, with the run's other outputs.
 
 ## Limits
 
 - Only the abstract is read, not the full paper. Results in tables or figures look `silent`.
 - Other names come from NodeNorm. A code name NodeNorm doesn't know (SAR 1118 for lifitegrast)
   still makes a paper look silent.
-- There is no labeled sample for these questions yet, so precision is unmeasured. For a result
-  you report, label about 50 articles by hand and compare.
+- Precision is unmeasured until someone labels a sample (see "Measure precision").

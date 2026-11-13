@@ -1,9 +1,11 @@
 """The evidence-check skill end to end, with PubMed and Jev replaced by fakes."""
 
+import csv
 import importlib.util
 import json
 import sys
 import types
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,7 @@ question = _load("question")
 gather = _load("gather_evidence")
 judge = _load("judge_evidence")
 build = _load("build_drop_list")
+sample = _load("label_sample")
 
 QUESTION = {
     "name": "drug_target",
@@ -319,3 +322,108 @@ def test_build_writes_the_flag_list_cleaning_reads(tmp_path, monkeypatch):
         "reason": "a cited paper reports a different action than the edge's (PMID:111)",
     }
     assert open("data/cleaning/drop_lists/drug_target.jsonl").read() == ""
+
+
+def test_gather_skips_edges_augmentation_checked(workspace, capsys):
+    graph, qpath = workspace
+    with open(graph / "edges.jsonl", "a") as f:
+        checked = _edge("C:B", "P:1", publications=["PMID:111"], augmentation="checked")
+        f.write(json.dumps(checked) + "\n")
+    gather.main([str(qpath), str(graph)])
+    assert "Skipped 1 selected edges augmentation already checked" in capsys.readouterr().out
+    keys = {
+        tuple(json.loads(x)["key"][::2])
+        for x in open("data/cleaning/evidence/drug_target/evidence.jsonl")
+    }
+    assert ("C:B", "P:1") not in keys
+
+
+def test_gather_defaults_to_the_latest_stage_graph(workspace, monkeypatch, capsys):
+    graph, qpath = workspace
+    with pytest.raises(SystemExit, match="none of data/augmentation"):
+        gather.main([str(qpath)])
+    cleaning = Path("data/cleaning")
+    cleaning.mkdir(parents=True)
+    for name in ("nodes.jsonl", "edges.jsonl"):
+        (cleaning / name).write_text((graph / name).read_text())
+    gather.main([str(qpath)])
+    assert "Graph: data/cleaning" in capsys.readouterr().out
+
+
+def _record(verdict, flag, *articles):
+    key = ["C:A", "biolink:interacts_with", "P:1", "infores:dc"]
+    return {"key": key, "verdict": verdict, "flag": flag, "articles": list(articles)}
+
+
+def _article(pmid, supports=0.0, contradicts=0.0, flags=None):
+    return {"pmid": pmid, "supports": supports, "contradicts": contradicts,
+            "silent": 1 - supports - contradicts, "flags": flags or {}}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "record, verdict, confidence",
+    [
+        (_record("keep", None, _article("1", 0.3), _article("2", 0.9)), "keep", "0.900"),
+        (_record("unconfirmed", None, _article("1", 0.2)), "keep", "0.200"),
+        (_record("drop", None, _article("1", contradicts=0.8, flags={"wm": 0.1})), "prune",
+         "0.900"),
+        (_record("flag", "wm", _article("1", 0.1, flags={"wm": 0.8})), "keep", "0.900"),
+        (_record("flag", "unsupported_by_abstract", _article("1", 0.05)), "keep", "0.050"),
+    ],
+)  # fmt: skip
+def test_gold_row_verdict_and_confidence(record, verdict, confidence):
+    row = build.gold_row({"name": "q"}, record)
+    assert (row["verdict"], row["confidence"]) == (verdict, confidence)
+    assert row["evidence_check"] == record["verdict"]
+    assert row["publications"] == "|".join(f"PMID:{a['pmid']}" for a in record["articles"])
+
+
+def test_build_writes_the_gold_set(workspace, fake_sdk):
+    graph, qpath = workspace
+    gather.main([str(qpath), str(graph)])
+    judge.main([str(qpath)], client=FakeJev())
+    build.main([str(qpath)])
+
+    with open("data/cleaning/evidence/drug_target/gold_set.tsv") as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    assert list(rows[0]) == list(build.GOLD_COLUMNS)
+    assert {(r["subject"], r["object"], r["verdict"]) for r in rows} == {
+        ("C:A", "P:1", "keep"),
+        ("C:B", "P:2", "prune"),
+    }
+
+
+def test_label_sample_takes_every_rare_verdict_and_splits_the_rest():
+    verdicts = (
+        [{"verdict": "flag"}] * 2
+        + [{"verdict": "drop"}]
+        + [{"verdict": "keep"}] * 40
+        + [{"verdict": "unconfirmed"}] * 5
+    )
+    drawn = Counter(v["verdict"] for v in sample.draw(verdicts, 20, 0))
+    assert drawn == {"flag": 2, "drop": 1, "keep": 12, "unconfirmed": 5}
+
+
+def test_label_sample_then_score(workspace, fake_sdk, capsys):
+    graph, qpath = workspace
+    gather.main([str(qpath), str(graph)])
+    judge.main([str(qpath)], client=FakeJev())
+    build.main([str(qpath)])
+    assert sample.main([str(qpath)]) == 0
+    path = Path("data/cleaning/evidence/drug_target/label_sample.tsv")
+    with open(path) as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    assert "judge_role" not in rows[0]  # blind: the judge's answers are in the key
+    with open(path.with_name("label_key.tsv")) as f:
+        key = {r["row"]: r for r in csv.DictReader(f, delimiter="\t")}
+    assert {k["evidence_check"] for k in key.values()} == {"keep", "drop"}
+    for r in rows:  # agree with the judge on the kept edge only
+        r["label"] = "supports" if key[r["row"]]["evidence_check"] == "keep" else "silent"
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, sample.COLUMNS, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    assert sample.main([str(qpath), "--score"]) == 0
+    scored = json.loads(Path("data/cleaning/evidence/drug_target/label_score.json").read_text())
+    assert scored["keep"] == {"labelled": 1, "agree": 1}
+    assert scored["drop"] == {"labelled": 1, "agree": 0}
