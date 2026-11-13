@@ -64,6 +64,13 @@ id pattern or prefix). `unresolved_nodes.tsv` lists every unresolved node with i
 edges it took down and the edges kept with a flag, and the sources and predicates of those
 edges, most costly first: the identifiers a plan fix needs, not just the prefix.
 
+Every dropped edge is also written to `pruned_edges.tsv`, one KGX TSV row per edge with
+`verdict` prune, a `confidence`, the `reason` and an `explanation` in plain words: the pruning
+gold set, in the same columns as the evidence check's `gold_set.tsv` (see PRUNED_COLUMNS). The
+confidence is 1 for a rule here, which holds by construction. A drop-listed edge's comes from
+its drop-list line when that carries one (the evidence check writes the judge's probability),
+else it is left empty.
+
 Drop and flag lists key edges by subject, predicate, object and primary knowledge source, not
 by edge id: the merge assigns new uuids on every run, so ids wouldn't match the next build. A
 line can also name the edge's statement, so it matches only the edge that makes it, not others
@@ -74,6 +81,7 @@ neither matches the edge however it is qualified.
 
 from __future__ import annotations
 
+import csv
 import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
@@ -107,6 +115,32 @@ LISTED_FLAGS = (
 # Vertebrate Trait ids as `OBA:VT0001253` (it should be `VT:0001253`), an id in no ontology; the
 # phenopacket-store plan makes a node per patient ("individual II-3"), not a biological concept.
 BROKEN_ID_PREFIXES = ("OBA:VT", "phenopacket.store:")
+# pruned_edges.tsv: the evidence check's gold_set.tsv columns, with the drop reason in words
+PRUNED_COLUMNS = (
+    "subject",
+    "predicate",
+    "object",
+    "primary_knowledge_source",
+    "statement_id",
+    "publications",
+    "verdict",
+    "confidence",
+    "reason",
+    "explanation",
+)
+PRUNE_EXPLANATIONS = {
+    "malformed": "the edge lacks a subject, predicate or object",
+    "no_primary_knowledge_source": "the edge has no primary knowledge source, so it can't be "
+    "explained",
+    "dangling": "the edge names a node that isn't in the graph",
+    "broken_id": "an end's identifier is malformed (a trait written as OBA:VT, or a "
+    "case-report patient), not a concept NodeNorm could resolve",
+    "unresolved_both_ends": "NodeNorm resolves neither end, so the edge can't connect to the "
+    "rest of the graph",
+    "drop_list": "an evidence check found the literature the edge cites contradicts it",
+    "type_violation": "Biolink doesn't allow this category at this end of the predicate, and a "
+    "reviewer found these edges wrong",
+}
 FLAGS_FIELD = "kgbcia_flags"
 REASONS_FIELD = "kgbcia_flag_reasons"
 # the reason an input edge already carried for rare_category_combination, carried between the
@@ -194,6 +228,50 @@ def load_drop_list(path: Path) -> set[ListKey]:
                 )
             keys.add(key)
     return keys
+
+
+def drop_list_confidences(directory: Path | None) -> dict[ListKey, str]:
+    """The `confidence` a drop-list line carries, by list key, from every list in the folder."""
+    found: dict[ListKey, str] = {}
+    if not directory or not directory.is_dir():
+        return found
+    for path in sorted(directory.glob("*.jsonl")):
+        for record in read_jsonl(path):
+            if record.get("confidence") is not None:
+                found[list_key(record)] = f"{float(record['confidence']):.3f}"
+    return found
+
+
+def pruned_row(edge: dict, reason: str, confidences: dict[ListKey, str]) -> dict:
+    """A dropped edge's row in pruned_edges.tsv."""
+    kind = reason.split(":", 1)[0]
+    explanation = PRUNE_EXPLANATIONS[kind]
+    if kind == "type_violation":
+        predicate, category = reason.split(":", 1)[1].split("->")
+        explanation = f"{short(predicate)} to {short(category)}: {explanation}"
+    elif kind == "drop_list":
+        explanation += f" ({reason.split(':', 1)[1]})"
+    publications = edge.get("publications") or []
+    if isinstance(publications, str):
+        publications = [publications]
+    whole = all(edge.get(slot) for slot in ("subject", "predicate", "object"))
+    confidence = "1.000"
+    if kind == "drop_list":
+        # the line naming this edge's statement, else one naming any
+        found = (confidences.get(key) for key in edge_list_keys(edge))
+        confidence = next((c for c in found if c is not None), "")
+    return {
+        "subject": edge.get("subject") or "",
+        "predicate": edge.get("predicate") or "",
+        "object": edge.get("object") or "",
+        "primary_knowledge_source": edge.get("primary_knowledge_source") or "",
+        "statement_id": edge_statement_id(edge) if whole else "",
+        "publications": "|".join(map(str, publications)),
+        "verdict": "prune",
+        "confidence": confidence,
+        "reason": reason,
+        "explanation": explanation,
+    }
 
 
 def load_drop_lists(directory: Path) -> dict[str, set[ListKey]]:
@@ -547,6 +625,7 @@ def collect(
     for entries in flag_lists.values():
         for key, pairs in entries.items():
             listed_flags[key].extend(pairs)
+    confidences = drop_list_confidences(drop_lists_dir)
     report = Report(
         settings={
             "input": str(input_dir.resolve()),
@@ -590,7 +669,12 @@ def collect(
     lost_from: dict[str, set[tuple[str, str]]] = defaultdict(set)
     # kept edges before their flags are known; pass 3 writes them to edges.jsonl with flags
     unflagged = output_dir / "edges.unflagged.tmp"
-    with open(unflagged, "w") as out:
+    with (
+        open(unflagged, "w") as out,
+        open(output_dir / "pruned_edges.tsv", "w", newline="") as pruned_file,
+    ):
+        pruned = csv.DictWriter(pruned_file, PRUNED_COLUMNS, delimiter="\t", lineterminator="\n")
+        pruned.writeheader()
         for edge in read_jsonl(edges_path):
             inherited = inherited_rare_reason(edge)
             edge.pop(FLAGS_FIELD, None)
@@ -608,6 +692,7 @@ def collect(
                 report.dropped_edges[reason] += 1
                 report.dropped_edges_by_source[source][reason] += 1
                 report.example(reason, edge)
+                pruned.writerow(pruned_row(edge, reason, confidences))
                 if reason in ("unresolved_both_ends", "broken_id"):
                     for end in {edge["subject"], edge["object"]} & unresolved_ids:
                         report.unresolved_prefixes_by_source[source][prefix(end)] += 1

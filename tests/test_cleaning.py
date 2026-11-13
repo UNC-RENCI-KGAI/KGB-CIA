@@ -1,4 +1,6 @@
+import csv
 import json
+from collections import Counter
 
 import pytest
 
@@ -690,3 +692,48 @@ def test_broken_ids():
     assert garbage.is_broken_id("phenopacket.store:PMID_1_individual_II-3")
     assert not garbage.is_broken_id("OBA:0000001")  # a real OBA id is only unknown
     assert not garbage.is_broken_id("REACT:R-HSA-1")
+
+
+def test_pruned_edges_tsv_is_the_gold_set_of_drops(graph, tmp_path):
+    out = tmp_path / "clean"
+    lists = out / "drop_lists"
+    lists.mkdir(parents=True)
+    report = garbage.collect(graph, out)
+    with open(out / "pruned_edges.tsv") as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    assert list(rows[0]) == list(garbage.PRUNED_COLUMNS)
+    assert len(rows) == sum(report.dropped_edges.values())
+    assert Counter(r["reason"] for r in rows) == report.dropped_edges
+    assert {r["verdict"] for r in rows} == {"prune"}
+    assert {r["confidence"] for r in rows} == {"1.000"}
+    assert all(r["explanation"] for r in rows)
+
+
+def test_pruned_edges_take_a_drop_lists_confidence(graph, tmp_path):
+    out = tmp_path / "clean"
+    edge = _read(graph / "edges.jsonl")[0]  # A-B, otherwise kept
+    key = {k: edge[k] for k in ("subject", "predicate", "object", "primary_knowledge_source")}
+    (out / "drop_lists").mkdir(parents=True)
+    _write(out / "drop_lists" / "check.jsonl", [{**key, "confidence": 0.98}])
+    garbage.collect(graph, out)
+    with open(out / "pruned_edges.tsv") as f:
+        listed = [r for r in csv.DictReader(f, delimiter="\t") if r["reason"] == "drop_list:check"]
+    assert [r["confidence"] for r in listed] == ["0.980"]
+    assert "evidence check" in listed[0]["explanation"]
+
+
+def test_pruned_edges_tell_qualifier_versions_apart(two_mechanisms, tmp_path):
+    """Each version's row has its own statement_id and its own line's confidence."""
+    out = tmp_path / "clean"
+    (out / "drop_lists").mkdir(parents=True)
+    lines, expected = [], {}
+    for mechanism, confidence in (("agonism", 0.91), ("antagonism", 0.62)):
+        edge = _edge("UniProtKB:A", "UniProtKB:B", causal_mechanism_qualifier=mechanism)
+        statement = edge_statement_id(edge)
+        lines.append({**edge, "statement_id": statement, "confidence": confidence})
+        expected[statement] = f"{confidence:.3f}"
+    _write(out / "drop_lists" / "check.jsonl", lines)
+    garbage.collect(two_mechanisms, out)
+    with open(out / "pruned_edges.tsv") as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    assert {r["statement_id"]: r["confidence"] for r in rows} == expected

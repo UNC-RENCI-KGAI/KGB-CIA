@@ -34,6 +34,14 @@ flag lists beside them (`data/cleaning/flag_lists`), since the two folders trave
   their edges, with the CURIE prefixes that didn't resolve; every dropped edge and node by
   reason and by primary knowledge source; unresolved nodes by prefix; flags on kept edges; and a
   few examples of each.
+- `pruned_edges.tsv`: every dropped edge as a KGX TSV row (`subject`, `predicate`, `object`,
+  `primary_knowledge_source`, `statement_id`, `publications`, `verdict` = `prune`, `confidence`,
+  `reason`, and an `explanation` in plain words). The `statement_id` tells apart edges that
+  differ only in qualifiers (see the drop lists below). This is the pruning gold set the challenge asks for, in the
+  evidence check's `gold_set.tsv` columns. A rule's confidence is 1, because it holds by
+  construction. A drop-listed edge takes the `confidence` on the drop-list line that dropped
+  it (the one naming its statement first), which the evidence check writes, and is left empty
+  when the line has none.
 - `flagged_edges.jsonl`: the kept edges worth a look, one per line, keyed like a drop list (see
   below).
 - `unresolved_nodes.tsv`: every node NodeNorm couldn't resolve, with its prefix, name, the
