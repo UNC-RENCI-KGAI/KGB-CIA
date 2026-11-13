@@ -8,26 +8,26 @@ neo4j:
     type: LoadBalancer
     httpEnabled: false
   storage:
-    size: 500Gi
+    size: 30Gi      # dump download + loaded database, with headroom
   resources:
     requests:
-      cpu: "4"
-      memory: 24Gi
+      cpu: "1"
+      memory: 10Gi
       ephemeral-storage: 2Gi
     limits:
-      cpu: "8"
-      memory: 32Gi
+      cpu: "2"
+      memory: 14Gi    # leaves ~2 GB for k3s and the OS
       ephemeral-storage: 10Gi
   memory:
-    heapInitial: 12G
-    heapMax: 16G
-    pageCache: 12G
+    heapInitial: 4G
+    heapMax: 4G
+    pageCache: 7G   # most of the rest; caches the hot part of the store
   transaction:
     timeout: 30s
-    memoryMax: 8G
+    memoryMax: 2G   # per-transaction cap, protects the shared instance
   bolt:
-    threadPoolMin: 10
-    threadPoolMax: 200
+    threadPoolMin: 5
+    threadPoolMax: 100
 
 mcp:
   enabled: false
