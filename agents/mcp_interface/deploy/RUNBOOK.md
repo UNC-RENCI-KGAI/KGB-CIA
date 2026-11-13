@@ -18,6 +18,7 @@ bash agents/mcp_interface/deploy/prepare_dump.sh \
   --graph-dir data/mcp_interface/dev_artifacts \
   --reports-dir data/mcp_interface/dev_artifacts/reports \
   --graph-metadata data/mcp_interface/sample/LitCoin_ORION_pipeline.meta.json \
+  --description data/describe/description.json \
   --output-dir data/mcp_interface/prepared \
   --graph-version litcoin-200-synthetic
 ```
@@ -37,6 +38,7 @@ bash agents/mcp_interface/deploy/prepare_dump.sh \
   --existing-dump data/mcp_interface/dev_artifacts/kgb.dump \
   --reports-dir data/transformation/graphs \
   --graph-metadata data/transformation/merged/merge-metadata.json \
+  --description data/describe/description.json \
   --output-dir data/mcp_interface/prepared-artifacts-only \
   --graph-version real-cleaned-2026-11-09
 ```

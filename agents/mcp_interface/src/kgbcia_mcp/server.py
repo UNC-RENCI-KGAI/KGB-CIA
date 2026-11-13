@@ -16,8 +16,11 @@ from .tools import register_graph_tools, register_query_tools
 SERVER_INSTRUCTIONS = """Resolve names with search_nodes. Orient with get_schema or
 summarize_node_edges, then explore with get_node_edges, find_paths or find_connected_nodes.
 Justify every claimed connection with get_edges_between(include_lineage=true) or explain_edge,
-citing knowledge sources, publications and source records verbatim. Use query_cypher only for
-aggregates that fixed tools cannot answer."""
+citing knowledge sources, publications and source records verbatim. When no connection is found,
+check get_graph_info's build section for failed or missing sources before concluding there is no
+evidence. Whenever an answer uses an edge with flags, say it is flagged and give each flag's
+reason verbatim, including any PMID. Use query_cypher only for aggregates that fixed tools
+cannot answer."""
 
 
 def create_server(
@@ -66,6 +69,7 @@ def _create_service(settings: Settings) -> Neo4jService:
     lineage = LineageIndex()
     graph_metadata: dict[str, Any] = {}
     hubs: list[str] = []
+    build_description: dict[str, Any] = {}
     if settings.artifacts:
         try:
             bundle = load_artifacts(
@@ -75,6 +79,7 @@ def _create_service(settings: Settings) -> Neo4jService:
             lineage = LineageIndex(bundle.reports)
             graph_metadata = bundle.graph_metadata
             hubs = _hub_ids(bundle.hubs)
+            build_description = bundle.description or {}
         except Exception as exc:
             _warn(f"lineage artifacts unavailable: {exc}")
     if not settings.neo4j_uri:
@@ -92,6 +97,7 @@ def _create_service(settings: Settings) -> Neo4jService:
         lineage=lineage,
         graph_metadata=graph_metadata,
         hubs=hubs,
+        build_description=build_description,
     )
 
 

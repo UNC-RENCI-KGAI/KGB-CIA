@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ FULLTEXT_INDEX_PROPERTIES = ("name", "synonym", "equivalent_identifiers")
 # Generated per relationship type; SHOW INDEXES confirmed these names and id properties.
 RELATIONSHIP_ID_INDEX_PREFIX = "kgbcia_relationship_id_"
 
+_LOG = logging.getLogger(__name__)
 _MAX_LIMIT = 500
 _MAX_FETCH = _MAX_LIMIT + 1
 _FORBIDDEN_CYPHER = re.compile(
@@ -66,6 +68,7 @@ class Neo4jService:
         lineage: LineageIndex | None = None,
         graph_metadata: Mapping[str, Any] | None = None,
         hubs: Iterable[str] = (),
+        build_description: Mapping[str, Any] | None = None,
     ) -> None:
         self._driver = driver
         self._uri = uri
@@ -75,6 +78,7 @@ class Neo4jService:
         self.lineage = lineage or LineageIndex()
         self.graph_metadata = dict(graph_metadata or {})
         self.hubs = tuple(hubs)
+        self.build_description = dict(build_description or {})
         self._cache: dict[str, Any] = {}
 
     def close(self) -> None:
@@ -174,6 +178,8 @@ class Neo4jService:
             "flag_counts": list(stats.get("flag_counts", [])),
             "graph_metadata": self.graph_metadata,
         }
+        if self.build_description:
+            info["build"] = self.build_description
         self.cache_set("graph_info", info)
         return info
 
@@ -290,6 +296,7 @@ class Neo4jService:
         predicate: str | None = None,
         neighbor_category: str | None = None,
         neighbor_where: Mapping[str, Any] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -301,6 +308,7 @@ class Neo4jService:
         if neighbor_category:
             self._validate_name("category", neighbor_category)
         property_name, property_value = self._validate_where(neighbor_category, neighbor_where)
+        self._validate_flags(exclude_flags)
         resolved = self._resolve_node(node_id)
         if resolved["status"] != "found":
             return resolved
@@ -317,6 +325,10 @@ class Neo4jService:
             filters.append("$neighbor_category IN labels(neighbor)")
         if property_name:
             filters.append(f"neighbor.`{property_name}` = $neighbor_value")
+        if exclude_flags:
+            filters.append(
+                "NOT any(flag IN coalesce(r.kgbcia_flags, []) WHERE flag IN $exclude_flags)"
+            )
         where = f"WHERE {' AND '.join(filters)}" if filters else ""
         query = f"""
         MATCH (n:`{NAMED_THING_LABEL}` {{id: $id}}){pattern}
@@ -333,6 +345,7 @@ class Neo4jService:
             "predicate": predicate,
             "neighbor_category": neighbor_category,
             "neighbor_value": property_value,
+            "exclude_flags": exclude_flags or [],
             "offset": offset,
             "fetch": limit + 1,
         }
@@ -404,12 +417,14 @@ class Neo4jService:
         target_id: str,
         max_hops: int = 3,
         predicates: list[str] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
         if max_hops < 1 or max_hops > 4:
             raise ValueError("max_hops must be between 1 and 4")
         _validate_limit(limit)
         self._validate_predicates(predicates)
+        self._validate_flags(exclude_flags)
         source = self._resolve_node(source_id)
         if source["status"] != "found":
             return source
@@ -420,6 +435,7 @@ class Neo4jService:
             "source_id": source["node"]["id"],
             "target_id": target["node"]["id"],
             "predicates": predicates or [],
+            "exclude_flags": exclude_flags or [],
             "hubs": list(self.hubs),
             "limit": limit + 1,
         }
@@ -430,6 +446,9 @@ class Neo4jService:
             WHERE (size($predicates) = 0 OR
                    all(r IN relationships(p) WHERE type(r) IN $predicates))
               AND all(n IN nodes(p)[1..-1] WHERE NOT n.id IN $hubs)
+              AND (size($exclude_flags) = 0 OR
+                   all(r IN relationships(p) WHERE
+                       NOT any(flag IN coalesce(r.kgbcia_flags, []) WHERE flag IN $exclude_flags)))
             RETURN p AS path LIMIT $limit
             """
             rows = [
@@ -448,6 +467,7 @@ class Neo4jService:
         max_hops: int = 2,
         predicates: list[str] | None = None,
         target_where: Mapping[str, Any] | None = None,
+        exclude_flags: list[str] | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
         if max_hops < 1 or max_hops > 3:
@@ -455,6 +475,7 @@ class Neo4jService:
         _validate_limit(limit)
         self._validate_name("category", target_category)
         self._validate_predicates(predicates)
+        self._validate_flags(exclude_flags)
         property_name, property_value = self._validate_where(target_category, target_where)
         source = self._resolve_node(source_id)
         if source["status"] != "found":
@@ -465,6 +486,7 @@ class Neo4jService:
             "target_category": target_category,
             "target_value": property_value,
             "predicates": predicates or [],
+            "exclude_flags": exclude_flags or [],
             "hubs": list(self.hubs),
             "limit": limit + 1,
         }
@@ -476,6 +498,9 @@ class Neo4jService:
               AND (size($predicates) = 0 OR
                    all(r IN relationships(p) WHERE type(r) IN $predicates))
               AND all(n IN nodes(p)[1..-1] WHERE NOT n.id IN $hubs)
+              AND (size($exclude_flags) = 0 OR
+                   all(r IN relationships(p) WHERE
+                       NOT any(flag IN coalesce(r.kgbcia_flags, []) WHERE flag IN $exclude_flags)))
             RETURN target, p AS path LIMIT $limit
             """
             rows = list(self.execute_read(query, params, row_limit=limit + 1).rows)
@@ -610,6 +635,19 @@ class Neo4jService:
         for predicate in predicates or []:
             self._validate_name("predicate", predicate)
 
+    def _validate_flags(self, flags: list[str] | None) -> None:
+        if not flags:
+            return
+        schema = self.get_schema()
+        if "hint" in schema:
+            raise ValueError(schema["hint"])
+        valid = schema.get("flag_values", [])
+        unknown = [flag for flag in flags if flag not in valid]
+        if unknown:
+            raise ValueError(
+                f"unknown quality flag {unknown[0]!r}; valid values: {', '.join(valid)}"
+            )
+
     def _validate_where(
         self, category: str | None, where: Mapping[str, Any] | None
     ) -> tuple[str | None, Any]:
@@ -669,6 +707,7 @@ def serialize_neo4j_value(value: Any) -> Any:
             "publication_count": publication_count,
             **properties,
         }
+        result["flags"] = _quality_flags(result)
         if value.start_node is not None:
             result["subject"] = value.start_node.get(NODE_ID_PROPERTY)
         if value.end_node is not None:
@@ -691,6 +730,25 @@ def serialize_neo4j_value(value: Any) -> Any:
     if isinstance(value, (list, tuple, set, frozenset)):
         return [serialize_neo4j_value(item) for item in value]
     return value
+
+
+def _quality_flags(edge: Mapping[str, Any]) -> list[dict[str, Any]]:
+    flags = edge.get("kgbcia_flags", [])
+    reasons = edge.get("kgbcia_flag_reasons", [])
+    if not isinstance(flags, list):
+        flags = [flags] if flags else []
+    if not isinstance(reasons, list):
+        reasons = [reasons] if reasons else []
+    if len(flags) != len(reasons):
+        edge_id = edge.get("edge_id") or edge.get("id") or "<unknown>"
+        _LOG.warning("edge %s has mismatched kgbcia_flags and kgbcia_flag_reasons", edge_id)
+    paired = []
+    for index, flag in enumerate(flags):
+        if flag is None:
+            continue
+        reason = reasons[index] if index < len(reasons) else None
+        paired.append({"flag": str(flag), "reason": str(reason) if reason is not None else None})
+    return paired
 
 
 def _validate_limit(limit: int) -> None:

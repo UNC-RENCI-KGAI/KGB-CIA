@@ -145,6 +145,18 @@ def create_dev_artifacts(input_dir: Path, output_dir: Path) -> dict[str, int]:
         if ordinal % 25 == 0:
             references.append(f"{mapping_id}#synthetic-merged-{ordinal}")
         copy["kgbcia_source_records"] = references
+        if ordinal == 1:
+            copy["kgbcia_flags"] = ["wrong_mechanism"]
+            copy["kgbcia_flag_reasons"] = ["PMID:20371707 reports a different action"]
+        elif ordinal == 2:
+            copy["kgbcia_flags"] = ["wrong_mechanism", "type_violation"]
+            copy["kgbcia_flag_reasons"] = [
+                "PMID:20371707 reports a different action",
+                "Synthetic Biolink range mismatch for development testing",
+            ]
+        elif ordinal == 3:
+            copy["kgbcia_flags"] = ["wrong_mechanism", "rare_category_combination"]
+            copy["kgbcia_flag_reasons"] = ["Deliberately mismatched reason list"]
         rewritten.append(copy)
     (output_dir / "edges.jsonl").write_text(
         "".join(json.dumps(edge, sort_keys=True) + "\n" for edge in rewritten)

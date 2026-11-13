@@ -287,11 +287,12 @@ release, on a workstation with Docker:
    category per node using the graph-wide rarest label (smallest category count) so ancestor
    labels do not cross-multiply; log the resulting row count as a sanity check.
 6. Stop the container and run `neo4j-admin database dump`: this is the **kgb dump**.
-7. If the `describe-graph` skill exists (`.agents/skills/filter/describe-graph/`), run its
-   `describe_graph.py` against the transformation output, and add its `description.json` to the
-   artifacts **with local file paths removed** (its top-level `graphs` and each source's
-   `normalized_dir`). It's built on the builder's machine, which has the ORION workspaces that
-   MCP users don't. If the skill is absent or fails, warn and continue without it.
+7. If a `description.json` is supplied with `--description` (defaulting to
+   `data/describe/description.json`), add it to the artifacts **with local file paths removed**
+   (its top-level `graphs` and each source's `normalized_dir`). For the real graph, this file is
+   generated on the VM that has the Nov 9 transformation output and cleaning report; when the
+   file is present, `prepare_dump.sh` copies and sanitizes it rather than running the
+   `describe-graph` skill itself. If the file is absent, warn and continue without it.
 8. Pack the artifacts (`TransformReport`s, ORION graph metadata/statistics, hub list, build
    description) into a tarball.
 9. Print the SHA-256 of the dump and the tarball, for the chart values and

@@ -39,6 +39,7 @@ bash agents/mcp_interface/deploy/prepare_dump.sh \
   --graph-dir <dir with nodes.jsonl and edges.jsonl> \
   --reports-dir <dir containing transform_report.json files> \
   --graph-metadata <merge-metadata.json or graph metadata JSON> \
+  --description data/describe/description.json \
   --output-dir <prepared-output-dir> \
   --graph-version <version>
 
@@ -48,6 +49,7 @@ bash agents/mcp_interface/deploy/prepare_dump.sh \
   --existing-dump <existing kgb.dump> \
   --reports-dir <dir containing transform_report.json files> \
   --graph-metadata <merge-metadata.json or graph metadata JSON> \
+  --description data/describe/description.json \
   --output-dir <prepared-output-dir> \
   --graph-version <version>
 ```

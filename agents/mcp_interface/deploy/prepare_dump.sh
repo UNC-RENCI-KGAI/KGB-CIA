@@ -9,8 +9,8 @@ DATABASE="neo4j"
 
 usage() {
   cat <<'EOF'
-Usage: prepare_dump.sh --graph-dir DIR --reports-dir DIR --graph-metadata FILE --output-dir DIR [--graph-version VERSION]
-       prepare_dump.sh --artifacts-only --existing-dump FILE --reports-dir DIR --graph-metadata FILE --output-dir DIR [--graph-version VERSION]
+Usage: prepare_dump.sh --graph-dir DIR --reports-dir DIR --graph-metadata FILE --output-dir DIR [--graph-version VERSION] [--description FILE]
+       prepare_dump.sh --artifacts-only --existing-dump FILE --reports-dir DIR --graph-metadata FILE --output-dir DIR [--graph-version VERSION] [--description FILE]
 
 DIR graph-dir contains nodes.jsonl and edges.jsonl. reports-dir contains one or more
 transform_report.json files. Output receives kgb.dump and artifacts.tar.gz. In
@@ -24,6 +24,7 @@ reports_dir=""
 graph_metadata=""
 output_dir=""
 graph_version="development"
+description="data/describe/description.json"
 artifacts_only=0
 existing_dump=""
 while [[ $# -gt 0 ]]; do
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --graph-metadata) graph_metadata="$2"; shift 2 ;;
     --output-dir) output_dir="$2"; shift 2 ;;
     --graph-version) graph_version="$2"; shift 2 ;;
+    --description) description="$2"; shift 2 ;;
     --artifacts-only) artifacts_only=1; shift ;;
     --existing-dump) existing_dump="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -70,6 +72,9 @@ if [[ -n "$graph_dir" ]]; then
 fi
 if [[ -n "$existing_dump" ]]; then
   existing_dump=$(cd "$(dirname "$existing_dump")" && pwd)/$(basename "$existing_dump")
+fi
+if [[ -n "$description" && -f "$description" ]]; then
+  description=$(cd "$(dirname "$description")" && pwd)/$(basename "$description")
 fi
 reports_dir=$(cd "$reports_dir" && pwd)
 graph_metadata=$(cd "$(dirname "$graph_metadata")" && pwd)/$(basename "$graph_metadata")
@@ -163,6 +168,36 @@ done < <(find "$reports_dir" -type f -name transform_report.json | sort)
 [[ -n "$(find "$artifacts_dir/reports" -type f -name transform_report.json -print -quit)" ]] || {
   echo "no transform_report.json found under $reports_dir" >&2; exit 1;
 }
+if [[ -n "$description" && -f "$description" ]]; then
+  python - "$description" "$artifacts_dir/description.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+value = json.loads(source.read_text())
+if not isinstance(value, dict):
+    raise SystemExit("description.json must contain a JSON object")
+value.pop("graphs", None)
+
+
+def strip_local_paths(item):
+    if isinstance(item, dict):
+        item.pop("normalized_dir", None)
+        for child in item.values():
+            strip_local_paths(child)
+    elif isinstance(item, list):
+        for child in item:
+            strip_local_paths(child)
+
+
+strip_local_paths(value.get("sources"))
+destination.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+else
+  echo "warning: description.json not found at $description; continuing without build description" >&2
+fi
 (
   cd "$repo_root"
   NEO4J_URI="bolt://127.0.0.1:$bolt_port" NEO4J_USER=neo4j NEO4J_PASSWORD="$password" \

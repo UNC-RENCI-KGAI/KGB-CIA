@@ -4,6 +4,7 @@
 # dependencies = [
 #     "pydantic>=2.0",
 #     "httpx>=0.27",
+#     "kgbcia-mcp",
 #     "bmt>=1.5.0",
 #     "biolink-model==4.4.6",
 #     "openai>=3.44",

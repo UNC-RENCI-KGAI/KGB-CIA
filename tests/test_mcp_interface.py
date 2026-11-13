@@ -36,6 +36,7 @@ from kgbcia_mcp.services.neo4j_service import (
     Neo4jService,
     ReadResult,
     _classify_neo4j_failure,
+    _quality_flags,
     serialize_neo4j_value,
 )
 from neo4j import GraphDatabase
@@ -305,11 +306,21 @@ def _artifact_directory(root: Path) -> Path:
         json.dumps({"graph_id": "toy", "statistics": _toy_statistics()})
     )
     (root / "hubs.json").write_text('["NCBIGene:100"]')
+    (root / "description.json").write_text(
+        json.dumps(
+            {
+                "headline": {"nodes": 10},
+                "graphs": ["/tmp/local"],
+                "sources": [{"id": "chembl", "normalized_dir": "/tmp/norm"}],
+            }
+        )
+    )
     manifest = {
         "graph_version": "toy-1",
         "files": [
             "graph_metadata.json",
             "hubs.json",
+            "description.json",
             "reports/chembl/transform_report.json",
         ],
     }
@@ -333,6 +344,7 @@ def test_load_artifacts_from_directory(tmp_path):
     assert bundle.graph_metadata["statistics"]["node_count"] == 10
     assert bundle.hubs == ["NCBIGene:100"]
     assert bundle.reports[0].source == "infores:chembl"
+    assert bundle.description["headline"] == {"nodes": 10}
 
 
 def test_url_artifacts_checksum_and_cache_reuse(tmp_path, monkeypatch):
@@ -399,6 +411,24 @@ def test_neo4j_service_creates_driver_without_auth(monkeypatch):
 
 def test_fulltext_assumption_includes_list_property():
     assert FULLTEXT_INDEX_PROPERTIES == ("name", "synonym", "equivalent_identifiers")
+
+
+def test_quality_flag_pairs_cover_empty_multiple_and_mismatched(caplog):
+    assert _quality_flags({}) == []
+    assert _quality_flags(
+        {
+            "edge_id": "edge-1",
+            "kgbcia_flags": ["wrong_mechanism", "type_violation"],
+            "kgbcia_flag_reasons": ["PMID:1 says the action differs", "range mismatch"],
+        }
+    ) == [
+        {"flag": "wrong_mechanism", "reason": "PMID:1 says the action differs"},
+        {"flag": "type_violation", "reason": "range mismatch"},
+    ]
+    assert _quality_flags(
+        {"edge_id": "edge-2", "kgbcia_flags": ["wrong_mechanism"], "kgbcia_flag_reasons": []}
+    ) == [{"flag": "wrong_mechanism", "reason": None}]
+    assert "mismatched" in caplog.text
 
 
 def test_neo4j_serializer_handles_nodes_spatial_and_nested_values():
@@ -474,6 +504,15 @@ def test_graph_info_and_schema_use_precomputed_statistics(monkeypatch):
         {"primary_knowledge_source": "infores:chembl", "count": 15}
     ]
     assert info["flag_counts"] == [{"flag": "wrong_mechanism", "count": 1}]
+    service_with_build = Neo4jService(
+        "unused",
+        "unused",
+        "unused",
+        driver=_FakeDriver(),
+        graph_metadata={"statistics": _toy_statistics()},
+        build_description={"headline": {"nodes": 10}},
+    )
+    assert service_with_build.get_graph_info()["build"] == {"headline": {"nodes": 10}}
     assert schema["meta_graph"][0]["subject_category"] == "biolink:SmallMolecule"
     assert schema["edge_properties"][0]["property"] == "kgbcia_flags"
     assert schema["flag_values"] == ["wrong_mechanism"]
@@ -804,6 +843,7 @@ def _service_with_cached_schema(*, hubs=()):
                 "biolink:Gene": ["name", "symbol"],
                 "biolink:Disease": ["name"],
             },
+            "flag_values": ["wrong_mechanism"],
         },
     )
     return service
@@ -896,6 +936,7 @@ def test_tool_direction_and_neighbor_filter_validation(monkeypatch):
                     "predicate": "biolink:directly_physically_interacts_with",
                     "neighbor_category": "biolink:Gene",
                     "neighbor_where": {"symbol": "CDK2"},
+                    "exclude_flags": ["wrong_mechanism"],
                 },
             )
             bad_direction = await client.call_tool(
@@ -918,9 +959,11 @@ def test_tool_direction_and_neighbor_filter_validation(monkeypatch):
         query, parameters = observed[0]
         assert "-[r]->" in query
         assert "neighbor.`symbol` = $neighbor_value" in query
+        assert "kgbcia_flags" in query
         assert parameters["predicate"] == "biolink:directly_physically_interacts_with"
         assert parameters["neighbor_category"] == "biolink:Gene"
         assert parameters["neighbor_value"] == "CDK2"
+        assert parameters["exclude_flags"] == ["wrong_mechanism"]
         assert "direction must be" in bad_direction.data["hint"]
         assert "unknown predicate" in bad_predicate.data["hint"]
         assert "unknown property" in bad_property.data["hint"]
@@ -968,6 +1011,7 @@ def test_path_tools_enforce_hop_limits_and_exclude_hubs(monkeypatch):
                     "source_id": "CHEBI:1",
                     "target_id": "MONDO:1",
                     "max_hops": 3,
+                    "exclude_flags": ["wrong_mechanism"],
                 },
             )
             connected = await client.call_tool(
@@ -976,6 +1020,7 @@ def test_path_tools_enforce_hop_limits_and_exclude_hubs(monkeypatch):
                     "source_id": "CHEBI:1",
                     "target_category": "biolink:Disease",
                     "max_hops": 3,
+                    "exclude_flags": ["wrong_mechanism"],
                 },
             )
             bad_paths = await client.call_tool(
@@ -997,7 +1042,9 @@ def test_path_tools_enforce_hop_limits_and_exclude_hubs(monkeypatch):
         assert observed
         for query, parameters in observed:
             assert "nodes(p)[1..-1]" in query
+            assert "kgbcia_flags" in query
             assert parameters["hubs"] == ["NCBIGene:HUB"]
+            assert parameters["exclude_flags"] == ["wrong_mechanism"]
 
     asyncio.run(exercise())
 
@@ -1029,6 +1076,14 @@ def test_lineage_tools_cover_direct_edges_and_exact_and_candidate_explanations(m
                 "publications": ["PMID:1"],
                 "publication_count": 1,
                 "kgbcia_source_records": [source_record],
+                "kgbcia_flags": ["wrong_mechanism"],
+                "kgbcia_flag_reasons": ["PMID:20371707 reports a different action"],
+                "flags": [
+                    {
+                        "flag": "wrong_mechanism",
+                        "reason": "PMID:20371707 reports a different action",
+                    }
+                ],
             }
 
         def execute(cypher, parameters=None, **_kwargs):
@@ -1074,6 +1129,8 @@ def test_lineage_tools_cover_direct_edges_and_exact_and_candidate_explanations(m
         direct_lineage = direct.data["results"][0]["lineage"]["lineage"]
         assert direct_lineage[0]["match"] == "exact"
         assert direct_lineage[0]["record_keys"] == ["row-1"]
+        assert direct.data["results"][0]["edge"]["flags"][0]["flag"] == "wrong_mechanism"
+        assert exact.data["edge"]["flags"][0]["reason"].startswith("PMID:20371707")
         assert exact.data["lineage"][0]["match"] == "exact"
         assert candidate.data["lineage"][0]["match"] == "candidate"
         assert candidate.data["unresolved_source_records"] == ["unknown.mapping#row-2"]
@@ -1120,6 +1177,9 @@ def test_make_dev_artifacts_creates_synthetic_lineage(tmp_path):
     rewritten = [json.loads(line) for line in (output_dir / "edges.jsonl").read_text().splitlines()]
     assert all(edge["id"].startswith("synthetic-") for edge in rewritten)
     assert all(isinstance(edge["kgbcia_source_records"], list) for edge in rewritten)
+    assert rewritten[0]["kgbcia_flags"] == ["wrong_mechanism"]
+    assert len(rewritten[1]["kgbcia_flags"]) == 2
+    assert len(rewritten[2]["kgbcia_flags"]) != len(rewritten[2]["kgbcia_flag_reasons"])
     assert len(rewritten[-1]["kgbcia_source_records"]) == 2
 
 
@@ -1275,7 +1335,11 @@ def test_dump_scripts_pin_images_and_create_idempotent_indexes():
     assert "orion-neo4j-dump /input/nodes.jsonl /input/edges.jsonl /work/orion" in preparation
     assert "--artifacts-only" in preparation
     assert "--existing-dump" in preparation
+    assert "--description" in preparation
     assert 'cp "$existing_dump" "$output_dir/kgb.dump"' in preparation
+    assert "description.json" in preparation
+    assert 'value.pop("graphs", None)' in preparation
+    assert 'item.pop("normalized_dir", None)' in preparation
     assert "kgbcia-mcp hubs" in preparation
     assert "precomputed meta_graph rows" in preparation
     assert "category_order" in preparation
