@@ -953,6 +953,12 @@ def test_cited_pmids_from_curies_and_urls():
     assert cited_pmids(edge) == ["5", "7", "10", "111"]
     assert cited_pmids({"subject": "X:1", "publications": []}) == []
     assert pubmed.pmid_of("PMID:12345") == "12345" and pubmed.pmid_of("PMID 12345") is None
+    # A value that is a PubMed article URL names its PMID; one with other text around it doesn't.
+    assert pubmed.pmid_of("https://pubmed.ncbi.nlm.nih.gov/19522465") == "19522465"
+    assert pubmed.pmid_of("http://www.ncbi.nlm.nih.gov/pubmed/12345/") == "12345"
+    assert pubmed.pmid_of("HTTPS://PubMed.ncbi.nlm.nih.gov/12345/") == "12345"
+    assert pubmed.pmid_of("see https://pubmed.ncbi.nlm.nih.gov/12345") is None
+    assert pubmed.pmid_of("https://example.org/pubmed.ncbi.nlm.nih.gov/12345") is None
 
 
 def test_cited_pmids_of_edges_the_augmentation_agent_wrote():
