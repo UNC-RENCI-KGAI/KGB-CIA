@@ -56,7 +56,12 @@ def resolve_artifacts(
     if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
         raise ValueError("artifact checksum must be 64 lowercase or uppercase hexadecimal digits")
 
-    cache_root = cache_dir or Path.home() / ".cache" / "kgbcia-mcp" / "artifacts"
+    if cache_dir is not None:
+        cache_root = cache_dir
+    elif root := os.environ.get("KGB_CACHE_DIR"):
+        cache_root = Path(root).expanduser() / "mcp-artifacts"
+    else:
+        cache_root = Path.home() / ".cache" / "kgbcia-mcp" / "artifacts"
     destination = cache_root / expected
     if (destination / "manifest.json").is_file():
         return destination

@@ -367,6 +367,19 @@ def test_url_artifacts_checksum_and_cache_reuse(tmp_path, monkeypatch):
     assert load_artifacts(first).reports
 
 
+def test_url_artifacts_uses_kgb_cache_dir(tmp_path, monkeypatch):
+    source = _artifact_directory(tmp_path / "source")
+    archive = _tar_bytes(source)
+    checksum = hashlib.sha256(archive).hexdigest()
+    monkeypatch.setenv("KGB_CACHE_DIR", str(tmp_path / "kgb-cache"))
+    monkeypatch.setattr("urllib.request.urlopen", lambda _url: io.BytesIO(archive))
+
+    resolved = resolve_artifacts("https://example.test/artifacts.tar", checksum)
+
+    assert resolved == tmp_path / "kgb-cache" / "mcp-artifacts" / checksum
+    assert (resolved / "manifest.json").is_file()
+
+
 def test_url_artifacts_reject_checksum_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", lambda _url: io.BytesIO(b"not a tar"))
     with pytest.raises(ValueError, match="checksum mismatch"):
