@@ -1548,3 +1548,51 @@ def test_a_null_prefix_code_is_not_an_undeclared_prefix():
     )
     undeclared = [e for e in errs if "prefix_codes uses prefixes not declared" in e]
     assert len(undeclared) == 1 and "OTHER" in undeclared[0] and "None" not in undeclared[0]
+
+
+def test_a_cached_validator_failure_keeps_its_text(tmp_path, monkeypatch):
+    """The cache used to store the failure as the report showed it, which is nothing when the
+    plan's explained entry had turned it into a note; the next run then raised an empty,
+    unexplainable error (eRAM's agent deleted the cache entry by hand)."""
+    import check
+
+    monkeypatch.setattr(check, "VALIDATE_CACHE", tmp_path / "validate")
+    croissant = tmp_path / "croissant.semantic.json"
+    croissant.write_text("{}")
+    runs = []
+
+    def fake_validate(path, f, timeout):
+        runs.append(path)
+        check.VALIDATION["error"] = "mlcroissant validate failed:\n  -  Field x has no dataType"
+        f.error("croissant", check.VALIDATION["error"])
+        check.VALIDATION["result"] = "failed (see Errors)"
+
+    monkeypatch.setattr(check, "_run_validate", fake_validate)
+    explained = [
+        {
+            "where": "croissant",
+            "message": "mlcroissant validate failed",
+            "level": "error",
+            "reason": "the input context lacks subField",
+            "label": "x",
+        }
+    ]
+    f = Findings(explained)
+    check.run_validate(str(croissant), f, 60)
+    assert f.count("error") == 0 and f.count("note") == 1
+    (entry,) = (tmp_path / "validate").glob("*.json")
+    assert "no dataType" in json.loads(entry.read_text())["error"]
+    # the next run, from the cache: the same text, so the same explanation applies
+    f = Findings(explained)
+    check.run_validate(str(croissant), f, 60)
+    assert runs == [str(croissant)] and f.count("error") == 0 and f.count("note") == 1
+    assert "cached" in check.VALIDATION["result"]
+    # without the explanation the cached failure is an error with its text
+    f = Findings()
+    check.run_validate(str(croissant), f, 60)
+    assert f.count("error") == 1 and "no dataType" in f.items[0][2]
+    # a failure cached without its text by an older check.py is validated again, not re-raised
+    entry.write_text(json.dumps({"result": "failed (see Errors)", "error": ""}))
+    f = Findings()
+    check.run_validate(str(croissant), f, 60)
+    assert len(runs) == 2 and "no dataType" in f.items[0][2]

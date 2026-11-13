@@ -1806,7 +1806,9 @@ def run_bounded(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(cmd, proc.returncode, out.read(), err.read())
 
 
-VALIDATION = {"result": "not run"}
+# result: what the report says; error: the validator's own failure text, kept apart from the
+# findings because an explained failure is a note there, and the cache needs the text itself
+VALIDATION = {"result": "not run", "error": ""}
 
 
 VALIDATE_CACHE = Path.home() / ".cache" / "croissant-semantics" / "validate"
@@ -1814,24 +1816,32 @@ VALIDATE_CACHE = Path.home() / ".cache" / "croissant-semantics" / "validate"
 
 def run_validate(path: str, f: Findings, timeout: int) -> None:
     """mlcroissant validate, or its cached result for a byte-identical croissant (validation can
-    take an hour)."""
+    take an hour). A cached failure is reported again from its text, so the plan's explained
+    entries match it as they did the first time."""
     import hashlib
 
     digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     cached = VALIDATE_CACHE / f"{digest}.json"
     if cached.exists():
         hit = json.loads(cached.read_text())
-        VALIDATION["result"] = (
-            f"{hit['result']} (cached: this exact croissant was validated before)"
-        )
-        if hit["result"].startswith("failed"):
-            f.error("croissant", hit["error"])
-        return
+        failed = str(hit.get("result", "")).startswith("failed")
+        if not failed or hit.get("error"):
+            VALIDATION["result"] = (
+                f"{hit['result']} (cached: this exact croissant was validated before)"
+            )
+            VALIDATION["error"] = hit.get("error") or ""
+            if failed:
+                f.error("croissant", hit["error"])
+            return
+        # a failure cached without its text (an older check.py cached the error as the report
+        # showed it, which is nothing when the plan explained it): validate again
+    VALIDATION["error"] = ""
     _run_validate(path, f, timeout)
-    if VALIDATION["result"] in ("passed",) or VALIDATION["result"].startswith("failed"):
+    if VALIDATION["result"] == "passed" or VALIDATION["result"].startswith("failed"):
         VALIDATE_CACHE.mkdir(parents=True, exist_ok=True)
-        err = next((m for lv, w, m in f.items if lv == "error" and w == "croissant"), "")
-        cached.write_text(json.dumps({"result": VALIDATION["result"], "error": err}))
+        cached.write_text(
+            json.dumps({"result": VALIDATION["result"], "error": VALIDATION["error"]})
+        )
 
 
 def _run_validate(path: str, f: Findings, timeout: int) -> None:
@@ -1868,7 +1878,8 @@ def _run_validate(path: str, f: Findings, timeout: int) -> None:
         return
     out = p.stdout + p.stderr
     if p.returncode != 0 or re.search(r"Found the following \d+ error", out):
-        f.error("croissant", "mlcroissant validate failed:\n" + "\n".join(out.splitlines()[-25:]))
+        VALIDATION["error"] = "mlcroissant validate failed:\n" + "\n".join(out.splitlines()[-25:])
+        f.error("croissant", VALIDATION["error"])
         VALIDATION["result"] = "failed (see Errors)"
     else:
         VALIDATION["result"] = "passed"
