@@ -280,3 +280,74 @@ def test_sources_not_in_graph_get_a_plain_reason():
     )
     assert dg.why_not("parsing failed: Extra data") == "Its files downloaded but couldn't be read"
     assert dg.why_not("something new") == "Its build didn't finish"
+
+
+CATALOG = [
+    {"name": "Big", "slug": "big", "status": "good", "croissant": "kb/big/croissant.json"},
+    {"name": "Blocked", "slug": "blocked", "status": "good"},
+    {"name": "Gene Ontology", "slug": "gene-ontology", "status": "check"},
+    {"name": "CIViC", "slug": "civic", "status": "good"},
+]
+
+
+def test_additional_croissants_lists_only_sources_not_tried(graphs, tmp_path):
+    """Built sources and ones that failed to build are already on the page; the rest are new."""
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps(CATALOG))
+    d = dg.describe(graphs, croissants=str(catalog))
+    assert [r["slug"] for r in d["additional_croissants"]] == ["civic", "gene-ontology"]
+    assert d["additional_croissants"][0] == {
+        "name": "CIViC",
+        "slug": "civic",
+        "page": dg.BOULANGERIE_SITE + "kb/civic/",
+        "status": "good",
+    }
+    md, page = dg.markdown(d), dg.overview_html(d)
+    for text in (md, page):
+        assert "Additional sources with available croissants" in text
+        assert text.index("Other available sources not in the graph") < text.index(
+            "Additional sources with available croissants"
+        )
+    assert f'<a href="{dg.BOULANGERIE_SITE}kb/gene-ontology/">' in page
+
+
+def test_no_croissants_section_without_the_flag(graphs):
+    d = dg.describe(graphs)
+    assert "additional_croissants" not in d
+    assert "available croissants" not in dg.markdown(d) + dg.overview_html(d)
+
+
+def test_croissant_pages_follow_the_catalog_or_the_flag():
+    assert dg.pages_base("https://example.org/site/catalog.json", None) == (
+        "https://example.org/site/"
+    )
+    assert dg.pages_base("saved/catalog.json", None) == dg.BOULANGERIE_SITE
+    assert dg.pages_base("saved/catalog.json", "https://example.org/b") == "https://example.org/b/"
+    extra = dg.additional_croissants(CATALOG[3:], [], "https://example.org/b/")
+    assert extra[0]["page"] == "https://example.org/b/kb/civic/"
+
+
+def test_main_with_a_saved_catalog(graphs, tmp_path):
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps(CATALOG))
+    out = tmp_path / "out"
+    assert dg.main([str(graphs), "--croissants", str(catalog), "--output", str(out)]) == 0
+    written = json.loads((out / "description.json").read_text())
+    assert written["croissant_catalog"]["pages"] == dg.BOULANGERIE_SITE
+    assert len(written["additional_croissants"]) == 2
+
+
+@pytest.mark.parametrize("content", ["not json", '{"name": "x"}', '[{"name": "no slug"}]'])
+def test_unreadable_catalog_says_so(graphs, tmp_path, content):
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(content)
+    with pytest.raises(SystemExit, match="--croissants"):
+        dg.describe(graphs, croissants=str(catalog))
+    with pytest.raises(SystemExit, match="could not read"):
+        dg.describe(graphs, croissants=str(tmp_path / "missing.json"))
+
+
+def test_croissant_options_are_documented():
+    """The skill-option rule (#48): an agent only learns an option from the skill's Markdown."""
+    skill = (SCRIPT.parents[1] / "SKILL.md").read_text()
+    assert "--croissants" in skill and "--croissant-pages" in skill
