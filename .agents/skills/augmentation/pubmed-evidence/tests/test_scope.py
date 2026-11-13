@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -222,6 +223,34 @@ def test_capped_rule_keeps_best_scored_pairs(tmp_path):
     assert len(pairs[pair_id("NCBIGene:0", "NCBIGene:4")].statement_ids) == 2
     assert report["rules"]["gene-gene"]["dropped_by_cap"]["pairs"] == 3
     assert all(s.score is not None for s in statements)
+
+
+def test_capped_ties_go_to_more_sources_then_a_hash_of_the_pair(tmp_path):
+    """Unscored pairs are kept by the number of sources among the rule's statements in them,
+    then by the SHA-256 of the pair id: by the pair id alone, an unscored cap would keep the
+    CURIEs that sort first."""
+    genes = [Node(id=f"NCBIGene:{i}", category=["biolink:Gene"], name=f"G{i}") for i in range(10)]
+    hub = "NCBIGene:9"
+    edges = [_edge(f"NCBIGene:{i}", "biolink:interacts_with", hub) for i in range(1, 7)]
+    # The same statement from a second source.
+    edges.append(
+        _edge("NCBIGene:6", "biolink:interacts_with", hub, primary_knowledge_source="infores:x")
+    )
+    graph = _graph(tmp_path / "g", genes, edges)
+    report, _, pairs, _ = _run(graph, tmp_path / "work", capped_limit=3)
+    singles = [pair_id(f"NCBIGene:{i}", hub) for i in range(1, 6)]
+    by_hash = sorted(singles, key=lambda p: hashlib.sha256(p.encode()).hexdigest())
+    assert by_hash[:2] != sorted(singles)[:2]
+    assert set(pairs) == {pair_id("NCBIGene:6", hub), *by_hash[:2]}
+    assert report["rules"]["gene-gene"]["dropped_by_cap"]["pairs"] == 3
+    # Scored pairs come first, best first, and the sources break a tie in score too.
+    ranks = {
+        "a|b": scope.cap_rank("a|b", 0.8, 1),
+        "x|y": scope.cap_rank("x|y", 0.8, 2),
+        "m|n": scope.cap_rank("m|n", 0.9, 1),
+        "c|d": scope.cap_rank("c|d", None, 5),
+    }
+    assert sorted(ranks, key=ranks.__getitem__) == ["m|n", "x|y", "a|b", "c|d"]
 
 
 def test_symmetric_predicate_matches_reversed_and_missing_nodes(tmp_path):

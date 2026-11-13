@@ -126,7 +126,10 @@ is never capped, and a statement a provenance rule took is never in its statemen
 1. **`--min-score X`** (default: none), if given, first drops the rule's statements whose score
    is below X **or that have no score**.
 2. Pairs are ranked by the best score of the rule's statements in them, highest first;
-   unscored pairs come last; ties go by pair id.
+   unscored pairs come last. Ties, unscored pairs among them, go to the pair whose rule
+   statements have the most distinct `primary_knowledge_source`s, then by the SHA-256 of the
+   pair id, then by the pair id (`scope.cap_rank`). The hash spreads an unscored cap across the
+   graph; by pair id alone it would keep the pairs whose CURIEs sort first, mostly one prefix.
 3. The rule's statements in pairs beyond the limit are dropped. A pair stays if it still has
    statements from another rule. Unordered pairs are deduplicated by construction (one pair id
    for A–B and B–A).

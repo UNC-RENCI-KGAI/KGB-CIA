@@ -138,7 +138,10 @@ Group the kept edges by unordered node pair, since one search serves edges in bo
   2026-11-05 no in-scope edge of Monarch or DrugCentral was misdirected.
 - **Scores** for the caps come from the edge's `score`, `confidence_score`,
   `has_confidence_score`, `combined_score` or `stringdb_combined_score`, never from the
-  `lit_support_score` that step 6 writes. Without a score, a pair ranks last.
+  `lit_support_score` that step 6 writes. Without a score, a pair ranks last. Ties, unscored
+  pairs among them, go to the pair with the most distinct primary knowledge sources, then by a
+  SHA-256 hash of the pair id, so that an unscored cap isn't the pairs whose CURIEs sort first
+  (`reference/rules.md`, "Capped rules").
 - The rules are data in `scripts/pubmed_evidence/scope.py`; `--rules FILE` replaces them
   (`reference/rules.md`).
 

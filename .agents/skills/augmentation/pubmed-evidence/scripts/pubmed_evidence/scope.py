@@ -11,7 +11,8 @@ picks are covered, and, if it lists them, by how the edge was made (its `knowled
 
 - `query` rules keep every matching edge.
 - `capped` rules (gene-gene, gene-phenotype) keep only their best-scored `--capped-limit` pairs,
-  after dropping statements below `--min-score` if given.
+  after dropping statements below `--min-score` if given; ties, unscored pairs included, go to
+  the pair with the most sources, then by a hash of the pair id (`cap_rank`).
 - `skip` rules keep nothing. They exist so the report can say which skip rule covered an
   edge type, and so an edge type no rule covers shows up as `unmatched`.
 
@@ -76,6 +77,7 @@ can't set `subject`, `object` or `symmetric`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -524,6 +526,17 @@ def _read_categories(input_dir: Path) -> dict[str, tuple[str, ...]]:
     return out
 
 
+def cap_rank(pair: str, best: float | None, sources: int) -> tuple:
+    """A pair's sort key in a capped rule, first kept first: scored before unscored, the best
+    score of the rule's statements in it highest first, then the most distinct
+    `primary_knowledge_source`s among those statements, then the SHA-256 of the pair id, and
+    last the pair id. The hash, stable across runs and machines unlike `hash()`, spreads an
+    unscored cap over the graph: by pair id alone it would keep the pairs whose CURIEs sort
+    first, one prefix's."""
+    digest = hashlib.sha256(pair.encode("utf-8")).hexdigest()
+    return (best is None, -(best or 0.0), -sources, digest, pair)
+
+
 def _apply_caps(
     statements: dict[str, _Accumulator],
     rules: tuple[Rule, ...],
@@ -555,16 +568,17 @@ def _apply_caps(
             sids = [s for s in sids if s in statements]
         pairs: dict[str, list[str]] = defaultdict(list)
         best: dict[str, float | None] = {}
+        sources: dict[str, set[str]] = defaultdict(set)
         for sid in sids:
             acc = statements[sid]
             pairs[acc.pair_id].append(sid)
+            sources[acc.pair_id] |= acc.sources
             old = best.get(acc.pair_id)
             if acc.score is not None and (old is None or acc.score > old):
                 best[acc.pair_id] = acc.score
             else:
                 best.setdefault(acc.pair_id, old)
-        # Best-scored first, unscored last, then by pair id so ties are deterministic.
-        ranked = sorted(pairs, key=lambda p: (best[p] is None, -(best[p] or 0.0), p))
+        ranked = sorted(pairs, key=lambda p: cap_rank(p, best[p], len(sources[p])))
         for pid in ranked[max(capped_limit, 0) :]:
             counts["cap_pairs"] += 1
             for sid in pairs[pid]:
