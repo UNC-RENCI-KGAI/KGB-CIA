@@ -12,6 +12,13 @@ dependencies = [
     "biolink-model==4.4.6",
 ]
 
+[project.optional-dependencies]
+# The model SDKs only the augmentation agent calls (its scripts/augment.py lists them too).
+augmentation = [
+    "openai>=3.44",
+    "anthropic>=2.4",
+]
+
 [project.scripts]
 kgb-metadata = "agents.metadata.cli:main"
 kgb-transform = "agents.transformation.cli:main"
@@ -43,4 +50,8 @@ extend-exclude = ["data"]
 select = ["E", "F", "I", "W", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", ".agents/skills/transformation/generate-graph/tests"]
+testpaths = [
+    "tests",
+    ".agents/skills/augmentation/pubmed-evidence/tests",
+    ".agents/skills/transformation/generate-graph/tests",
+]

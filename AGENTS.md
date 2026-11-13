@@ -38,9 +38,14 @@ stays in sync.
 ## Architecture
 
 - **Stages are packages under `agents/`, run in the order listed in `STAGES` in
-  `shared/pipeline.py`:** metadata → transformation → filter → augmentation → cleaning →
-  mcp_interface. The runner imports each `agents.<stage>.cli` module, prints its `DESCRIPTION`,
-  and (without `--dry-run`) calls `main([])`; a nonzero return stops the pipeline.
+  `shared/pipeline.py`:** metadata → transformation → cleaning → filter → augmentation →
+  final_cleaning → mcp_interface (settled in #23 and #24). The runner imports each
+  `agents.<stage>.cli` module, prints its `DESCRIPTION`, and (without `--dry-run`) calls `main`
+  with that stage's arguments from `STAGES`; a nonzero return stops the pipeline. The two
+  cleaning passes are the same `kgb-clean`: the first cleans the merged graph, the last applies
+  the evidence check's drop lists (`data/cleaning/drop_lists`) to augmentation's output and
+  writes `data/final`, which the MCP interface is then given with `--input` (on its own,
+  `kgb-mcp` would fall back to `data/cleaning`).
 - **Each stage is also a console script** (`kgb-metadata`, `kgb-transform`, `kgb-filter`,
   `kgb-augment`, `kgb-clean`, `kgb-mcp`, `kgb-pipeline`) declared in `pyproject.toml`.
 - **Handoffs between stages use the pydantic records in `shared/schema.py`** (`Node`, `Edge`,
@@ -54,11 +59,13 @@ stays in sync.
 - **Every node ID goes through NodeNorm** via `shared/nodenorm.py`.
 - **`evaluation/` is deliberately not a stage** and is not in `STAGES`.
 
-`kgb-transform` is the only stage command implemented; the other stages' `main` are stubs that
-print "not implemented yet". Semantic metadata comes from the `croissant-semantics` skill in
-`.agents/skills/metadata/`, run per source rather than through `kgb-metadata`. `make demo` only
-prints stage descriptions. The README mentions toy data in `tests/fixtures`; that directory does
-not exist yet.
+`kgb-transform`, `kgb-clean` and `kgb-filter` are the stage commands implemented on `main`; the
+other stages' `main` are stubs that print "not implemented yet". `kgb-transform` builds every source
+and merges them into one graph (`data/transformation/merged/`), `kgb-clean` reads that merged graph
+by default and writes `data/cleaning`, and `kgb-filter` cuts the user's subgraph from
+`data/cleaning` into `data/filter`, where augmentation reads it. Semantic metadata comes from the
+`croissant-semantics` skill in `.agents/skills/metadata/`, run per source rather than through `kgb-
+metadata`. `make demo` only prints stage descriptions.
 
 ## Design rules agreed by the team
 
@@ -67,6 +74,8 @@ not exist yet.
 - Biolink is fixed, not user-selectable.
 - Strong defaults everywhere; the filter stage is the only place that asks the user anything,
   and "go with your default" must always work.
+- The graph's scope comes from what the user asks for (the filter stage), never from a choice
+  made in advance about which sources or edges matter.
 - Evaluation stays outside the agent.
 
 ## Working in the repo
@@ -79,6 +88,24 @@ not exist yet.
   `shared/`, `.github/` and root files belong to the leads.
 - The PR template's checklist: `make test` passes, new edges carry provenance, and the agent's
   `README.md` is updated if its CLI changed.
+- Fixes are welcome on `main` at any stage, metadata and transformation included, but the
+  submission graph stays the Nov 9, 2026 transformation run. A fix that would change the graph
+  is still recorded in a report (what, which source, why) so the submission can say what it
+  does not contain.
+- Link every piece of work to its tracking issue. A tracking issue lists its children as a
+  task list, one per line (`- [ ] #123`), which gives the parent a progress bar and each child
+  a "Tracked by" link, and each child is also attached as a sub-issue so the tree shows in the
+  sidebar and on the Project board. From the CLI, with the child's id (not its number):
+
+  ```sh
+  id=$(gh api repos/UNC-RENCI-KGAI/KGB-CIA/issues/<child> --jq .id)
+  gh api -X POST repos/UNC-RENCI-KGAI/KGB-CIA/issues/<parent>/sub_issues -F sub_issue_id="$id"
+  ```
+
+  Every PR body carries `Closes #<child>` (the child closes on merge) and
+  `Part of #<tracking>` (the PR shows in the tracking issue's timeline). A finding with no code
+  change yet, such as a defect from a run, stays a row in the tracking issue until someone opens
+  a child for it.
 - No data in git. Source dumps and generated graphs go in `data/` (gitignored except its
   README) or on the shared RENCI drive; record each source's version and download date in
   `data/README.md`. `.gitignore` also blocks `*.jsonl`, `*.parquet`, `*.db`, `outputs/` and
