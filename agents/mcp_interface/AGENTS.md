@@ -1,0 +1,562 @@
+# AGENTS.md: agents/mcp_interface/
+
+Read the root [`AGENTS.md`](../../AGENTS.md), [`agents/AGENTS.md`](../AGENTS.md) and
+[`shared/AGENTS.md`](../../shared/AGENTS.md) first. Their rules (stage contract, schema
+contract, ruff, `make test`/`make demo`, no data in git) apply here unchanged and win over
+anything below. Don't add a `CLAUDE.md`. The repo requires Python ≥ 3.12.
+
+## Goal
+
+A read-only MCP server over a **Neo4j** copy of the final graph. Any LLM agent, including the
+judges' agent, can use it to search nodes, inspect neighbors, find paths and, above all, answer
+**"why does A connect to B?"**. Explainability is 20% of the score. Lineage comes from two
+places:
+
+1. **On the edge, in Biolink terms** (`shared/schema.Edge`): `primary_knowledge_source`,
+   `aggregator_knowledge_source`, `knowledge_level`, `agent_type`, `publications`,
+   `original_subject`, `original_object`, `original_predicate`, plus extra slots such as
+   qualifiers, `affinity` and `p_value`.
+2. **Off the graph, in each source's `TransformReport`** (`shared/schema.TransformReport`),
+   reached through the edge's `kgbcia_source_records`: which Croissant file, record set and
+   columns produced the edge, and from which source record. Report content never goes into
+   Neo4j.
+3. **Quality flags from the cleaning stage, on the edge:** `kgbcia_flags` and
+   `kgbcia_flag_reasons`, two string lists that line up one-to-one (a flag such as
+   `wrong_mechanism`, and one plain sentence explaining it, often citing a PMID). Cleaning keeps
+   flagged edges rather than dropping them, so an answer that relies on a flagged edge must say
+   so. See `agents/cleaning/README.md` for the flag vocabulary and issue #63.
+
+This stage does **not** build the database. ORION's `orion-neo4j-dump` does that (see
+"Preparing the dump"). This stage owns the server, the lineage resolution, the extra indexes,
+the Helm chart that runs Neo4j, and the publishable server package.
+
+## Delivery
+
+The server ships two ways from one codebase:
+
+- **Primary: a PyPI package, `kgbcia-mcp`, run over stdio** by any MCP client, Pi included:
+  `uvx kgbcia-mcp serve`, with `NEO4J_URI` and `KGB_MCP_ARTIFACTS` set; set the optional
+  `NEO4J_USER` and `NEO4J_PASSWORD` pair only for an authenticated deployment. This is the same
+  pattern as the LitCoin MCP server. Each user runs
+  the server locally, and it connects to the shared, read-only Neo4j over Bolt.
+- **Optional: the same server over streamable HTTP**, run by the Helm chart next to Neo4j
+  (`mcp.enabled`), for clients that can't run a local process.
+
+Either way, Neo4j is the one shared service. In the PyPI model its Bolt port is reachable by
+users, so the server-side protections in "Read-only enforcement" carry the whole load.
+
+## Implementation approach
+
+- **FastMCP**, with one `server.py` that builds the app and registers tool modules. Keep the
+  layers separate: `services/` talks to Neo4j and returns plain Python data with no MCP imports,
+  and `tools/` holds thin MCP wrappers that validate arguments and shape responses.
+- **All configuration comes from environment variables**, with CLI flags overriding them. No
+  hard-coded hosts or paths. The same package, image and config run locally, on k8s and on AWS.
+- **Tools are written for an LLM reader.** Each docstring gives the purpose, an example CURIE,
+  *Presentation Guidelines* (for example, "cite knowledge sources, publications and source
+  records verbatim; never paraphrase provenance") and the tool to call next. Empty or failed
+  lookups return a `hint` plus suggestions or valid values instead of raising.
+- **Every query is bounded:** always anchor nodes with a label, always apply `LIMIT`, always
+  paginate, and always pass values as Cypher parameters.
+
+## Layout and packaging
+
+The server is a **separate distribution** inside the repo, so it can be published to PyPI
+without the rest of the pipeline. Make it a uv workspace member; the root project depends on it.
+
+```
+agents/mcp_interface/
+├── cli.py                    # the pipeline stage: DESCRIPTION, main(argv) -> int; dispatches
+│                             # check (repo-only) and delegates serve/hubs to kgbcia_mcp
+├── check.py                  # offline pre-dump checks; may use shared.schema
+├── pyproject.toml            # distribution "kgbcia-mcp"; script kgbcia-mcp = kgbcia_mcp.cli:main
+├── src/kgbcia_mcp/
+│   ├── cli.py                # serve, hubs
+│   ├── config.py             # NEO4J_URI, optional NEO4J_USER/NEO4J_PASSWORD, NEO4J_DATABASE,
+│   │                         # KGB_MCP_ARTIFACTS, KGB_MCP_ARTIFACTS_SHA256,
+│   │                         # KGB_MCP_ENABLE_CYPHER
+│   ├── artifacts.py          # local dir, or an http(s) URL to the artifacts tarball,
+│   │                         # downloaded once into a user cache dir and checksum-verified
+│   ├── report_models.py      # vendored copy of the TransformReport models from shared/schema.py
+│   ├── lineage.py            # index TransformReports; resolve kgbcia_source_records
+│   ├── services/neo4j_service.py  # driver, read transactions, serialization; no MCP imports
+│   ├── tools/graph_tools.py  # register_graph_tools(mcp, svc)
+│   ├── tools/query_tools.py  # register_query_tools(mcp, svc); only when --enable-cypher
+│   └── server.py             # create_server(), run(transport, host, port)
+├── deploy/
+│   ├── Dockerfile            # the kgbcia-mcp image (for the optional HTTP deployment)
+│   ├── extra_indexes.cypher  # our indexes, baked into the kgb dump
+│   ├── prepare_dump.sh       # ORION dump -> kgb dump + artifacts tarball (see below)
+│   ├── make_dev_artifacts.py # synthetic reports + source records for the dev sample
+│   ├── helm/kgb-mcp/         # the chart: Neo4j (+ optional kgbcia-mcp over HTTP)
+│   ├── aws/                  # verify_host.sh, install.sh, values-aws-test.yaml, README.md
+│   ├── RUNBOOK.md            # dump -> publish -> helm install / upgrade, for both environments
+│   └── .env.example
+└── README.md                 # keep "Run it alone", "Input / output", "Neo4j notes" and
+                              # "Status" current; the PyPI page gets its own short README
+tests/test_mcp_interface.py   # repo tests live in the root tests/ dir
+```
+
+- **`src/kgbcia_mcp` must never import `shared`, `agents` or anything else from the repo**, so
+  that the published package installs and runs on its own. Its runtime dependencies are
+  `fastmcp`, `neo4j` and `pydantic` only.
+- `report_models.py` is a copy of `TransformReport`, `Mapping` and the models they use. A repo
+  test compares its fields with `shared/schema.py`, so the two can't drift silently.
+- Keep the `kgb-mcp` console script in the root project for the pipeline. `kgbcia-mcp` is the
+  published entry point.
+- Wiring in the root `pyproject.toml`: add `[tool.uv.workspace] members =
+  ["agents/mcp_interface"]`, add `kgbcia-mcp` to the root dependencies with
+  `[tool.uv.sources] kgbcia-mcp = { workspace = true }`, and exclude
+  `agents/mcp_interface/src` and `agents/mcp_interface/pyproject.toml` from the root wheel
+  (`[tool.hatch.build.targets.wheel] exclude`). The root wheel packages all of `agents/`, so
+  without the exclusion it would also carry a stray copy of the server. Match the member
+  package's `requires-python` (≥ 3.12) to the root project's.
+
+**Side artifacts** are one tarball, published next to the dump (the same file server or bucket):
+the `TransformReport` JSONs, ORION's graph metadata (graph ID, build and release version),
+precomputed graph statistics for aggregate tools and validation, the hub list for path search,
+and the build description (`description.json` from the filter stage's `describe-graph` skill,
+if present). `graph_metadata.json` must include a `statistics` object with `node_count`,
+`edge_count`, node counts by category, edge counts by predicate and
+`primary_knowledge_source`, one-category-per-node `meta_graph` rows, node and edge property
+names with truncated examples, and `flag_counts` by `kgbcia_flags` value. `KGB_MCP_ARTIFACTS`
+is a local directory or an `http(s)` URL to the tarball; URLs are downloaded with the standard
+library, cached per checksum, and loaded once at startup. The URL must be **public and
+long-lived**, because every user's server fetches it with no credentials. Use a GitHub Release
+asset on this repo (free, no AWS setup), or an S3 object the AWS admin makes publicly readable.
+A presigned S3 URL is **not** suitable: it expires within days. The tarball holds no secrets, so
+making it public is fine.
+
+**Fixtures:** `.gitignore` blocks `*.jsonl` everywhere, so don't commit jsonl fixtures. Build a
+toy graph (~10 nodes, ~15 edges, plus one `TransformReport`) in a pytest fixture from
+`shared.schema` models, in the style of `tests/test_smoke.py::_edge`, and write it to `tmp_path`.
+
+**Development sample (local only, never committed):** the maintainer provides a small, complete
+ORION-built graph at `data/mcp_interface/sample/`: LitCoin's graph from 200 PubMed abstracts,
+with `nodes.jsonl`, `edges.jsonl` and ORION's Neo4j dump. Use it whole. Run
+`prepare_dump.sh` on it too, because ORION's dump lacks our extra indexes and hub list. It has no
+`TransformReport`s and no `kgbcia_source_records`, so write `deploy/make_dev_artifacts.py` to:
+- synthesize one `TransformReport` per `primary_knowledge_source` found in the sample, with one
+  `Mapping` per `(predicate, subject category, object category)` combination;
+- write a copy of the edges that adds `kgbcia_source_records` pointing at those mappings
+  (including some edges with several entries), and an `id` wherever one is missing;
+- add synthetic `kgbcia_flags` / `kgbcia_flag_reasons` to a few edges (one flag, two flags, and
+  one edge with deliberately mismatched list lengths), so flag handling can be tested before a
+  cleaned graph exists.
+
+Mark everything it produces as synthetic (`source_version: "synthetic"`), and keep it out of the
+real pipeline's output directories. Use the sample for `check`, `prepare_dump.sh`, the chart and
+the integration tests. Unit tests in CI still use the in-code toy fixture, because CI has no
+data.
+
+## CLI and the pipeline contract
+
+`shared/pipeline.py` calls `main([])` and expects it to return; it must not block and must not
+call `sys.exit`.
+
+- `kgb-mcp check --input <dir>` is the default when no subcommand is given. The cleaning stage
+  isn't implemented yet, so the default `--input` is the first of these that exists: the
+  cleaning stage's output, then `data/transformation/merged/`. Reports are collected from
+  `data/transformation/**/transform_report.json`. The check works offline and returns 0 only if
+  the graph is ready for `orion-neo4j-dump`:
+  - **every edge has an `id`**;
+  - every edge has `kgbcia_source_records`, except an augmentation-proposed edge
+    (`primary_knowledge_source: infores:kgbcia-augmentor`) that cites `publications` and names
+    its `original_edge_ids`: it has no transformation record, so it is accepted without one and
+    counted separately;
+  - every `kgbcia_source_records` value is a list whose entries parse;
+  - every referenced `Mapping.id` exists in some report.
+
+  It prints counts and the exact commands to run next. If no input exists, it prints a clear
+  message and returns nonzero.
+- `kgbcia-mcp serve [--transport stdio|http] [--host 127.0.0.1] [--port 8000]
+  [--enable-cypher] [--artifacts <dir|url>]`; `kgb-mcp serve` delegates to it.
+- `kgbcia-mcp hubs --top <n> --output <dir>` computes the hub list (the highest-degree nodes)
+  against a running Neo4j. `prepare_dump.sh` runs it.
+
+Every edge needs an `id` because edge IDs are what `explain_edge` takes and what agents cite, and
+the relationship index in "Preparing the dump" is keyed on them.
+
+## Environments
+
+Develop and test on the local k8s cluster first, which saves the limited AWS credit
+(**$500 total**). Deploy to AWS only for the final judged endpoint, once the team has signed off.
+
+```
+transformation (later: cleaning) -> nodes.jsonl + edges.jsonl + transform_report.json files
+  -> orion-neo4j-dump        -> ORION dump (Neo4j 5, ORION's indexes)
+  -> deploy/prepare_dump.sh  -> kgb dump (+ our indexes) + artifacts tarball
+  -> HTTP file server (k8s) / S3 (AWS)
+  -> helm install: download -> neo4j-admin load -> Neo4j 5 Community (read-only; auth by values)
+  <- uvx kgbcia-mcp serve (stdio), on each user's machine, over Bolt
+  <- optional: kgbcia-mcp over HTTP in the chart
+```
+
+**The chart** (`deploy/helm/kgb-mcp/`) is small and specific to this project, not a generic Neo4j
+chart:
+- **Neo4j StatefulSet** (official `neo4j:5.26.<patch>-community` image: Neo4j 5's LTS release,
+  pinned to an exact patch in values; see "Preparing the dump" for why it's 5.26) with a persistent volume, plus two init containers:
+  1. **Download** `neo4j.dumpUrl` and verify `neo4j.dumpSha256`.
+  2. **Load** it with `neo4j-admin database load --overwrite-destination`.
+
+  Both are **idempotent**: skip them when a marker file on the volume records the same
+  **checksum**, so a pod restart doesn't re-download or reload. Key the marker on the checksum,
+  never the URL, because on AWS the URL is a presigned S3 link that differs on every
+  `helm upgrade` but points to the same file. A new checksum in values triggers a fresh load.
+  The dump stays private: for AWS, the runbook generates a short-lived presigned URL for it at
+  install time, which is enough because it's only fetched once.
+- **Neo4j settings** come from values as `NEO4J_*` environment variables: heap, page cache,
+  `server.databases.default_to_read_only=true`, `db.transaction.timeout`,
+  `db.memory.transaction.total.max`, and bolt thread limits. `neo4j.auth.enabled` controls
+  authentication: when true the admin password comes from a Secret; when false the StatefulSet
+  receives `NEO4J_AUTH=none` and needs no Secret or user Job.
+- **Exposure:** `neo4j.service.type` defaults to `ClusterIP`. Environments that serve PyPI users
+  set it to `LoadBalancer` or `NodePort` for **Bolt (7687)**, and optionally HTTP (7474) for
+  Neo4j Browser. There is **no TLS** in the initial version: Bolt and HTTP are plain, with
+  password auth.
+- **Optional `kgbcia-mcp` Deployment** (`mcp.enabled`, default `false`) from `deploy/Dockerfile`,
+  with `NEO4J_URI` pointing at the Neo4j Service, `KGB_MCP_ARTIFACTS` as the tarball URL,
+  probes on `/health`, and `mcp.enableCypher`. Add a Service and an optional Ingress for it.
+- `values.yaml` holds safe defaults, with environment files `values-dev.yaml` and
+  `values-aws.yaml`. Keep secrets out of all of them.
+- **Resources are values,** not constants. The deployed real cleaned graph has 943,412 nodes
+  and 11,701,010 edges, so the heap, page cache, transaction cap and volume size come from the
+  values file of each environment.
+- Validate it with `helm lint` and `helm template`. These need no cluster, so they can run in CI.
+
+**Final (AWS):** the **same chart** on a single EC2 instance running k3s. The host is already
+prepared by the maintainer:
+- **Instance:** Amazon Linux 2023 on **arm64 (Graviton)**, region `us-east-2`, with an Elastic
+  IP. Shell access is through `aws ssm start-session`, with no SSH. Use `dnf`, not `apt`; every
+  binary and container image must support arm64. The chart's `neo4j:5.26.31-community` and
+  `alpine` images do. Dumps built on x86 load fine.
+- **k3s** (`v1.37.2+k3s1`) is preinstalled with only `--disable traefik`. **ServiceLB is enabled**,
+  so Bolt is exposed with a `LoadBalancer` Service on **7687**, published on the instance's
+  address. `local-path` is the default storage class and stores data on the root disk under
+  `/var/lib/rancher/k3s/storage`.
+- **Helm v4.3.1** is installed manually, with `~/.kube/config` pointing at k3s. Use Helm 4 flags
+  and check them against its documentation.
+- **Security group:** inbound Bolt 7687 only, from the maintainer's IP during testing. Nothing
+  else inbound: no 22, 6443 or 7474.
+- **S3:** the dump is **private** (`s3://<bucket>/neo4j-dumps/kgb.dump`), and the artifacts
+  tarball is **public** (`…/mcp-data-artifact/artifacts.tar.gz`). The chart downloads the dump
+  through a **presigned URL** generated on the maintainer's laptop at install time
+  (`aws s3 presign … --expires-in 7200`). It is passed on the command line, never saved to a
+  file, and the checksum marker means it's fetched only once.
+- **The MCP server is not deployed on AWS** (`mcp.enabled=false`). Users run `kgbcia-mcp` locally
+  over stdio against `bolt://<elastic-ip>:7687`.
+
+`deploy/aws/` contains:
+- `verify_host.sh`: read-only checks of the above (k3s active and node `Ready`, arm64, storage
+  class, Helm 4, `git` present, free disk), with the manual setup steps documented so the host
+  can be rebuilt. It installs nothing.
+- `values-aws-test.yaml`: an overlay sized for the development sample on this instance.
+  `values-aws.yaml` is the working real-graph overlay on the prepared r7g.large-sized host:
+  30 Gi local-path PVC, 1 CPU / 10 GiB request, 2 CPU / 14 GiB limit, 4 GiB heap, 7 GiB page
+  cache, and a 2 GiB transaction memory cap.
+- `install.sh`: runs on the instance from a checkout of the branch. It creates the Secret
+  through `create_neo4j_secret.sh` (with password prompts), then runs
+  `helm upgrade --install` with the dump URL and both checksums passed as arguments, then waits
+  for the load and prints the Bolt Service and the `svclb` pod.
+- `README.md`: the whole sequence (presign on the laptop, install on the instance, verify from
+  the laptop), plus stopping and starting the instance, upgrading to a new dump, and tearing
+  everything down, including releasing the Elastic IP, which bills while unattached.
+
+The maintainer runs every step. Reference what the AWS admin created (the bucket, the VPC)
+instead of recreating it, and never write account-specific values, passwords or presigned URLs
+into files.
+
+**Both environments:** the same chart, kgb dump, artifacts and package version, with only the
+values file differing. Any other difference is a bug. Never commit hosts, passwords, account IDs
+or ARNs. `.env` is gitignored; ship an `.env.example`.
+
+## Preparing the dump (ORION, outside this package)
+
+`orion-neo4j-dump` needs a local Neo4j installation, so run it from **ORION's Docker image**,
+which includes Neo4j 5.25.1 (check the pinned image), even though the repo now uses Python 3.12
+like ORION. The server
+package never imports ORION. Pin the image or the commit, and record which one in the runbook.
+
+The deployed database is read-only from its first start, so our extra indexes are **baked into
+the dump** rather than created after loading. `deploy/prepare_dump.sh` runs once per graph
+release, on a workstation with Docker:
+
+1. Run `orion-neo4j-dump nodes.jsonl edges.jsonl <out>` in ORION's image.
+2. Load the ORION dump into a temporary, writable `neo4j` container of **the same pinned 5.26
+   version as the chart**. A dump loads into the same or a newer Neo4j, never an older one.
+   5.26 is the newest 5.x (the LTS release), so it accepts dumps from ORION's 5.25.1 image and
+   the LitCoin sample (built with 5.20, already shown to load into 5.26). If ORION's image ever
+   moves past the chart's version, bump the chart.
+3. Run `extra_indexes.cypher` (below), then `CALL db.awaitIndexes()`.
+4. Run `kgbcia-mcp hubs` against the container, writing the hub list into the artifacts
+   directory.
+5. Precompute graph statistics into `graph_metadata.json`: node counts per category, edge
+   counts per predicate and `primary_knowledge_source`, one-category-per-node meta-graph counts
+   by `(subject_category, predicate, object_category)`, node and edge property names with
+   truncated examples, and edge counts per `kgbcia_flags` value. For the meta-graph, choose one
+   category per node using the graph-wide rarest label (smallest category count) so ancestor
+   labels do not cross-multiply; log the resulting row count as a sanity check.
+6. Stop the container and run `neo4j-admin database dump`: this is the **kgb dump**.
+7. If a `description.json` is supplied with `--description` (defaulting to
+   `data/describe/description.json`), add it to the artifacts **with local file paths removed**
+   (its top-level `graphs` and each source's `normalized_dir`). For the real graph, this file is
+   generated on the VM that has the Nov 9 transformation output and cleaning report; when the
+   file is present, `prepare_dump.sh` copies and sanitizes it rather than running the
+   `describe-graph` skill itself. If the file is absent, warn and continue without it.
+8. Pack the artifacts (`TransformReport`s, ORION graph metadata/statistics, hub list, build
+   description) into a tarball.
+9. Print the SHA-256 of the dump and the tarball, for the chart values and
+   `KGB_MCP_ARTIFACTS_SHA256`.
+
+Publishing the files (to the HTTP file server for k8s, to S3 for AWS) and updating the values are
+manual steps; document them in `RUNBOOK.md`. `prepare_dump.sh --artifacts-only --existing-dump
+<kgb.dump>` skips ORION and recomputes only the artifacts from an existing dump; use it when the
+deployed dump is unchanged and the MCP artifact tarball needs a replacement.
+
+ORION's dump already contains a range index on `biolink:NamedThing.name`, and a uniqueness
+constraint on `id` for every node label. `extra_indexes.cypher` adds what the server needs:
+
+- **A full-text node index** for `search_nodes`, over `name`, `synonym` and
+  `equivalent_identifiers` on ``:`biolink:NamedThing` ``. Neo4j 5.26.31 accepts the list-valued
+  `equivalent_identifiers` property in this full-text index; see README **Neo4j notes**.
+- **A relationship property index on `id`**, so `explain_edge(edge_id)` doesn't scan every
+  relationship. Neo4j 5 range indexes on relationships are per type, so generate one statement
+  per relationship type (`db.relationshipTypes()`).
+
+Keep the script idempotent (`IF NOT EXISTS`). Record the graph version, the dump checksum and
+the load date in `data/README.md`.
+
+## Data format in Neo4j (as written by ORION)
+
+- **Lists are native Neo4j lists.** ORION writes them as `string[]` columns, and `neo4j-admin`
+  imports them as lists, so `publications`, `equivalent_identifiers` and `kgbcia_source_records`
+  come back as Python lists.
+- **Categories are labels only.** A node has no `category` property. Read categories with
+  `labels(n)`, and anchor every lookup with ``:`biolink:NamedThing` ``, for example
+  ``MATCH (n:`biolink:NamedThing` {id: $id})``, which uses ORION's constraint index.
+- **Relationship types are Biolink predicates** (``-[r:`biolink:treats`]->``), and the edge `id`
+  is the property `r.id`.
+These facts are confirmed on Neo4j 5.26.31 and recorded in README **Neo4j notes**; the same
+assumptions are encoded as constants in `neo4j_service`.
+
+## Lineage from TransformReports
+
+Exact lineage rests on two upstream pieces, owned by other teams; don't implement them here.
+
+1. **`kgbcia_source_records`** is a top-level, always-a-list property on every edge, documented
+   in `agents/AGENTS.md` and already emitted by the transformation agent (`orion_runtime.py`).
+   Each entry is `"{Mapping.id}#{source record key}"`. Each source workspace under
+   `data/transformation/` has a `transform_report.json`.
+2. **Edge IDs from ORION's merge.** The graph handed to MCP must have stable, deterministic,
+   citable edge IDs. `kgb-mcp check` fails if any edge lacks an `id`, and the deployed cleaned
+   graph satisfies this requirement.
+
+When ORION merges edges, lists concatenate and deduplicate (`orion/merging.py`), so a merged edge
+carries every contributing record. Two conditions keep that true:
+
+- The property is a **top-level** key on the edge. ORION's merge doesn't concatenate lists
+  nested inside dicts; it keeps the first value and silently drops the others.
+- The value is **always a list**, even for a single entry. When both values are scalars, ORION
+  keeps only one.
+
+Filter, augmentation and cleaning must preserve the property, and any Biolink-strict step must
+not strip it. Augmentation gives the edges it adds their own entries and reports.
+
+`lineage.py` indexes the `TransformReport`s' `Mapping`s by `id` at startup. For an edge, it
+reads `kgbcia_source_records` (a native list in Neo4j) and splits each entry on the **first**
+`#` into `Mapping.id` and the record key. It returns, for each entry: the
+mapping's `file`, `record_set`, `columns` and `constants`; the report's `source`,
+`source_version` and `croissant`; and the record key. Group the entries by mapping, and report
+counts when there are many.
+
+**Fallback,** for an edge without the property or with an unknown `Mapping.id`: match on
+`report.source` ∈ {pks} ∪ aggregators, plus predicate and categories, and label every result
+`match: "candidate"`. If no reports are configured, return the Biolink provenance and say that
+file and column lineage is unavailable.
+
+## Querying Neo4j
+
+- Use the official `neo4j` driver. Every call goes through `session.execute_read(...)`; managed
+  reads rely on the database transaction timeout and the server's row caps rather than live
+  whole-graph aggregate queries.
+- Convert results to plain dicts in one serializer: nodes, relationships, paths, and the Neo4j
+  temporal and spatial types.
+- **`find_paths` and `find_connected_nodes`:** search hop by hop (1, then 2, up to `max_hops`)
+  and stop at the first depth that finds results. Exclude hub nodes as intermediates (using the
+  hub list from the artifacts). Apply `LIMIT` in Cypher, and return `truncated` rather than
+  timing out silently. For `find_paths`, also try ``allShortestPaths((a)-[*..N]-(b))`` with a
+  hub filter, and keep whichever performs better on the real graph.
+- **Search:** `db.index.fulltext.queryNodes` for names and synonyms. Exact CURIEs go through the
+  `id` constraint index.
+- Never run whole-graph aggregate scans at startup or per request. `get_graph_info`,
+  `get_schema`, predicate/category/property validation, and flag-value validation all use the
+  precomputed `graph_metadata.json.statistics` artifact. Rebuild the artifact tarball with
+  `prepare_dump.sh` when those statistics need to change.
+
+## Read-only enforcement
+
+Neo4j **Community** has no role-based access control, and in the PyPI model users connect to
+Bolt directly, so protection has to live in Neo4j itself:
+
+1. **Server-level:** `server.databases.default_to_read_only=true`, set by the chart from the
+   first start (which is why the indexes are baked into the dump). With this set, Neo4j itself
+   rejects graph writes from any client.
+2. **Resource limits:** `db.transaction.timeout`, `db.memory.transaction.total.max` and the
+   Bolt thread pool size in the chart values. With Bolt reachable from outside, these protect
+   the shared instance against expensive queries.
+3. **In our server:** only read transactions (`execute_read`), plus an `EXPLAIN` check, a
+   per-query timeout and a row cap on `query_cypher`. This protects users of our server; it
+   cannot stop someone using a raw Neo4j driver.
+
+**Authentication choice:** `neo4j.auth.enabled` defaults to true for local k8s, where the
+existing Secret and separate `kgbcia` account are retained. AWS values set it false, which gives
+Neo4j `NEO4J_AUTH=none`, requires neither a Secret nor a user Job, and lets `kgbcia-mcp` connect
+without credentials. It avoids sending a reusable password over plain Bolt, but it does **not**
+provide an authorization boundary: AWS verification confirmed that an unauthenticated raw client
+can execute `CREATE USER` in `system` (the temporary test user was removed). The tested graph
+`CREATE`, `dbms.setConfigValue` procedure, and `STOP DATABASE` commands were rejected, but this
+is not a substitute for authentication. AWS network exposure is the maintainer's responsibility
+and is outside this stage's scope; use no-auth only while Bolt is restricted accordingly.
+Read-only mode and the limits above remain mandatory. Confirm graph `CREATE` rejection through a
+raw unauthenticated driver; never try a system-database command that can disrupt service without
+an explicit safety review.
+
+## Tools
+
+All tools are read-only and return JSON-serializable dicts. Where results can be large, tools
+take `limit` (default 50, hard cap 500) and `offset`, and every list response includes `total`
+and `truncated` (see "Implementation approach" for docstrings and hints).
+
+**Fewer round trips:**
+- Any `*_id` argument accepts a CURIE, an equivalent identifier or an exact name. It resolves
+  through the node lookup and full-text index, and an ambiguous name returns the candidates
+  instead of guessing.
+- Every node in a response includes `id`, `name` and `categories`.
+- Every edge in a response includes `edge_id`, `predicate`, `primary_knowledge_source`, the
+  publication count, any qualifiers and its **`flags`**. The agent never needs a second call just
+  to label a result, to know which `edge_id` to explain, or to learn that an edge is in question.
+- **Flags** are returned as a list of `{"flag": ..., "reason": ...}` pairs built from
+  `kgbcia_flags` and `kgbcia_flag_reasons`, so the agent never has to line up two lists itself.
+  An edge without flags gets `flags: []`. If the two lists differ in length, pair what lines up,
+  give the rest `"reason": null`, and log a warning. This applies to every tool that returns
+  edges, paths included: a path through a flagged edge must show the flag on that hop.
+
+| Tool | Purpose |
+|---|---|
+| `get_graph_info()` | precomputed counts, categories, predicates, primary knowledge sources, flag counts, ORION build/release metadata, and a `build` section from `description.json` when present: sources built vs. failed (and where each stopped), unresolved-node counts, and the share of edges citing a publication. Headline counts come from `graph_metadata.json.statistics`, not live aggregate scans |
+| `get_schema()` | precomputed one-category-per-node meta-graph `(subject_category, predicate, object_category, count)`, plus property names per category with truncated example values; lists `kgbcia_flags` and `kgbcia_flag_reasons` as edge properties, with the flag values present in the graph, for agents writing Cypher |
+| `search_nodes(query, category?, limit)` | by CURIE, equivalent identifier, name or synonym |
+| `get_node(node_id)` | full node record |
+| `summarize_node_edges(node_id)` | counts of edges by `(direction, predicate, neighbor_category)`: the cheap first look at an unfamiliar node, especially a hub |
+| `get_node_edges(node_id, direction="both", predicate?, neighbor_category?, neighbor_where?, exclude_flags?, limit, offset)` | neighbors with edge summaries; `neighbor_where` is `{property: value}` equality on neighbor properties; `exclude_flags` skips edges carrying any of the listed flags |
+| `get_edges_between(source_id, target_id, include_lineage=false)` | every direct edge between the two nodes, both directions; with `include_lineage`, each edge carries its `explain_edge` result: the one-call answer to "why does A connect to B?" |
+| `find_paths(source_id, target_id, max_hops=3, predicates?, exclude_flags?, limit=10)` | bounded paths between two known nodes, shortest first; reject `max_hops > 4` |
+| `find_connected_nodes(source_id, target_category, max_hops=2, predicates?, target_where?, exclude_flags?, limit)` | nodes of a category reachable from a node, with the connecting path, for example "drugs reaching disease X via a target"; reject `max_hops > 3` |
+| `explain_edge(edge_id)` | the "why": Biolink provenance, the edge's flags with their reasons, plus each source record (`kgbcia_source_records` → Mapping: file, record set, columns, constants; report: source, version, Croissant) |
+| `query_cypher(cypher, parameters?, limit=100)` | raw Cypher for counts, rankings and patterns the other tools can't express; read-only (see "Read-only enforcement"), row-capped, with a timeout. The docstring states the labels-as-categories convention and the property names, and gives two example queries |
+
+`query_cypher` is behind `--enable-cypher` (or `KGB_MCP_ENABLE_CYPHER=1`). The configuration we
+hand to judges, the `.pi/mcp.json` entry and the README's client setup **turn it on**: judges'
+questions will include aggregates such as "how many Tclin targets are linked to X" that no fixed
+tool covers. Users with Bolt access can run raw Cypher anyway, so the tool adds convenience, not
+exposure.
+
+Validate every predicate, category, property name and flag value against the precomputed schema
+artifact before putting it into a query.
+
+**Server instructions:** set FastMCP's `instructions` to a short workflow guide that clients
+show to the model:
+1. resolve names with `search_nodes`;
+2. orient with `get_schema` or `summarize_node_edges`;
+3. explore with `get_node_edges`, `find_paths` or `find_connected_nodes`;
+4. justify every claimed connection with `get_edges_between(include_lineage=true)` or
+   `explain_edge`, citing sources verbatim;
+5. fall back to `query_cypher` only for aggregates;
+6. when no connection is found, check `get_graph_info`'s `build` section and mention failed or
+   missing sources that could have supplied it, before concluding there's no evidence;
+7. whenever an answer uses an edge that has flags, say in that same answer that it's flagged and
+   give each flag's reason verbatim (including any PMID).
+
+The descriptions of `get_node_edges`, `get_edges_between`, `explain_edge`, `find_paths` and
+`find_connected_nodes` repeat rule 7 in their *Presentation Guidelines*, since some clients
+don't show server instructions to the model.
+
+## Build order
+
+The real graph depends on earlier stages, so the implementation was built against the toy
+fixture first and then promoted to deployed graphs.
+
+1. **Core: complete.** The workspace package skeleton, `check`, `artifacts`, vendored
+   `report_models`, `lineage`, and `neo4j_service` are implemented and covered by unit tests
+   without a database.
+2. **Tools: complete.** FastMCP tools are implemented and tested through `fastmcp.Client` with
+   the service mocked. The server runs over stdio or HTTP, and `query_cypher` remains opt-in.
+3. **Dump and chart: complete.** `extra_indexes.cypher`, `prepare_dump.sh`, the Dockerfile, the
+   Helm chart, AWS/local values, development-artifact synthesis, and `RUNBOOK.md` are in place.
+   The LitCoin development sample was deployed first, then the real cleaned graph. Confirmed
+   Neo4j storage/index behavior is recorded in README **Neo4j notes**.
+4. **AWS: complete.** The real cleaned graph is deployed on the prepared arm64 k3s host with
+   `mcp.enabled=false`; users run `kgbcia-mcp` locally over stdio against the exposed Bolt
+   service. AWS uses auth-disabled Neo4j (`NEO4J_AUTH=none`) with network exposure controlled by
+   the maintainer, graph read-only mode, a 30-second transaction timeout, and a 2 GiB
+   transaction memory cap.
+5. **Publish to PyPI: open.** The maintainer still needs to publish `kgbcia-mcp` if judges or
+   teammates should install it outside this repository. Until then, local clients use
+   `uv run kgbcia-mcp serve --enable-cypher` from a checkout; after publication, switch examples
+   to `uvx kgbcia-mcp serve --enable-cypher`.
+
+The former build-description and quality-flag follow-ups are now part of the main contract:
+`prepare_dump.sh` packages sanitized `description.json`; `get_graph_info()` exposes it as
+`build`; server instructions tell agents to consult it before concluding missing evidence; edge
+serializers return `flags` as `{flag, reason}` pairs; flag counts/values come from precomputed
+statistics; and `exclude_flags` is available on neighbor/path tools. On the current non-final
+graph, the issue #63 olodaterol → ADRB2 `wrong_mechanism` example is pending a future graph
+cleaned with #62 and #49 because the deployed edge carries no flag properties. The deployed flag
+path is verified instead with `WIKIPATHWAYS:WP4580` → `CHEBI:10034`, which returns
+`unresolved_node` and `rare_category_combination` with paired reasons and is removed by
+`exclude_flags=["unresolved_node"]`.
+
+## Testing
+
+- CI has no network and no database. Integration tests use a module-level
+  `requires_neo4j = pytest.mark.skipif(not os.getenv("NEO4J_URI"), ...)`, which needs no custom
+  marker in root `pyproject.toml`. Never call NodeNorm.
+- Always-run tests:
+  - `check` on the built fixture, including a graph with one edge missing its `id`, which must
+    fail;
+  - lineage resolution: one record, a merged edge with many, an unknown `Mapping.id`, and `#`
+    inside the record key;
+  - `report_models` matching `shared/schema.py`;
+  - `artifacts` from a directory and from a URL (with the download mocked), plus checksum
+    mismatch and cache reuse;
+  - a check that nothing under `src/kgbcia_mcp` imports `shared` or `agents`;
+  - `main([])` returning, and result serialization;
+  - `helm lint` and `helm template` on the chart with each values file, if `helm` is on the
+    path (skip otherwise);
+  - every tool through an in-memory `fastmcp.Client(mcp)` with `neo4j_service` mocked.
+- Integration tests are a short smoke suite against whatever graph `NEO4J_URI` points at (the
+  k8s instance). They discover test IDs at runtime, for example from `get_graph_info()` or the
+  first `search_nodes` hit, and never hard-code them. Check that each tool returns sensible
+  results, that a write is rejected both through `query_cypher` and through a raw driver
+  session, and that returned edges carry provenance. Don't test ORION's dump; that's covered
+  upstream.
+
+## Dependencies and registration
+
+- The package's dependencies are `fastmcp` (3.x, pinned to an exact release at least two weeks
+  old), `neo4j` (5.x) and `pydantic`. Add nothing else without asking. Wire the workspace member
+  into the root `pyproject.toml` and `uv.lock`.
+- Keep changes inside `agents/mcp_interface/` and `tests/test_mcp_interface.py`, plus
+  `pyproject.toml` / `uv.lock` and `.pi/mcp.json`.
+- **Register the server in `.pi/mcp.json`** under `mcpServers` as `kgbcia-mcp`, a stdio entry.
+  Until the package is on PyPI, run `uv run kgbcia-mcp serve`; after that, run
+  `uvx kgbcia-mcp serve`. Neo4j settings come from the environment; put no hosts or passwords in
+  the file.
+
+## Out of scope
+
+Producing the ORION dump itself (ORION does it), a generic reusable Neo4j chart, TLS and domain
+names, publishing to PyPI, changing AWS infrastructure (the maintainer operates the deployed
+host), a skill for consuming agents, any tool that adds, changes or deletes graph data, HTTP auth
+on the MCP endpoint, NodeNorm calls at query time, putting TransformReport content into Neo4j,
+and opening PRs.

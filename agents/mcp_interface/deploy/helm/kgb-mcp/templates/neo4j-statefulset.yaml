@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kgb-mcp.neo4jService" . }}
+  labels:
+    {{- include "kgb-mcp.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "kgb-mcp.neo4jService" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kgb-mcp.name" . }}
+      app.kubernetes.io/component: neo4j
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kgb-mcp.name" . }}
+        app.kubernetes.io/component: neo4j
+    spec:
+      securityContext:
+        fsGroup: 7474
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: download-dump
+          image: alpine:3.20.3
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 7474
+            runAsGroup: 7474
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              # neo4j-admin discovers <database>.dump under --from-path, regardless
+              # of the public release filename (which is intentionally kgb.dump).
+              marker=/data/.kgbcia-load.sha256
+              expected='{{ required "neo4j.dumpSha256 is required" .Values.neo4j.dumpSha256 }}'
+              if [ -f "$marker" ] && [ "$(cat "$marker")" = "$expected" ] && [ -f /data/import/neo4j.dump ]; then
+                exit 0
+              fi
+              mkdir -p /data/import
+              wget -qO /data/import/neo4j.dump.download '{{ required "neo4j.dumpUrl is required" .Values.neo4j.dumpUrl }}'
+              echo "$expected  /data/import/neo4j.dump.download" | sha256sum -c -
+              mv /data/import/neo4j.dump.download /data/import/neo4j.dump
+          resources:
+            {{- toYaml .Values.neo4j.initResources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        - name: load-dump
+          image: {{ .Values.neo4j.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              marker=/data/.kgbcia-load.sha256
+              expected='{{ required "neo4j.dumpSha256 is required" .Values.neo4j.dumpSha256 }}'
+              if [ -f "$marker" ] && [ "$(cat "$marker")" = "$expected" ]; then
+                exit 0
+              fi
+              neo4j-admin database load {{ .Values.neo4j.database | quote }} \
+                --from-path=/data/import --overwrite-destination=true
+              printf '%s' "$expected" > "$marker"
+          securityContext:
+            runAsUser: 7474
+            runAsGroup: 7474
+          resources:
+            {{- toYaml .Values.neo4j.initResources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: neo4j
+          image: {{ .Values.neo4j.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: bolt
+              containerPort: 7687
+            - name: http
+              containerPort: 7474
+          env:
+            - name: NEO4J_AUTH
+              {{- if .Values.neo4j.auth.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "secret.existingSecret is required when neo4j.auth.enabled" .Values.secret.existingSecret }}
+                  key: {{ .Values.secret.adminAuthKey }}
+              {{- else }}
+              value: none
+              {{- end }}
+            - name: NEO4J_server_databases_default__to__read__only
+              value: "true"
+            - name: NEO4J_server_memory_heap_initial__size
+              value: {{ .Values.neo4j.memory.heapInitial | quote }}
+            - name: NEO4J_server_memory_heap_max__size
+              value: {{ .Values.neo4j.memory.heapMax | quote }}
+            - name: NEO4J_server_memory_pagecache_size
+              value: {{ .Values.neo4j.memory.pageCache | quote }}
+            - name: NEO4J_db_transaction_timeout
+              value: {{ .Values.neo4j.transaction.timeout | quote }}
+            - name: NEO4J_db_memory_transaction_total_max
+              value: {{ .Values.neo4j.transaction.memoryMax | quote }}
+            - name: NEO4J_server_bolt_thread__pool__min__size
+              value: {{ .Values.neo4j.bolt.threadPoolMin | quote }}
+            - name: NEO4J_server_bolt_thread__pool__max__size
+              value: {{ .Values.neo4j.bolt.threadPoolMax | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: bolt
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: bolt
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.neo4j.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.neo4j.storage.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.neo4j.storage.size | quote }}

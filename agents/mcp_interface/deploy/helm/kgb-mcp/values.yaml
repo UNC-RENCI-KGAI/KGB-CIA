@@ -1,0 +1,86 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+secret:
+  # Create this Secret outside Helm; it must contain neo4j-auth and user-password.
+  existingSecret: kgb-mcp-auth
+  adminAuthKey: neo4j-auth
+  userPasswordKey: user-password
+
+neo4j:
+  image: neo4j:5.26.31-community
+  auth:
+    # Local Kubernetes defaults to password authentication. AWS overlays disable it because
+    # Neo4j Community accounts can administer users in the system database.
+    enabled: true
+  # Placeholder values make templates inspectable but are not deployable.
+  dumpUrl: https://example.invalid/kgb.dump
+  dumpSha256: 0000000000000000000000000000000000000000000000000000000000000000
+  database: neo4j
+  user: kgbcia
+  service:
+    type: ClusterIP
+    annotations: {}
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    httpEnabled: false
+  storage:
+    size: 20Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+      ephemeral-storage: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+      ephemeral-storage: 2Gi
+  initResources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+      ephemeral-storage: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+      ephemeral-storage: 1Gi
+  # Neo4j accepts decimal-style size suffixes (G, M), unlike Kubernetes resources.
+  memory:
+    heapInitial: 1G
+    heapMax: 2G
+    pageCache: 1G
+  transaction:
+    timeout: 30s
+    memoryMax: 1G
+  bolt:
+    threadPoolMin: 5
+    threadPoolMax: 100
+
+mcp:
+  enabled: false
+  image:
+    repository: kgbcia-mcp
+    tag: dev
+    pullPolicy: IfNotPresent
+  enableCypher: true
+  # Required only when enabled; replace for an actual deployment.
+  artifactsUrl: https://example.invalid/artifacts.tar.gz
+  artifactsSha256: 0000000000000000000000000000000000000000000000000000000000000000
+  service:
+    type: ClusterIP
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
