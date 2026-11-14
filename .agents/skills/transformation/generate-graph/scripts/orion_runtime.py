@@ -478,7 +478,9 @@ class SemanticSourceLoader(SourceDataLoader):
                     if header and dist.get("rcv:headerInComments"):
                         # keep the comment mark when the croissant names the column with it
                         # ("#GeneID" in ClinVar); strip it otherwise
-                        first = cells[0] if cells[0] in needed else cells[0].removeprefix(comment).strip()
+                        first = cells[0]
+                        if first not in needed:
+                            first = first.removeprefix(comment).strip()
                         candidate = [first, *cells[1:]]
                         if set(needed) & set(candidate):
                             names = candidate
