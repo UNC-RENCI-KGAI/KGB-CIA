@@ -14,10 +14,17 @@ it touches.
 - `nodenorm.py` calls the NodeNorm API over the network (default: the public Translator
   instance; set `NODENORM_URL` for the RENCI-hosted one). Tests must not hit it; mock `httpx`
   or test `preferred_id` against a canned response.
+- `paths.py` is the root of every cache: `KGB_CACHE_DIR`, else the repository's `data/cache/`
+  whatever directory a command runs from, with `croissant/`, `croissant-semantics/`, `pubmed/`
+  and `augmentation/` under it. The croissant-semantics skill's `scripts/common.py` repeats the
+  lookup, since its scripts run on their own (`uv run --script`): change both together
+  (`tests/test_paths.py` checks they agree).
 - `pubmed/` calls NCBI's E-utilities (and NodeNorm, for the pair search) over the network, and
   caches what it fetches in SQLite. Set `NCBI_API_KEY` (10 requests a second instead of 3) and
   `NCBI_EMAIL` (NCBI asks for one); `EUTILS_URL` points it at another server and
-  `KGB_PUBMED_CACHE` at another cache file (default `data/cache/pubmed.sqlite`). Agents that
+  `KGB_PUBMED_CACHE` at another cache file (default `pubmed/pubmed.sqlite` under the cache
+  root, `paths.py`; the old default, `data/cache/pubmed.sqlite`, is still used, with a warning,
+  while only it exists). Agents that
   share the cache file share what each fetched. Only one process may write to a cache file at
   a time: SQLite's locking isn't reliable on a network drive, so two people running
   augmentation and the evidence check at once against a cache on the RENCI drive can hit lock

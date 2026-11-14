@@ -53,6 +53,7 @@ from apply_plan import (
 from common import (
     CURIE,
     as_list,
+    cache_dir,
     column_names,
     content_size,
     distribution_index,
@@ -1762,7 +1763,7 @@ def run_bounded(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
 VALIDATION = {"result": "not run"}
 
 
-VALIDATE_CACHE = Path.home() / ".cache" / "croissant-semantics" / "validate"
+VALIDATE_CACHE = cache_dir() / "validate"
 
 
 def run_validate(path: str, f: Findings, timeout: int) -> None:

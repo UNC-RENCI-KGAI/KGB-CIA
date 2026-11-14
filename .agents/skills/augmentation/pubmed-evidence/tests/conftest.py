@@ -1,6 +1,7 @@
 """Shared test setup: the library on the import path, the toy graph as a fixture, the fake
 model client every step's tests use (`from conftest import FakeClient`), no credentials for any
-real model, so that no test can call one, and a PubMed cache of each test's own.
+real model, so that no test can call one, and a PubMed cache and label cache directory of each
+test's own.
 
 Run from the repository root: `uv run pytest .agents/skills/augmentation/pubmed-evidence/tests`
 (CI runs them with the rest, from pyproject's testpaths).
@@ -30,8 +31,15 @@ from shared.pubmed import CACHE_ENV  # noqa: E402
 @pytest.fixture(autouse=True)
 def own_pubmed_cache(monkeypatch, tmp_path_factory):
     """Every test reads and writes a PubMed cache of its own (`PubMedCache()`,
-    `default_cache_path()`), never the repository's data/cache/pubmed.sqlite."""
+    `default_cache_path()`), never the repository's data/cache/pubmed."""
     monkeypatch.setenv(CACHE_ENV, str(tmp_path_factory.mktemp("pubmed") / "pubmed.sqlite"))
+
+
+@pytest.fixture(autouse=True)
+def own_cache_dir(monkeypatch, tmp_path_factory):
+    """Every run without --cache-dir uses a label cache directory of the test's own
+    (`config.default_cache_dir()`), never the repository's data/cache/augmentation."""
+    monkeypatch.setenv(config.CACHE_DIR_ENV, str(tmp_path_factory.mktemp("augmentation")))
 
 
 @pytest.fixture(autouse=True)

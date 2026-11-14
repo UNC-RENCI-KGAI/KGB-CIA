@@ -27,7 +27,7 @@ from pubmed_evidence.cache import LabelCache
 from toy import ABL1, CML, EDGES, IMATINIB, NODES, UBERON_OBO, UBERON_VERSION
 
 from agents.augmentation import cli as stage
-from shared import nodenorm
+from shared import nodenorm, paths
 from shared.pubmed import EUtils, default_cache_path
 from shared.pubmed import eutils as eutils_module
 from shared.pubmed import pairs as pairs_module
@@ -205,7 +205,7 @@ def test_main_with_no_arguments_runs_every_step(tmp_path, monkeypatch, fakes):
     assert stage.main([]) == 0
 
     out = tmp_path / config.DEFAULT_OUTPUT
-    cache_dir = tmp_path / config.DEFAULT_CACHE_DIR
+    cache_dir = config.default_cache_dir()
     assert (cache_dir / config.LABEL_CACHE).exists()
     assert not (out / "work" / "sentences.jsonl").exists()  # no sentences step any more
 
@@ -394,6 +394,7 @@ def test_full_run_options_before_a_step_are_rejected(tmp_path, fakes):
         ["--model", "gpt-6-luna", "label"],
         ["--reasoning-effort", "medium", "label"],
         ["--limit", "3", "pubmed"],
+        ["--budget", "5", "label"],
     ):
         with pytest.raises(SystemExit) as exit:
             cli.main([*common_args(tmp_path), *argv])
@@ -522,6 +523,125 @@ def test_full_run_labels_only_what_the_budget_allows(tmp_path, capsys, fakes):
     assert "budget" not in capsys.readouterr().err
 
 
+def leaving_one_out(fakes: list[str], times: int | None = None):
+    """A fake model that answers every label request but leaves PMID 101's abstract out of the
+    reply, the first `times` times it is asked (every time if None), as a model sometimes
+    does."""
+    inner = fake_model(fakes)
+    dropped = 0
+
+    def answer(sent: Sent):
+        nonlocal dropped
+        body = inner.answer(sent)
+        position = dict(re.findall(r"^## (A\d+) \(PMID:(\d+)", sent.user, re.M))
+        if "101" in position.values() and (times is None or dropped < times):
+            dropped += 1
+            body["abstracts"] = [a for a in body["abstracts"] if position[a["abstract"]] != "101"]
+        return body
+
+    return FakeClient(answer)
+
+
+def test_full_run_labels_again_when_a_reply_left_an_abstract_out(
+    tmp_path, capsys, fakes, monkeypatch
+):
+    client = leaving_one_out(fakes, times=1)
+    monkeypatch.setattr(llm, "client_for", lambda model, **kw: client)
+    argv = common_args(tmp_path)
+    assert cli.main(argv) == 0
+    err = capsys.readouterr().err
+    assert "label: warning: 1 abstracts were left out" in err
+    assert "1 pairs aren't fully labeled" in err and "running label again" in err
+    # Two pairs, then the one left unfinished; the graph is written with every edge checked.
+    assert fakes.count("label") == 3 and fakes.count("review") == 2
+    report = json.loads((tmp_path / "out" / "work" / "apply_report.json").read_text())
+    assert report["unchecked"]["pairs_not_fully_labeled"] == 0
+    assert report["edges_checked"] == 9
+
+
+def test_full_run_warns_and_goes_on_when_pairs_stay_not_fully_labeled(
+    tmp_path, capsys, fakes, monkeypatch
+):
+    # A reply that always leaves the same abstract out can't stop every full run at label.
+    monkeypatch.setattr(llm, "client_for", lambda model, **kw: leaving_one_out(fakes))
+    argv = common_args(tmp_path)
+    assert cli.main(argv) == 0
+    err = capsys.readouterr().err
+    assert "running label again" in err
+    assert "warning: 1 pairs still aren't fully labeled after a second label run" in err
+    assert "later steps not run" not in err
+    # One run, one retry, then the later steps; apply leaves the pair's 2 treats edges
+    # unchecked and counts them, and checks the other 7.
+    assert fakes.count("label") == 3 and fakes.count("review") == 1
+    assert (tmp_path / "out" / "edges.jsonl").exists()
+    report = json.loads((tmp_path / "out" / "work" / "apply_report.json").read_text())
+    assert report["unchecked"]["pairs_not_fully_labeled"] == 1
+    assert report["unchecked"]["edges_not_fully_labeled"] == 2
+    assert report["edges_checked"] == 7
+
+
+def test_full_run_stops_when_the_second_label_run_fails(tmp_path, capsys, fakes, monkeypatch):
+    """The first label run leaves an abstract out; the retry's call fails, more than label's
+    share of failed calls allows, so the step fails and nothing after it runs."""
+    inner = fake_model(fakes)
+    asked = 0
+
+    def answer(sent: Sent):
+        nonlocal asked
+        position = dict(re.findall(r"^## (A\d+) \(PMID:(\d+)", sent.user, re.M))
+        if "101" not in position.values():
+            return inner.answer(sent)
+        asked += 1
+        if asked > 1:
+            fakes.append("label")
+            return llm.LLMError("boom")
+        body = inner.answer(sent)
+        body["abstracts"] = [a for a in body["abstracts"] if position[a["abstract"]] != "101"]
+        return body
+
+    monkeypatch.setattr(llm, "client_for", lambda model, **kw: FakeClient(answer))
+    argv = common_args(tmp_path)
+    assert cli.main(argv) == 1
+    err = capsys.readouterr().err
+    assert "running label again" in err and "calls these pairs need failed" in err
+    assert "still aren't fully labeled" not in err
+    assert "label failed (exit 1); later steps not run" in err
+    assert fakes.count("label") == 3 and "review" not in fakes
+    assert not (tmp_path / "out" / "edges.jsonl").exists()
+
+
+def test_full_run_stops_over_its_budget(tmp_path, capsys, fakes):
+    argv = common_args(tmp_path)
+    assert cli.main([*argv, "select"]) == 0 and cli.main([*argv, "pubmed"]) == 0
+    capsys.readouterr()
+
+    # Under the estimate: the run stops before any model call, and says what isn't estimated.
+    assert cli.main([*argv, "--budget", "0"]) == 1
+    err = capsys.readouterr().err
+    assert "over the $0.0000 budget; stopping before any model call" in err
+    assert "review and quote repair come on top" in err
+    assert "label" not in fakes and not (tmp_path / "out" / "edges.jsonl").exists()
+    # Over it: the run goes ahead.
+    assert cli.main([*argv, "--budget", "100"]) == 0
+    assert fakes.count("label") == 2
+
+
+def test_label_dry_run_checks_a_budget(tmp_path, capsys, fakes):
+    argv = common_args(tmp_path)
+    assert cli.main([*argv, "select"]) == 0 and cli.main([*argv, "pubmed"]) == 0
+    capsys.readouterr()
+    assert cli.main([*argv, "label", "--dry-run", "--budget", "0"]) == 1
+    out, err = capsys.readouterr()
+    assert "label: the estimate covers labeling alone" in out
+    assert "label: error: the estimate, $" in err and "over the $0.0000 budget" in err
+    assert cli.main([*argv, "label", "--dry-run", "--budget", "100"]) == 0
+    assert "label" not in fakes
+    # Without --dry-run the budget would mean nothing, so it is refused.
+    assert cli.main([*argv, "label", "--budget", "100"]) == 1
+    assert "--budget goes with --dry-run" in capsys.readouterr().err
+    assert "label" not in fakes
+
+
 def test_script_header_lists_the_projects_dependencies():
     """`scripts/augment.py` runs alone under `uv run --script`, so its PEP 723 header repeats
     the project's dependencies and the `augmentation` extra; they must not drift apart. A
@@ -565,3 +685,52 @@ def test_one_bad_edge_does_not_stop_the_run(tmp_path, capsys, fakes):
     assert bad in edges
     for report in ("scope_report.json", "apply_report.json"):
         assert json.loads((out / "work" / report).read_text())["invalid_edges"]["edges"] == 1
+
+
+def test_the_cache_dir_is_under_the_cache_root_unless_the_environment_names_one(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(config.CACHE_DIR_ENV, "~/team/augmentation")
+    assert config.default_cache_dir() == tmp_path / "home" / "team" / "augmentation"
+    monkeypatch.delenv(config.CACHE_DIR_ENV)
+    monkeypatch.setattr(config, "LEGACY_CACHE_DIRS", ())
+    monkeypatch.setenv(paths.CACHE_ROOT_ENV, "~/caches")
+    assert config.default_cache_dir() == tmp_path / "home" / "caches" / "augmentation"
+    monkeypatch.delenv(paths.CACHE_ROOT_ENV)
+    assert config.default_cache_dir() == paths.REPO_ROOT / "data" / "cache" / "augmentation"
+    assert config.default_cache_dir() == config.DEFAULT_CACHE_DIR
+
+
+def test_an_old_label_cache_is_used_until_it_is_moved(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv(config.CACHE_DIR_ENV)
+    monkeypatch.setenv(paths.CACHE_ROOT_ENV, str(tmp_path / "data" / "cache"))
+    monkeypatch.chdir(tmp_path)
+    old_default = Path("data/augmentation/cache")
+    monkeypatch.setattr(config, "LEGACY_CACHE_DIRS", (old_default,))
+    config._warn_legacy.cache_clear()
+    new = tmp_path / "data" / "cache" / "augmentation"
+    old = tmp_path / old_default
+    old.mkdir(parents=True)
+    (old / config.UBERON_FILE).write_text("")
+    # Without a label cache, the old directory holds nothing worth keeping to.
+    assert config.default_cache_dir() == new
+    (old / config.LABEL_CACHE).write_bytes(b"")
+    assert config.default_cache_dir() == old_default
+    assert config.default_cache_dir() == old_default
+    err = capsys.readouterr().err
+    assert err.count("old default") == 1  # once a process
+    assert f"mkdir -p {new} && mv {old}/* {new}/" in err
+
+    # --cache-dir given: that one, and no warning.
+    config._warn_legacy.cache_clear()
+    args = cli._resolve(cli._parser().parse_args(["--cache-dir", str(tmp_path / "x"), "select"]))
+    assert args.cache_dir == tmp_path / "x" and capsys.readouterr().err == ""
+    # Neither given: resolved after parsing.
+    assert cli._resolve(cli._parser().parse_args(["select"])).cache_dir == old_default
+
+    # Moved: the new one.
+    new.mkdir(parents=True)
+    (new / config.LABEL_CACHE).write_bytes(b"")
+    assert config.default_cache_dir() == new

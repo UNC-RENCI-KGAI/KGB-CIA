@@ -131,8 +131,10 @@ def predicates_of(rules: Sequence[Rule], ids: Iterable[str]) -> tuple[str, ...]:
     """The predicates a claim may use for a pair the rules `ids` matched, as CURIEs, sorted:
     each rule's predicates, every predicate Biolink puts below them (mixins included), and their
     `opposite_of` partners, each as Biolink reads it from the rule's subject to its object
-    (`rule_predicate`). Predicates a skip rule drops whatever the categories (literature
-    co-occurrence, which is under `associated_with`) are left out: they never make a claim."""
+    (`rule_predicate`). Predicates a skip rule drops whatever the categories and the edge's
+    provenance (literature co-occurrence, which is under `associated_with`) are left out: they
+    never make a claim. A provenance rule names no predicates, so it adds none and drops none:
+    a pair's `rules` are its statement rules."""
     wanted = set(ids)
     found: set[str] = set()
     for rule in rules:
@@ -144,7 +146,7 @@ def predicates_of(rules: Sequence[Rule], ids: Iterable[str]) -> tuple[str, ...]:
             found |= {p for n in named if (p := rule_predicate(rule, n))}
     dropped: set[str] = set()
     for rule in rules:
-        if rule.tier == "skip" and not rule.subject and not rule.object:
+        if rule.tier == "skip" and not (rule.subject or rule.object or rule.by_provenance):
             for predicate in rule.predicates:
                 dropped |= biolink.descendants(predicate)
     return tuple(sorted(found - dropped))
@@ -226,13 +228,18 @@ def reply_schema(predicates: tuple[str, ...]) -> llm.Schema:
     return llm.Schema("label_reply", body)
 
 
+def _labeled(rule: Rule) -> bool:
+    """Whether a pair's claims may come from the rule: a statement rule that isn't a skip. A
+    provenance rule names no predicates, and its statements' pairs name their statement rule."""
+    return rule.tier != "skip" and not rule.is_provenance
+
+
 def rule_schemas(rules: Sequence[Rule]) -> dict[str, llm.Schema]:
-    """Each scope rule's reply schema, by rule id (skip rules have none). A pair matching
-    several rules gets the schema of their predicates together, which these determine."""
+    """Each scope rule's reply schema, by rule id (skip and provenance rules have none, so no
+    schema has an empty predicate enum). A pair matching several rules gets the schema of their
+    predicates together, which these determine."""
     return {
-        rule.id: reply_schema(predicates_of(rules, [rule.id]))
-        for rule in rules
-        if rule.tier != "skip"
+        rule.id: reply_schema(predicates_of(rules, [rule.id])) for rule in rules if _labeled(rule)
     }
 
 
@@ -244,8 +251,10 @@ def label_prompt(
 ) -> tuple[str, str]:
     """(system prompt, prompt version) of a label run with this prompt file, model and scope
     rules. The version covers the prompt with its includes, FORMAT_VERSION, every rule's reply
-    schema and the run's effort (`llm.run_effort`), so claims made at one effort are never
-    reused at another. Anything that needs the version of a label run can call this."""
+    schema (`rule_schemas`: skip and provenance rules have none, so adding or changing one
+    leaves the version alone) and the run's effort (`llm.run_effort`), so claims made at one
+    effort are never reused at another. Anything that needs the version of a label run can
+    call this."""
     effort = llm.run_effort(model, reasoning_effort)
     schemas = "\0".join(s.text() for _, s in sorted(rule_schemas(rules).items()))
     extra = f"{FORMAT_VERSION}\0{schemas}\0effort={effort}"
@@ -332,7 +341,7 @@ def build_jobs(inputs: Inputs, pubmed: PubMedCache) -> tuple[list[PairJob], Coun
     """A job per pair with abstracts to read, in `pairs.jsonl` order, and the counts of what
     was skipped."""
     skipped: Counter = Counter()
-    known = {r.id for r in inputs.rules if r.tier != "skip"}
+    known = {r.id for r in inputs.rules if _labeled(r)}
     jobs: list[PairJob] = []
     for pair in inputs.pairs:
         record = inputs.pubmed.get(pair.pair_id)
@@ -1339,6 +1348,10 @@ def print_summary(s: dict[str, Any]) -> None:
             f"of them cached); est. cost {_money(s['estimated_cost'])} with "
             f"~{ESTIMATED_OUTPUT_TOKENS} output tokens a call"
         )
+        print(
+            "label: the estimate covers labeling alone: the review and quote repair passes "
+            "that follow aren't estimated"
+        )
         if s["request_example"]:
             print(f"label: first request in {s['request_example']}")
         return
@@ -1439,6 +1452,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help=f"send nothing: write the first request to {REQUEST_EXAMPLE}, estimate the cost",
     )
     parser.add_argument(
+        "--budget",
+        type=float,
+        metavar="USD",
+        help="with --dry-run: exit 1 when the estimate is over this many US dollars (review "
+        "and quote repair aren't in it)",
+    )
+    parser.add_argument(
         "--no-repair",
         action="store_true",
         help="skip the quote repair pass, which asks the review model for the evidence "
@@ -1447,6 +1467,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.budget is not None and not args.dry_run:
+        print(
+            "label: error: --budget goes with --dry-run; the full run (kgb-augment --budget) "
+            "checks it before labeling",
+            file=sys.stderr,
+        )
+        return 1
     try:
         summary = label_pairs(
             args.work,
@@ -1468,6 +1495,16 @@ def run(args: argparse.Namespace) -> int:
         print(f"label: error: {e}", file=sys.stderr)
         return 1
     print_summary(summary)
+    if args.dry_run:
+        cost = summary["estimated_cost"]
+        if args.budget is not None and cost is not None and cost > args.budget:
+            print(
+                f"label: error: the estimate, {_money(cost)}, is over the {_money(args.budget)} "
+                "budget (labeling alone; review and quote repair come on top)",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
     calls, failed = summary["calls"], summary.get("calls_failed", 0)
     needed = summary.get("calls_needed", calls)
     if llm.too_many_failed(needed, failed):

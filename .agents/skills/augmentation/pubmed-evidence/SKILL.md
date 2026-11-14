@@ -29,10 +29,12 @@ edit the graph, the caches or the claims by hand: every change to the graph come
   reports, your tuned prompts and rules, and your `notes.md`. `reference/work-files.md`
   describes every file.
 - **Caches:** PubMed responses and anatomy groundings in the PubMed cache, which every agent
-  that reads PubMed shares (`KGB_PUBMED_CACHE`, default `data/cache/pubmed.sqlite`); the pinned
-  UBERON release and every claim, check, review and repair in `data/augmentation/cache`
+  that reads PubMed shares (`KGB_PUBMED_CACHE`, default `data/cache/pubmed/pubmed.sqlite`); the
+  pinned UBERON release and every claim, check, review and repair in `data/cache/augmentation`
   (`--cache-dir`, or `KGB_AUGMENT_CACHE_DIR` to share them across a team). Reruns reuse them, so
-  rerunning a step is cheap. Only one process should write to a cache at a time.
+  rerunning a step is cheap. If a step warns that it is using a cache at its old default under
+  `data/`, tell the user and give them the warning's `mv` command; don't move it yourself. Only
+  one process should write to a cache at a time.
 
 Pass the same `--input`, `--output`, `--work` and `--cache-dir` to every step, with the same
 `KGB_PUBMED_CACHE`. Put downloads, helper scripts and other scratch work in `OUT/work/`, not
@@ -49,8 +51,8 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 | Command | Use |
 |---|---|
 | `augment.py select [--rules FILE] [--capped-limit N] [--min-score X]` | Step 1: keep the edges worth checking, by scope rule (`reference/rules.md`), grouped by node pair; `scope_report.json` counts what each rule kept and every edge type skipped |
-| `augment.py pubmed [--limit N] [--max-abstracts N] [--refresh]` | Step 2: one PubMed search per pair (names, synonyms, MeSH), the abstracts it finds and those the edges already cite |
-| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and the review model repairs evidence sentences that weren't found |
+| `augment.py pubmed [--limit N] [--max-abstracts N] [--refresh] [--without-key]` | Step 2: one PubMed search per pair (names, synonyms, MeSH), the abstracts it finds and those the edges already cite |
+| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run [--budget USD]] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and the review model repairs evidence sentences that weren't found |
 | `augment.py ground [--refresh]` | Step 4: the anatomy the claims name, to UBERON terms; pins the UBERON release. No model calls |
 | `augment.py review [--model M] [--review-support-only]` | Step 5: a stronger model upholds or rejects, in one pass, each claim that would count: one that would add a PMID to an edge or propose a more specific edge. A support-only statement (`ameliorates_condition` under `treats`, `config.SUPPORT_ONLY`) isn't sent unless `--review-support-only` |
 | `augment.py apply [--no-review] [--species-in-proposals] [--review-support-only]` | Step 6: refine each checked edge from its pair's claims (its supporting PMIDs, and the more specific edges they propose) and write the graph, `refinements.jsonl` and `apply_report.json` |
@@ -70,12 +72,16 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
   the label summary says if the pass was skipped for lack of them.
 - `NCBI_EMAIL` should be set (NCBI asks for a contact address); `NCBI_API_KEY` raises the rate
   from 3 to 10 requests a second. Never fill either in yourself with an address or key you
-  found; if they're unset, the script warns and runs at the lower rate.
+  found. If they're unset the script says so at the start of the pubmed step and runs at the
+  lower rate, but a job of more than 500 uncached searches without the key stops before
+  sending anything (the Nov 12 2026 run took 42 minutes for 2,957 pairs without it, 75 seconds
+  for 500 with it). Stop too and ask for the key; only if the slow run is wanted, rerun with
+  `augment.py pubmed --without-key`, after which the full run finds the searches cached.
 - The ground step needs no key: it calls the RENCI Name Resolver (`NAMERES_URL`) and NodeNorm,
   and fetches UBERON's release once.
 - Earlier runs kept the PubMed cache in the cache directory. If `--cache-dir` holds a
-  `pubmed.sqlite` and `KGB_PUBMED_CACHE` (default `data/cache/pubmed.sqlite`) names no file yet,
-  stop and ask whether to move it there or point `KGB_PUBMED_CACHE` at it: an empty cache
+  `pubmed.sqlite` and `KGB_PUBMED_CACHE` (default `data/cache/pubmed/pubmed.sqlite`) names no
+  file yet, stop and ask whether to move it there or point `KGB_PUBMED_CACHE` at it: an empty cache
   searches every pair again and grounds every anatomy name again.
 - Large PubMed jobs belong off-peak: weekends, or 9pm–5am ET on weekdays. `augment.py pubmed`
   warns when a big uncached job starts at peak hours.
@@ -83,17 +89,25 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 ## Workflow
 
 1. **Select the edges.** `augment.py select`. Read `work/scope_report.json`: pairs kept per rule,
-   pairs dropped by the gene–gene and gene–phenotype caps, the negated edges kept, and the
-   `skipped` list of edge types with the skip rule that covered them or `unmatched`. Look at the
-   largest `unmatched` types: one that states a claim a paper could contradict (a predicate or
-   category the rules don't cover) may deserve a rule. To change the scope, write
-   `work/rules.json` (`reference/rules.md`) and rerun with `--rules work/rules.json`; say why in
-   `notes.md`. If `kept.misdirected_edges` isn't 0, note those edges for the transformation
-   team: claims rarely reach them. Record the pair count per rule in `notes.md`: it sets the
-   cost.
+   pairs dropped by the caps, the negated edges kept, and the `skipped` list of edge types with
+   the skip rule that covered them or `unmatched`. Look at the largest `unmatched` types: one
+   that states a claim a paper could contradict (a predicate or category the rules don't
+   cover) may deserve a rule. Edges mined from the literature (`knowledge_level:
+   text_co_occurrence`, `agent_type: text_mining_agent`) that a query or capped rule keeps are
+   capped whatever their predicate, in caps of their own (`text-co-occurrence`, `text-mined`,
+   provenance rules): they carry no publications or supporting sentence, so no other step can
+   check them, and the label step asks whether an abstract states the claim, not whether it
+   mentions both entities; the cap bounds the cost. Their statements keep the rule that chose
+   them (`gene-disease`), whose counts in the report leave them out. To change the scope, write
+   `work/rules.json` (`reference/rules.md`: rules match on categories, predicates, knowledge
+   level and agent type; a provenance rule can also skip) and rerun with
+   `--rules work/rules.json`; say why in `notes.md`. If `kept.misdirected_edges` isn't 0, note
+   those edges for the transformation team: claims rarely reach them. Record the pair count per
+   rule in `notes.md`: it sets the cost.
 
 2. **Search PubMed.** `augment.py pubmed`. One search per pair plus one fetch per ~200
-   abstracts: about 30,000 pairs an hour with an API key, 10,000 without. For a long job, run
+   abstracts: about 25,000 pairs an hour with an API key, 4,000 without (and above 500 uncached
+   searches the step won't start without one; see above). For a long job, run
    it as a background task with stderr redirected to `work/pubmed.log`, and wait for it to
    finish rather than polling. Failed pairs are listed on stderr (it returns 1 when more than
    5% fail); rerun it to retry them, since what succeeded is cached. Check its summary and
@@ -105,9 +119,11 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    number of calls and the estimated tokens and cost of a full run with the default model
    (`--model` for another), and writes the first request to `work/label_request_example.txt`.
    Read that file once to see exactly what the model gets. The estimate assumes 2,000 output
-   tokens a call, a guess until a sample measures it. Unless you were given a budget, don't
-   start a full labeling run estimated above $100: tune the prompt on samples, then stop and
-   report the estimate.
+   tokens a call, a guess until a sample measures it, and it covers labeling alone: the review
+   and quote repair passes that follow aren't estimated (on the Nov 12 2026 run they were 35%
+   and 7% of the total, with labeling 58%). `--budget USD` makes the dry run exit 1 when the
+   estimate is over it. Unless you were given a budget, don't start a full labeling run
+   estimated above $100: tune the prompt on samples, then stop and report the estimate.
 
 4. **Tune the prompt on a sample.** Copy `prompts/label.md` to `work/prompts/label.md` and run
    `augment.py label --prompt work/prompts/label.md --sample 25 --seed 1`. The prompt includes
@@ -225,7 +241,17 @@ a flag saying how many. Use `--max-label-cost USD` when you have agreed a differ
 the run (`inf` for none), and `--limit N` when you want exactly the first N pairs instead; with
 `--limit` the budget isn't checked. A rerun with a larger budget labels only the pairs not yet
 labeled. The budget covers labeling alone: review runs on those pairs' claims, so it shrinks
-with them, but its cost isn't estimated.
+with them, but its cost isn't estimated, nor is quote repair's. `--budget USD` is the stricter
+cap for a run that must not be trimmed: when the whole estimate is over it, the run stops with
+exit 1 before any model call and says so, instead of labeling what fits.
+
+When the label step ends with pairs not fully labeled (a call failed, or a reply left an
+abstract out; its summary warns), the full run runs label once more, since the answers already
+made are cached. If pairs are still not fully labeled after that, it warns with their count and
+goes on to ground, review and apply: their edges are written unchecked, and apply's report
+counts them as pairs not fully labeled. Rerun it to retry them. It doesn't stop there, since a
+call that fails the same way every time would stop every run; label's own rule still fails the
+step (exit 1) when more than 5% of the calls the pairs need failed.
 
 `--skip-review` leaves out the review step. Apply then holds every pair with a claim that
 would count but has no review, and writes its edges unchanged, so the run adds nothing

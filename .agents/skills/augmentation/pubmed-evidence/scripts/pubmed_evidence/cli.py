@@ -80,9 +80,9 @@ def _add_common(parser: argparse.ArgumentParser, *, top: bool) -> None:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=default(config.DEFAULT_CACHE_DIR),
+        default=default(None),
         help=f"the label cache and the UBERON release (default {config.DEFAULT_CACHE_DIR}; "
-        f"env KGB_AUGMENT_CACHE_DIR). The PubMed cache is the file env {CACHE_ENV} names "
+        f"env {config.CACHE_DIR_ENV}). The PubMed cache is the file env {CACHE_ENV} names "
         f"(default {DEFAULT_CACHE_PATH})",
     )
 
@@ -123,6 +123,15 @@ def _parser(prog: str = "kgb-augment") -> argparse.ArgumentParser:
         f"'inf' for no cap; ignored with --limit)",
     )
     full.add_argument(
+        "--budget",
+        dest="full_budget",
+        type=float,
+        metavar="USD",
+        help="US dollars labeling may cost by step 3's dry-run estimate; a run estimated above "
+        "it stops before any model call (review and quote repair aren't in the estimate; see "
+        "--max-label-cost to label only the first pairs that fit instead)",
+    )
+    full.add_argument(
         "--skip-review",
         action="store_true",
         help="skip the review step; step 6 holds every pair with a claim that would count but "
@@ -138,6 +147,10 @@ def _parser(prog: str = "kgb-augment") -> argparse.ArgumentParser:
 
 def _resolve(args: argparse.Namespace) -> argparse.Namespace:
     args.work = config.work_dir(args.output, args.work)
+    # Resolved here, not as the option's default, so it warns about an old cache directory only
+    # when no --cache-dir is given.
+    if args.cache_dir is None:
+        args.cache_dir = config.default_cache_dir()
     return args
 
 
@@ -147,6 +160,7 @@ FULL_RUN_OPTIONS = (
     "full_review_model",
     "full_limit",
     "full_max_label_cost",
+    "full_budget",
 )
 
 
@@ -206,18 +220,15 @@ def affordable(costs: list[float], budget: float) -> int:
     return len(costs)
 
 
-def _label_limit(common: argparse.Namespace, run) -> int | None:
-    """The full run's cap on step 3: None if every pair fits the budget (or --limit was given),
-    else how many of the first pairs do. Estimated with label's dry run, which sends nothing."""
-    if common.full_limit is not None:
-        return None
-    budget = common.full_max_label_cost
-    if budget is None:
-        budget = config.FULL_RUN_LABEL_BUDGET
+def _label_estimate(common: argparse.Namespace, run, limit: int | None = None) -> dict:
+    """Label's dry run on the full run's step 3 arguments (the first `limit` pairs, if given),
+    which sends nothing: the pairs with abstracts still to answer (`pairs_to_call`) and what
+    answering them would cost. Pairs already labeled cost nothing."""
     label = importlib.import_module(MODULES["label"])
     args = _step_args("label", common, run)
-    args.dry_run = True
-    s = label.label_pairs(
+    if limit is not None:
+        args.limit = limit
+    return label.label_pairs(
         args.work,
         args.cache_dir,
         model=args.model,
@@ -227,7 +238,35 @@ def _label_limit(common: argparse.Namespace, run) -> int | None:
         reasoning_effort=args.reasoning_effort,
         dry_run=True,
     )
-    costs = s.get("estimated_cost_by_pair", [])
+
+
+def _over_budget(common: argparse.Namespace, estimate: dict) -> bool:
+    """Whether --budget was given and the estimate is over it; says so if it is."""
+    budget, cost = common.full_budget, estimate["estimated_cost"]
+    if budget is None or cost is None or cost <= budget:
+        return False
+    label = importlib.import_module(MODULES["label"])
+    print(
+        f"[augmentation] error: labeling would cost about {label._money(cost)} by the dry "
+        f"run's estimate, over the {label._money(budget)} budget; stopping before any model "
+        "call. The estimate covers labeling alone: review and quote repair come on top. Rerun "
+        "with a larger --budget, or with --max-label-cost to label only the first pairs that "
+        "fit.",
+        file=sys.stderr,
+    )
+    return True
+
+
+def _label_limit(common: argparse.Namespace, estimate: dict) -> int | None:
+    """The full run's cap on step 3: None if every pair fits the budget (or --limit was given),
+    else how many of the first pairs do, by the dry run's estimate."""
+    if common.full_limit is not None:
+        return None
+    budget = common.full_max_label_cost
+    if budget is None:
+        budget = config.FULL_RUN_LABEL_BUDGET
+    label = importlib.import_module(MODULES["label"])
+    costs = estimate.get("estimated_cost_by_pair", [])
     n = affordable(costs, budget)
     if n == len(costs):
         return None
@@ -241,6 +280,36 @@ def _label_limit(common: argparse.Namespace, run) -> int | None:
     return n
 
 
+def _finish_labeling(common: argparse.Namespace, run, label, args: argparse.Namespace) -> int:
+    """After a label run that returned 0: if pairs are still not fully labeled (a call failed,
+    or a reply left an abstract out), run label once more, since answers already made are
+    cached. If pairs still are, warn and return 0, so ground, review and apply go on: apply
+    writes their edges unchecked and counts them, and a call that fails the same way every
+    time would otherwise stop every full run here. Label's own share of failed calls
+    (`llm.too_many_failed`) still fails the step. The count is the dry run's `pairs_to_call`
+    on the same pairs."""
+    left = _label_estimate(common, run, args.limit)["pairs_to_call"]
+    if not left:
+        return 0
+    print(
+        f"[augmentation] {left:,} pairs aren't fully labeled (a call failed, or a reply left "
+        "an abstract out); running label again",
+        file=sys.stderr,
+    )
+    rc = label.run(args)
+    if rc:
+        return rc
+    left = _label_estimate(common, run, args.limit)["pairs_to_call"]
+    if left:
+        print(
+            f"[augmentation] warning: {left:,} pairs still aren't fully labeled after a second "
+            "label run, so their edges stay unchecked; apply's report counts them as pairs not "
+            "fully labeled. Rerun to retry them; answers already made are cached.",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def run_all(common: argparse.Namespace) -> int:
     run = records.read_label_run(common.work)
     steps = [s for s in FULL_RUN if not (common.skip_review and s == "review")]
@@ -250,13 +319,18 @@ def run_all(common: argparse.Namespace) -> int:
         args = _step_args(name, common, run)
         if name == "label":
             try:
-                limit = _label_limit(common, run)
+                estimate = _label_estimate(common, run)
             except (FileNotFoundError, ValueError) as e:
                 print(f"label: error: {e}", file=sys.stderr)
                 return 1
+            if _over_budget(common, estimate):
+                return 1
+            limit = _label_limit(common, estimate)
             if limit is not None:
                 args.limit = limit
         rc = module.run(args)
+        if name == "label" and not rc:
+            rc = _finish_labeling(common, run, module, args)
         if rc:
             print(f"[augmentation] {name} failed (exit {rc}); later steps not run", file=sys.stderr)
             return rc
@@ -271,10 +345,9 @@ def main(argv: list[str] | None = None, prog: str = "kgb-augment") -> int:
     # A step's own defaults would silently win over these.
     if any(getattr(args, k) is not None for k in FULL_RUN_OPTIONS) or args.skip_review:
         parser.error(
-            "--model, --reasoning-effort, --review-model, --limit, --max-label-cost and "
-            "--skip-review before a "
-            f"step name are for the full run; put them after it ({parser.prog} {args.command} "
-            "--model ...)"
+            "--model, --reasoning-effort, --review-model, --limit, --max-label-cost, --budget "
+            f"and --skip-review before a step name are for the full run; put them after it "
+            f"({parser.prog} {args.command} --model ...)"
         )
     module = importlib.import_module(MODULES[args.command])
     return module.run(args)

@@ -142,7 +142,7 @@ workflow brings in the rest where they're needed.
    - **Be gentle with the knowledge base's servers.** Run one sampling or check command at a time
      per knowledge base, never many in parallel: hosts block bursts with a bot challenge, and then
      every later request fails. The scripts pace their own requests and cache downloads (in
-     `~/.cache/croissant-semantics/downloads`; `--refresh` downloads again), so re-running is
+     `data/cache/croissant-semantics/downloads`; `--refresh` downloads again), so re-running is
      cheap (a copy cached under a larger `--max-mb` serves a smaller one). If a script
      reports a bot challenge or an HTTP 403, stop sampling that host, don't try to get past it,
      and say in `notes.md` which checks couldn't run. The scripts then refuse that host for an
@@ -198,7 +198,8 @@ workflow brings in the rest where they're needed.
    - **When the scripts can't read a source**, fetch the files yourself (one at a time, into
      `OUT/work/`) and point the scripts at them with `--url-map OLD=file:///abs/path/` so their
      checks still run, rather than writing your own profilers. Downloads are cached, and
-     `~/.cache/croissant-semantics/downloads/index.tsv` maps each cached file to its URL.
+     `data/cache/croissant-semantics/downloads/index.tsv` maps each cached file to its URL
+     (under `KGB_CACHE_DIR` if set, `~/.cache` when the skill runs outside the repository).
    - If a layout's "column names" are really data (no header row, so the pipeline took the
      first data row as names, and every file became its own layout), skip it and report it in
      `notes.md` as a pipeline problem.

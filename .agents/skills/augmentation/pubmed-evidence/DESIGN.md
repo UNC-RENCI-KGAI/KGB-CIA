@@ -35,7 +35,12 @@ one module of the library in `scripts/pubmed_evidence/`. The agent runs the labe
 sample, reads the results, tunes the prompt, then runs the full set. It calls the models listed
 in `config.MODELS`: the Azure OpenAI deployments Pi uses, and Claude models on Anthropic's own API.
 `kgb-augment` (`agents/augmentation/cli.py`) runs the same library. With no subcommand it runs
-every step with its defaults, which is what `shared/pipeline.py` does.
+every step with its defaults, which is what `shared/pipeline.py` does: it estimates labeling
+with the dry run first (`--budget` stops it there, `--max-label-cost` trims it to the pairs
+that fit), and runs label a second time when the first leaves pairs not fully labeled. When
+they still are, it warns and goes on: step 6 writes their edges unchecked and its report counts
+them, and a call that fails the same way every time can't stop every run. Label's own limit on
+failed calls (`llm.MAX_FAILED_SHARE`, 5%) still stops the run.
 
 - **Bulk extraction:** step 3 calls a cheap model directly rather than through subagents. A
   subagent carries the harness's system prompt and tool definitions and re-sends its context
@@ -73,8 +78,9 @@ every step with its defaults, which is what `shared/pipeline.py` does.
 ## Step 1: Which edges to query
 
 Choose edges by (subject category, predicate, object category), matching on predicate ancestry
-so that child predicates the transform picks are covered. A relationship qualifies when
-abstracts state it as a claim and a paper could contradict it.
+so that child predicates the transform picks are covered, and by the edge's `knowledge_level`
+and `agent_type`. A relationship qualifies when abstracts state it as a claim and a paper could
+contradict it.
 
 | Tier | Subject → predicate → object | Main TCRD sources |
 | --- | --- | --- |
@@ -87,10 +93,21 @@ abstracts state it as a claim and a paper could contradict it.
 | Skip | Gene → `expressed_in` → AnatomicalEntity/Cell | GTEx, HPA, Jensen TISSUES |
 | Skip | `orthologous_to`, `has_part`, `subclass_of`, `member_of` | Orthologs, Pfam, PANTHER, DTO |
 | Skip | `occurs_together_in_literature_with` | Literature co-occurrence |
+| Capped, by provenance | any edge a query or capped rule above keeps with `knowledge_level: text_co_occurrence` or `agent_type: text_mining_agent`, whatever its predicate | eRAM's text mining (`gene_associated_with_condition`) |
 
 - **Capped:** gene–gene interactions are numerous and symmetric, and many come from a single
   high-throughput screen. Query only pairs above a confidence cutoff, and dedupe unordered
   pairs. Phenotype names are long and varied, so expect low recall.
+- **Text-mined edges are capped,** in caps of their own, whatever statement rule keeps them.
+  They are the least trustworthy edges in the graph, and they carry no publications or
+  supporting sentence, so the cleaning stage's evidence check can't judge them: this step is
+  the only one that can. Checking them isn't circular, since step 3 asks whether an abstract
+  states the relationship as a claim, not whether it mentions both entities. The cap bounds
+  the cost: eRAM writes 113,706 co-mentions as `gene_associated_with_condition` with
+  `knowledge_level: text_co_occurrence`, and the Nov 12 2026 run, which skipped only
+  `occurs_together_in_literature_with`, put 127,774 of its 131,195 pairs in the query tier
+  that way. How many pairs the capped default keeps on the whole graph needs a rerun. Two
+  provenance rules (below) set the cap; a rules file can make them skip rules instead.
 - **Skipped:** pathway and GO names rarely appear verbatim in abstracts, and GO annotations
   already carry their own references and evidence codes. Expression edges are measurements
   rather than claims and are very numerous. Literature co-occurrence isn't a claim, and
@@ -99,6 +116,14 @@ abstracts state it as a claim and a paper could contradict it.
 
 Group the kept edges by unordered node pair, since one search serves edges in both directions.
 
+- **Two kinds of rule:** a statement rule names predicates and picks edges by what they say;
+  a provenance rule names only a knowledge level or an agent type, and lowers the tier of the
+  edges a statement rule picked, never raising it. A skip statement rule wins over any
+  provenance rule (a text-mined GO edge is skipped as `pathway-go`). An edge a provenance rule
+  lowers keeps its statement rule, whose predicates its pair's claims may use, so a provenance
+  rule changes no reply schema and no prompt version. A statement with edges in its statement
+  rule's own tier and lowered edges takes the higher tier; every edge counts in its sources,
+  PMIDs and score (`reference/rules.md`).
 - **Matching:** "Gene" and "Gene/Protein" match `biolink:GeneOrGeneProduct`, so proteins
   NodeNorm didn't conflate into genes still match. "ChemicalEntity/Drug" matches
   `biolink:ChemicalEntity`. An edge also matches in reverse when Biolink marks its predicate
@@ -113,7 +138,10 @@ Group the kept edges by unordered node pair, since one search serves edges in bo
   2026-11-05 no in-scope edge of Monarch or DrugCentral was misdirected.
 - **Scores** for the caps come from the edge's `score`, `confidence_score`,
   `has_confidence_score`, `combined_score` or `stringdb_combined_score`, never from the
-  `lit_support_score` that step 6 writes. Without a score, a pair ranks last.
+  `lit_support_score` that step 6 writes. Without a score, a pair ranks last. Ties, unscored
+  pairs among them, go to the pair with the most distinct primary knowledge sources, then by a
+  SHA-256 hash of the pair id, so that an unscored cap isn't the pairs whose CURIEs sort first
+  (`reference/rules.md`, "Capped rules").
 - The rules are data in `scripts/pubmed_evidence/scope.py`; `--rules FILE` replaces them
   (`reference/rules.md`).
 
@@ -172,9 +200,13 @@ sort=relevance, retmax=20
 
 - **Rate limits:** 3 requests a second without an API key and 10 with one (one key per NCBI
   account). The client sends `tool` and `email` with every request, and reads the key and
-  email from `NCBI_API_KEY` and `NCBI_EMAIL`.
+  email from `NCBI_API_KEY` and `NCBI_EMAIL`. Without the key the step says so at its start,
+  and stops before sending anything when more than `KEYLESS_SEARCHES` (500) searches aren't
+  cached, unless `--without-key`: the Nov 12 2026 run searched 2,957 pairs in 42 minutes
+  without a key and 500 in 75 seconds with one, because one shell lacked it.
 - **Throughput:** one ESearch per pair plus one EFetch per ~200 deduplicated PMIDs, so roughly
-  30,000 pairs an hour with a key. ESearch returns at most 10,000 IDs per query.
+  25,000 pairs an hour with a key and 4,000 without, as measured on Nov 12 2026. ESearch
+  returns at most 10,000 IDs per query.
 - **Off-peak:** NCBI asks that large jobs run on weekends or between 9pm and 5am ET on weekdays.
 
 Kept in reserve:
@@ -321,8 +353,8 @@ qualifier value is an enum, so code checks only what a schema can't say (above).
   fails the call. An abstract the reply leaves out stays unanswered and is asked again next
   run; it is counted, not a failed call.
 - **The prompt version** hashes the prompt with the files it includes, `FORMAT_VERSION`, every
-  non-skip rule's schema and the reasoning effort, so one run has one version, and runs on two
-  graphs with the same rules share it. A deployment that doesn't support strict output fails
+  non-skip statement rule's schema (provenance rules have none) and the reasoning effort, so
+  one run has one version, and runs on two graphs with the same rules share it. A deployment that doesn't support strict output fails
   with its own error rather than falling back to JSON mode.
 - The message shows each abstract's PubMed publication types, which helps the model's design
   answer.
@@ -701,15 +733,18 @@ abstracts, and each candidate model labels the same pairs. Two gold tools serve 
 
 ## Caching
 
-Two SQLite caches under `data/`, kept out of git and shareable across a team (`KGB_AUGMENT_CACHE_DIR`):
+Two SQLite caches under the cache root (`shared/paths.py`: `KGB_CACHE_DIR`, else the
+repository's `data/cache/`, whatever directory a run starts in), kept out of git and shareable
+across a team:
 
 - **PubMed:** `shared.pubmed`'s cache, the file `KGB_PUBMED_CACHE` names (default
-  `data/cache/pubmed.sqlite`), which every agent that reads PubMed shares: ESearch results
+  `data/cache/pubmed/pubmed.sqlite`), which every agent that reads PubMed shares: ESearch results
   keyed by query string, with the retrieval date; abstracts keyed by PMID, so an abstract
   shared by several pairs is fetched once and reruns make no requests; and NodeNorm entries.
   The skill adds one table of its own, the anatomy groundings, by name. PubMed changes over
   time, so the query string and retrieval date stay with the evidence.
-- **Claims:** in the cache directory (`--cache-dir`, default `data/augmentation/cache`), with
+- **Claims:** in the cache directory (`--cache-dir` or `KGB_AUGMENT_CACHE_DIR`, default
+  `data/cache/augmentation`), with
   the pinned `uberon-basic.obo` beside it. Each abstract's answer for a pair, keyed by (pair,
   PMID, prompt version, model), with its design and claims; each claim's checks; the review's
   verdicts and the sentence repairs, keyed by the claim's id and their own model and prompt
@@ -734,8 +769,14 @@ sends every claim that would count, those that only add a PMID to an edge includ
 share grows with the number of supported edges; the tuning sample measures it too. Grounding
 calls are free. The dry run's estimate assumes
 2,000 output tokens a call (`label.ESTIMATED_OUTPUT_TOKENS`), a guess the tuning sample will
-replace. If a 20-abstract call's 95th percentile of output tokens exceeds 70% of the model's
-16,000-token cap, reasoning included, `ABSTRACTS_PER_CALL` drops to 10.
+replace, and it covers labeling alone; the dry run says so, since review and quote repair come
+on top and no multiplier is assumed for them. On the Nov 12 2026 run labeling was 58% of the
+total, review 35% and repair 7%, with the labeling estimate itself 20% over the actual
+($3.44 estimated, $2.81 spent). `label --dry-run --budget USD` exits 1 when the estimate is
+over the budget, and the full run's `--budget` stops the run before any model call on the
+same estimate; `--max-label-cost` instead labels the first pairs that fit. If a 20-abstract
+call's 95th percentile of output tokens exceeds 70% of the model's 16,000-token cap, reasoning
+included, `ABSTRACTS_PER_CALL` drops to 10.
 
 ## Not used: embeddings
 
@@ -779,7 +820,7 @@ saves little. Revisit if we move to full text and need to choose which paragraph
 - Transformation team: whether TCRD's PMID columns are carried into `publications`.
 - Who holds the NCBI API key.
 - Score scales differ by source (STRING's raw combined score is 0–1000), so one `--min-score`
-  for both capped rules is crude.
+  for every capped rule, the text-mined edges' included, is crude.
 - Recall: MeSH supplementary concepts (`MESH:C…`, many ChEMBL compounds) could be searched
   with `[nm]`, and gene symbols under 3 characters (F2, C3) are dropped from queries.
 - Deferred until the cleaning or MCP stage needs them: flat fields beside `lit_evidence` for a
