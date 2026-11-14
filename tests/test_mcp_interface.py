@@ -779,6 +779,22 @@ def test_server_instructions_define_provenance_workflow():
     assert "query_cypher" in SERVER_INSTRUCTIONS
 
 
+def test_server_instructions_define_focused_session_workflow():
+    instructions = " ".join(SERVER_INSTRUCTIONS.split())
+    assert "Focused sessions" in instructions
+    # Resolve seeds and confirm the scope with the user before answering.
+    assert "resolve the seed nodes" in instructions
+    assert "confirm the scope" in instructions
+    # Set-level questions filter on the seeds through parameters, never inlined IDs.
+    assert "WHERE n.id IN $seeds" in instructions
+    assert "passed as parameters" in instructions
+    # Lineage still backs every claimed connection inside a focus.
+    assert "get_edges_between(include_lineage=true) for any claimed connection" in instructions
+    # Answers state the scope, and there is a path when raw Cypher is disabled.
+    assert "limited to the focus" in instructions
+    assert "If query_cypher is not available" in instructions
+
+
 def test_query_cypher_rejects_write_before_driver_access():
     service = Neo4jService("unused", "unused", "unused", driver=_FakeDriver())
     with pytest.raises(ValueError, match="write"):

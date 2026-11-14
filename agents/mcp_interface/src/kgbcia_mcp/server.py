@@ -20,7 +20,19 @@ citing knowledge sources, publications and source records verbatim. When no conn
 check get_graph_info's build section for failed or missing sources before concluding there is no
 evidence. Whenever an answer uses an edge with flags, say it is flagged and give each flag's
 reason verbatim, including any PMID. Use query_cypher only for aggregates that fixed tools
-cannot answer."""
+cannot answer.
+
+Focused sessions: when the user asks to work with part of the graph (a gene or protein family, a
+disease, a drug class, a pathway or one source), scope the conversation instead of cutting a
+subgraph. First resolve the seed nodes: search_nodes for names, or one counting query_cypher by
+label and name for a whole family. Then tell the user how many seeds you found, with a few
+examples, and confirm the scope before going on. Keep the seed IDs for the rest of the session.
+Answer questions about the whole set with one query_cypher call that filters on them (WHERE
+n.id IN $seeds, with the IDs passed as parameters), and questions about specific members with
+the usual tools, including get_edges_between(include_lineage=true) for any claimed connection.
+Say in each answer that it is limited to the focus, and say so when a question reaches beyond
+it. If query_cypher is not available, work member by member with the usual tools and keep the
+focus small."""
 
 
 def create_server(
