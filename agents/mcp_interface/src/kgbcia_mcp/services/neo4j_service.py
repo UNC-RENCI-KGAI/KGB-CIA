@@ -575,7 +575,7 @@ class Neo4jService:
                 "RETURN r AS edge, subject.id AS edge_subject, object.id AS edge_object, "
                 "labels(subject) AS subject_categories, labels(object) AS object_categories"
             )
-        query = "CALL { " + " UNION ALL ".join(branches) + " } RETURN * LIMIT 2"
+        query = "CALL () { " + " UNION ALL ".join(branches) + " } RETURN * LIMIT 2"
         rows = self.execute_read(query, {"edge_id": edge_id}, row_limit=2).rows
         if not rows:
             return {"hint": "No edge has this ID. Copy edge_id verbatim from an edge result."}
@@ -599,14 +599,13 @@ class Neo4jService:
         if _FORBIDDEN_CYPHER.search(_strip_literals_and_comments(statement)):
             raise ValueError("write and administrative Cypher is not allowed")
         supplied = dict(parameters or {})
-        if "kgb_mcp_limit" in supplied:
-            raise ValueError("parameter name kgb_mcp_limit is reserved")
-        wrapped = f"CALL {{ {statement} }} RETURN * LIMIT $kgb_mcp_limit"
-        supplied["kgb_mcp_limit"] = limit + 1
-        self._explain_read_only(wrapped, supplied)
+        # Run the statement as written. execute_read stops reading after limit + 1 records, so
+        # no CALL { } wrapper is needed for the row cap; wrapping would reject unaliased columns
+        # (RETURN n.id, n.name) and procedure calls without YIELD.
+        self._explain_read_only(statement, supplied)
         rows = list(
             self.execute_read(
-                wrapped,
+                statement,
                 supplied,
                 timeout=_READ_TIMEOUT_SECONDS,
                 row_limit=limit + 1,

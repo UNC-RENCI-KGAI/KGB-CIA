@@ -21,7 +21,10 @@ def register_query_tools(mcp: FastMCP, svc: Any) -> None:
         Categories are labels such as ``:`biolink:Gene```; node IDs are ``n.id``; predicates
         are relationship types; edge IDs are ``r.id``. Examples: ``MATCH (n:`biolink:Gene`)
         RETURN count(n) AS genes``; or ``MATCH (n:`biolink:Gene`) WHERE n.id=$id RETURN n`` with
-        ``parameters={'id':'NCBIGene:1017'}``. Presentation Guidelines: state the query and
+        ``parameters={'id':'NCBIGene:1017'}``. Column aliases are optional, and procedures
+        such as ``CALL db.labels()`` work without YIELD. Results beyond ``limit`` rows are
+        discarded, so add LIMIT or ORDER BY ... LIMIT to large queries to keep them fast.
+        Presentation Guidelines: state the query and
         preserve returned IDs, labels and provenance verbatim. Use this only for aggregates or
         patterns fixed tools cannot express; next call ``explain_edge`` for claimed connections.
         """

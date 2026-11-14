@@ -821,13 +821,111 @@ def test_query_cypher_uses_documented_read_timeout(monkeypatch):
     assert service.query_cypher("RETURN 42 AS answer", limit=1)["results"] == [{"answer": 42}]
     assert calls == [
         {
-            "cypher": "CALL { RETURN 42 AS answer } RETURN * LIMIT $kgb_mcp_limit",
-            "parameters": {"kgb_mcp_limit": 2},
+            "cypher": "RETURN 42 AS answer",
+            "parameters": {},
             "timeout": _READ_TIMEOUT_SECONDS,
             "row_limit": 2,
         }
     ]
     assert _READ_TIMEOUT_SECONDS == 30.0
+
+
+@pytest.mark.parametrize(
+    "cypher",
+    [
+        "MATCH (n:`biolink:Gene`) RETURN n.id, n.name",
+        "CALL db.labels()",
+    ],
+)
+def test_query_cypher_runs_unaliased_and_procedure_queries_unwrapped(monkeypatch, cypher):
+    service = Neo4jService("unused", "unused", "unused", driver=_FakeDriver())
+    explained = []
+    executed = []
+    monkeypatch.setattr(
+        service, "_explain_read_only", lambda query, params: explained.append((query, params))
+    )
+
+    def execute_read(query, parameters, *, timeout, row_limit):
+        executed.append((query, parameters, row_limit))
+        return ReadResult(({"n.id": "NCBIGene:1017", "n.name": "CDK2"},), truncated=False)
+
+    monkeypatch.setattr(service, "execute_read", execute_read)
+    result = service.query_cypher(f"{cypher};", {"unused": 1}, limit=5)
+
+    # The statement reaches EXPLAIN and Neo4j exactly as written, minus the trailing semicolon.
+    assert explained == [(cypher, {"unused": 1})]
+    assert executed == [(cypher, {"unused": 1}, 6)]
+    assert result["results"] == [{"n.id": "NCBIGene:1017", "n.name": "CDK2"}]
+    assert result["truncated"] is False
+
+
+def test_query_cypher_row_cap_truncates_without_a_wrapper(monkeypatch):
+    class _Record:
+        def __init__(self, value):
+            self.value = value
+
+        def items(self):
+            return [("n.id", f"NCBIGene:{self.value}")]
+
+    class _ManyRecordsTransaction:
+        def __init__(self):
+            self.queries = []
+
+        def run(self, query, parameters):
+            self.queries.append(query)
+            return (_Record(value) for value in range(10))
+
+    transaction = _ManyRecordsTransaction()
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute_read(self, callback):
+            return callback(transaction)
+
+    class _Driver:
+        def session(self, **_kwargs):
+            return _Session()
+
+        def close(self):
+            return None
+
+    service = Neo4jService("unused", "unused", "unused", driver=_Driver())
+    monkeypatch.setattr(service, "_explain_read_only", lambda *_args: None)
+    result = service.query_cypher("MATCH (n) RETURN n.id", limit=3)
+
+    assert transaction.queries == ["MATCH (n) RETURN n.id"]
+    assert [row["n.id"] for row in result["results"]] == [
+        "NCBIGene:0",
+        "NCBIGene:1",
+        "NCBIGene:2",
+    ]
+    assert result["truncated"] is True
+
+
+def test_explain_edge_lookup_uses_call_with_empty_scope(monkeypatch):
+    service = Neo4jService(
+        "unused",
+        "unused",
+        "unused",
+        driver=_FakeDriver(),
+        graph_metadata={"statistics": _toy_statistics()},
+    )
+    queries = []
+
+    def execute_read(query, parameters, **_kwargs):
+        queries.append(query)
+        return ReadResult((), truncated=False)
+
+    monkeypatch.setattr(service, "execute_read", execute_read)
+    service.explain_edge("edge-0")
+
+    # Neo4j 5.26 deprecates CALL { }; the scope clause CALL () { } avoids the warning.
+    assert queries and queries[0].startswith("CALL () { ")
 
 
 def test_stage_cli_runs_as_a_direct_script():
