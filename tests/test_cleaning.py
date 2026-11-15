@@ -4,6 +4,7 @@ import pytest
 
 from agents.cleaning import garbage
 from agents.cleaning.cli import main
+from shared.schema import edge_statement_id
 
 RESOLVED = ["biolink:Protein", "biolink:NamedThing"]
 
@@ -146,6 +147,75 @@ def test_drop_lists_folder_matches_on_edge_key_not_id(graph, tmp_path):
     assert report.dropped_edges["drop_list:evidence_check"] == 1
     assert report.edges_out == 3
     assert report.settings["drop_lists"] == {"evidence_check": 1}
+
+
+@pytest.fixture
+def two_mechanisms(tmp_path):
+    """One pair, one source, two edges that differ only in their mechanism."""
+    src = tmp_path / "merged"
+    src.mkdir()
+    _write(src / "nodes.jsonl", [_node("UniProtKB:A"), _node("UniProtKB:B")])
+    _write(
+        src / "edges.jsonl",
+        [
+            _edge("UniProtKB:A", "UniProtKB:B", causal_mechanism_qualifier="agonism"),
+            _edge("UniProtKB:A", "UniProtKB:B", causal_mechanism_qualifier="antagonism"),
+        ],
+    )
+    return src
+
+
+def _mechanisms(path):
+    return sorted(e["causal_mechanism_qualifier"] for e in _read(path / "edges.jsonl"))
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        {"statement_id": edge_statement_id(
+            _edge("UniProtKB:A", "UniProtKB:B", causal_mechanism_qualifier="agonism"))},
+        {"causal_mechanism_qualifier": "agonism"},  # no statement_id: its qualifiers name it
+    ],
+    ids=["statement_id", "qualifiers"],
+)  # fmt: skip
+def test_a_list_line_naming_a_statement_matches_that_edge_only(two_mechanisms, tmp_path, line):
+    out = tmp_path / "clean"
+    (out / "drop_lists").mkdir(parents=True)
+    key = {k: v for k, v in _edge("UniProtKB:A", "UniProtKB:B").items() if k != "agent_type"}
+    _write(out / "drop_lists" / "check.jsonl", [{**key, **line}])
+    report = garbage.collect(two_mechanisms, out)
+    assert report.dropped_edges == {"drop_list:check": 1}
+    assert _mechanisms(out) == ["antagonism"]
+
+
+def test_a_list_line_without_a_statement_matches_every_qualified_edge(two_mechanisms, tmp_path):
+    """The format before lines named a statement (the Nov 9 drop list) still works as it did."""
+    out = tmp_path / "clean"
+    (out / "drop_lists").mkdir(parents=True)
+    _write(
+        out / "drop_lists" / "check.jsonl",
+        [{"subject": "UniProtKB:A", "predicate": "biolink:interacts_with",
+          "object": "UniProtKB:B", "primary_knowledge_source": "infores:test"}],
+    )  # fmt: skip
+    report = garbage.collect(two_mechanisms, out)
+    assert report.dropped_edges == {"drop_list:check": 2}
+
+
+def test_a_flag_line_naming_a_statement_flags_that_edge_only(two_mechanisms, tmp_path):
+    out = tmp_path / "clean"
+    (out / "flag_lists").mkdir(parents=True)
+    agonism = _edge("UniProtKB:A", "UniProtKB:B", causal_mechanism_qualifier="agonism")
+    line = {**agonism, "statement_id": edge_statement_id(agonism)}
+    flag = {"flag": "wrong_mechanism", "reason": "PMID:1 reports antagonism"}
+    _write(out / "flag_lists" / "check.jsonl", [{**line, **flag}])
+    garbage.collect(two_mechanisms, out)
+    flags = {
+        e["causal_mechanism_qualifier"]: e.get("kgbcia_flags") for e in _read(out / "edges.jsonl")
+    }
+    assert flags == {"agonism": ["wrong_mechanism"], "antagonism": None}
+    [flagged] = _read(out / "flagged_edges.jsonl")
+    assert flagged["statement_id"] == line["statement_id"]
+    assert flagged["causal_mechanism_qualifier"] == "agonism"
 
 
 def test_flags_are_written_on_the_edges_for_the_mcp(graph, tmp_path):
@@ -312,11 +382,16 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     assert written["flagged_edges"] == len(flagged) == 4  # 1 violation, 2 opposing, 1 self loop
     assert not any(f["object"] == "UMLS:P" for f in flagged), "a dropped edge is not flagged"
     violation = next(f for f in flagged if "type_violation" in f["flags"])
+    enables = next(
+        e for e in _read(tmp_path / "out" / "edges.jsonl") if "enables" in e["predicate"]
+    )
+    statement = edge_statement_id(enables)
     assert violation == {
         "subject": "NCBIGene:1",
         "predicate": "biolink:enables",
         "object": "REACT:1",
         "primary_knowledge_source": "infores:test",
+        "statement_id": statement,
         "flags": ["type_violation"],
         "subject_categories": ["biolink:Gene"],
         "object_categories": ["biolink:Pathway"],
@@ -333,7 +408,7 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     drop = tmp_path / "promote.jsonl"
     _write(drop, [violation])
     assert garbage.load_drop_list(drop) == {
-        ("NCBIGene:1", "biolink:enables", "REACT:1", "infores:test")
+        ("NCBIGene:1", "biolink:enables", "REACT:1", "infores:test", statement)
     }
 
 

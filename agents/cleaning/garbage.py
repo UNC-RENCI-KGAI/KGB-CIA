@@ -65,7 +65,11 @@ edges it took down and the edges kept with a flag, and the sources and predicate
 edges, most costly first: the identifiers a plan fix needs, not just the prefix.
 
 Drop and flag lists key edges by subject, predicate, object and primary knowledge source, not
-by edge id: the merge assigns new uuids on every run, so ids wouldn't match the next build.
+by edge id: the merge assigns new uuids on every run, so ids wouldn't match the next build. A
+line can also name the edge's statement, so it matches only the edge that makes it, not others
+that differ from it only in qualifiers: by its `statement_id` (`shared.schema.edge_statement_id`,
+as the evidence check writes it), or else by its own qualifier slots and `negated`. A line with
+neither matches the edge however it is qualified.
 """
 
 from __future__ import annotations
@@ -78,8 +82,11 @@ from functools import cache
 from pathlib import Path
 
 from agents.cleaning import biolink_types
+from shared.schema import edge_negated, edge_qualifiers, edge_statement_id
 
 EdgeKey = tuple[str, str, str, str]
+# a drop- or flag-list line's key: the EdgeKey and the statement it names, "" for any
+ListKey = tuple[str, str, str, str, str]
 
 EXAMPLES_PER_REASON = 5
 ATTENTION_SHARE = 0.5  # a source losing at least this share of its edges is listed under attention
@@ -148,8 +155,28 @@ def edge_key(edge: dict) -> EdgeKey:
     )
 
 
-def load_drop_list(path: Path) -> set[EdgeKey]:
-    """Edge keys from a JSON-lines file, one edge per line with the four key fields.
+def list_key(record: dict) -> ListKey:
+    """A drop- or flag-list line's key: its EdgeKey and the statement it names, by its
+    `statement_id`, else by its qualifier slots and `negated` if it has any, else "" (any)."""
+    key = edge_key(record)
+    if record.get("statement_id"):
+        statement = record["statement_id"]
+    elif all(key[:3]) and (edge_qualifiers(record) or edge_negated(record)):
+        statement = edge_statement_id(record)
+    else:
+        statement = ""
+    return (*key, statement)
+
+
+def edge_list_keys(edge: dict) -> tuple[ListKey, ListKey]:
+    """The list keys that match an edge: the one naming its statement, and the one naming none."""
+    key = edge_key(edge)
+    return (*key, edge_statement_id(edge)), (*key, "")
+
+
+def load_drop_list(path: Path) -> set[ListKey]:
+    """List keys from a JSON-lines file, one edge per line with the four key fields and,
+    optionally, its statement (`list_key`).
 
     Other fields on a line (a reason, a score) are allowed and ignored here.
     """
@@ -159,8 +186,8 @@ def load_drop_list(path: Path) -> set[EdgeKey]:
             if not line.strip():
                 continue
             record = json.loads(line)
-            key = edge_key(record)
-            if not all(key):
+            key = list_key(record)
+            if not all(key[:4]):
                 raise ValueError(
                     f"{path}:{number}: a drop-list line needs subject, predicate, object and "
                     "primary_knowledge_source"
@@ -169,25 +196,26 @@ def load_drop_list(path: Path) -> set[EdgeKey]:
     return keys
 
 
-def load_drop_lists(directory: Path) -> dict[str, set[EdgeKey]]:
+def load_drop_lists(directory: Path) -> dict[str, set[ListKey]]:
     """Every `*.jsonl` drop list in a directory, by file stem. A missing directory means none."""
     if not directory.is_dir():
         return {}
     return {path.stem: load_drop_list(path) for path in sorted(directory.glob("*.jsonl"))}
 
 
-def load_flag_list(path: Path) -> dict[EdgeKey, list[tuple[str, str]]]:
-    """(flag, reason) pairs by edge key from a JSON-lines file: the four key fields, a `flag`
-    (a short name such as `wrong_mechanism`) and a `reason` (one plain sentence for a user)."""
-    flags: dict[EdgeKey, list[tuple[str, str]]] = defaultdict(list)
+def load_flag_list(path: Path) -> dict[ListKey, list[tuple[str, str]]]:
+    """(flag, reason) pairs by list key from a JSON-lines file: the four key fields, optionally
+    the statement (`list_key`), a `flag` (a short name such as `wrong_mechanism`) and a `reason`
+    (one plain sentence for a user)."""
+    flags: dict[ListKey, list[tuple[str, str]]] = defaultdict(list)
     with open(path) as f:
         for number, line in enumerate(f, 1):
             if not line.strip():
                 continue
             record = json.loads(line)
-            key = edge_key(record)
+            key = list_key(record)
             flag, reason = record.get("flag"), record.get("reason")
-            if not all(key) or not flag or not reason:
+            if not all(key[:4]) or not flag or not reason:
                 raise ValueError(
                     f"{path}:{number}: a flag-list line needs subject, predicate, object, "
                     "primary_knowledge_source, flag and reason"
@@ -196,7 +224,7 @@ def load_flag_list(path: Path) -> dict[EdgeKey, list[tuple[str, str]]]:
     return dict(flags)
 
 
-def load_flag_lists(directory: Path) -> dict[str, dict[EdgeKey, list[tuple[str, str]]]]:
+def load_flag_lists(directory: Path) -> dict[str, dict[ListKey, list[tuple[str, str]]]]:
     """Every `*.jsonl` flag list in a directory, by file stem. A missing directory means none."""
     if not directory.is_dir():
         return {}
@@ -370,7 +398,7 @@ def edge_drop_reason(
     edge: dict,
     known: set[str],
     unresolved: set[str],
-    drop_lists: dict[str, set[EdgeKey]],
+    drop_lists: dict[str, set[ListKey]],
 ) -> str | None:
     """Why this edge is dropped, or None to keep it.
 
@@ -390,9 +418,9 @@ def edge_drop_reason(
     if subject in unresolved and obj in unresolved:
         return "unresolved_both_ends"
     if drop_lists:
-        key = edge_key(edge)
+        exact, any_statement = edge_list_keys(edge)
         for name, keys in drop_lists.items():
-            if key in keys:
+            if exact in keys or any_statement in keys:
                 return f"drop_list:{name}"
     return None
 
@@ -515,7 +543,7 @@ def collect(
     drop_lists = load_drop_lists(drop_lists_dir)
     flag_lists_dir = flag_lists_dir or drop_lists_dir.parent / "flag_lists"
     flag_lists = load_flag_lists(flag_lists_dir)
-    listed_flags: dict[EdgeKey, list[tuple[str, str]]] = defaultdict(list)
+    listed_flags: dict[ListKey, list[tuple[str, str]]] = defaultdict(list)
     for entries in flag_lists.values():
         for key, pairs in entries.items():
             listed_flags[key].extend(pairs)
@@ -641,7 +669,11 @@ def collect(
             also = opposing.get((edge["subject"], edge["object"]), set())
             if edge["predicate"] in also:
                 flags.append("opposing_predicate")
-            from_lists = listed_flags.get(edge_key(edge), [])
+            from_lists = (
+                [pair for key in edge_list_keys(edge) for pair in listed_flags.get(key, [])]
+                if listed_flags
+                else []
+            )
             flags += [flag for flag, _ in from_lists]
             for flag in flags:
                 report.flags[flag] += 1
@@ -673,6 +705,11 @@ def collect(
                     strict=True,
                 )
             )
+            # the statement too, so a line promoted to a drop list drops this edge only
+            line["statement_id"] = edge_statement_id(edge)
+            line.update(edge_qualifiers(edge))
+            if edge_negated(edge):
+                line["negated"] = True
             line.update(
                 flags=listed, subject_categories=list(s_spec), object_categories=list(o_spec)
             )

@@ -171,6 +171,36 @@ def statement_id(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def edge_qualifiers(edge: dict[str, Any]) -> dict[str, Any]:
+    """A KGX edge record's qualifier slots that are set: `qualified_predicate` and every
+    `*_qualifier`, sorted by slot."""
+    return {
+        k: v
+        for k, v in sorted(edge.items())
+        if (k == "qualified_predicate" or k.endswith("_qualifier")) and v
+    }
+
+
+def edge_negated(edge: dict[str, Any]) -> bool:
+    """Whether a KGX edge record is negated (`negated` true, or the string "true")."""
+    value = edge.get("negated")
+    return value is True or (isinstance(value, str) and value.lower() == "true")
+
+
+def edge_statement_id(edge: dict[str, Any]) -> str:
+    """The `statement_id` of what a KGX edge record says: its subject, predicate, object,
+    qualifiers (values as strings, a bare `qualified_predicate` given its `biolink:` prefix)
+    and `negated`. The same id the augmentation agent's `graphio.edge_statement_id` gives the
+    edge, so cleaning and augmentation agree on which edges make the same statement."""
+    qualifiers = {k: str(v) for k, v in edge_qualifiers(edge).items()}
+    qp = qualifiers.get("qualified_predicate")
+    if qp is not None and not qp.startswith("biolink:"):
+        qualifiers["qualified_predicate"] = "biolink:" + qp
+    return statement_id(
+        edge["subject"], edge["predicate"], edge["object"], qualifiers, edge_negated(edge)
+    )
+
+
 class Statement(BaseModel):
     """What an edge or a literature claim says, without provenance: subject, predicate, object,
     qualifiers and `negated`, by their Biolink names. A `qualified_predicate` replaces the

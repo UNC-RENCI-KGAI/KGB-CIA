@@ -120,14 +120,14 @@ file in `flag_lists/`, beside `drop_lists/` (`<output>/flag_lists/` by default),
 line, keyed like a drop list, with a `flag` and a `reason`:
 
 ```json
-{"subject": "CHEBI:82700", "predicate": "biolink:interacts_with", "object": "UniProtKB:P07550", "primary_knowledge_source": "infores:drugcentral", "flag": "wrong_mechanism", "reason": "PMID:20371707 reports a different action than antagonism"}
+{"subject": "CHEBI:82700", "predicate": "biolink:interacts_with", "object": "UniProtKB:P07550", "primary_knowledge_source": "infores:drugcentral", "statement_id": "<16 hex digits>", "causal_mechanism_qualifier": "antagonism", "flag": "wrong_mechanism", "reason": "PMID:20371707 reports a different action than antagonism"}
 ```
 
 The evidence check writes one for edges whose paper shows the drug acting on the target, but
 not the way the edge's qualifier says.
 
-The same edges are also written to `flagged_edges.jsonl`, keyed like a drop list,
-with its flags, the endpoints' most specific categories and, for a type violation, whether
+The same edges are also written to `flagged_edges.jsonl`, keyed like a drop list (statement
+included), with its flags, the endpoints' most specific categories and, for a type violation, whether
 the domain or the range failed. A node can have more than one most specific category (a drug
 that is both `Drug` and `SmallMolecule`, neither under the other), so these are lists, and the
 category combinations behind `rare_category_combination` use all of them. The order of a
@@ -145,7 +145,14 @@ still checked.
 
 A drop list is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by `subject`, `predicate`, `object` and
 `primary_knowledge_source`. It is not keyed by `id`, because the merge assigns new edge uuids
-every run. This is how an evidence check plugs in: a model judges each edge's supporting text
+every run. A line can also name the edge's statement, so it matches only that edge and not
+others that differ from it only in qualifiers (one `causes` edge with
+`gain_of_function_variant_form`, another with `genetic_variant_form`): by `statement_id`, the
+hash `shared.schema.edge_statement_id` gives of the subject, predicate, object, qualifiers and
+`negated` (the augmentation agent's statement id too), or else by the line's own qualifier slots
+and `negated`. A line with neither matches the edge however it is qualified, as every line did
+before Nov 13, 2026. The evidence check and `flagged_edges.jsonl` always write the
+`statement_id`, with the qualifiers beside it to read. This is how an evidence check plugs in: a model judges each edge's supporting text
 once, writes the edges it rejects to that folder, and every later cleaning run drops them (the
 `evidence-check` skill in `.agents/skills/cleaning/` does this with Jev), in the style of the
 Translator TMKP filter (NCATSTranslator/translator-ingests#560).
