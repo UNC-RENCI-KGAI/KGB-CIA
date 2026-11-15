@@ -1,0 +1,58 @@
+{
+ "rows": [
+  {
+   "step": "1 merged (transformation)",
+   "graph": "whole",
+   "nodes": 148007,
+   "edges": 224646
+  },
+  {
+   "step": "2 cleaned",
+   "graph": "whole",
+   "nodes": 42858,
+   "edges": 224554
+  },
+  {
+   "step": "3 filtered",
+   "graph": "whole",
+   "nodes": 42858,
+   "edges": 224554
+  },
+  {
+   "step": "4 augmented",
+   "graph": "whole",
+   "nodes": 42858,
+   "edges": 224556
+  },
+  {
+   "step": "5 final cleaned",
+   "graph": "whole",
+   "nodes": 42858,
+   "edges": 224556
+  },
+  {
+   "step": "3 filtered",
+   "graph": "cardiomyopathy",
+   "nodes": 1435,
+   "edges": 4599
+  },
+  {
+   "step": "4 augmented",
+   "graph": "cardiomyopathy",
+   "nodes": 1435,
+   "edges": 4681
+  },
+  {
+   "step": "5 final cleaned",
+   "graph": "cardiomyopathy",
+   "nodes": 1435,
+   "edges": 4681
+  }
+ ],
+ "meta": [
+  {
+   "label": "Source",
+   "value": "transformation_report, cleaning_report, focus_report, apply_report and final cleaning_report"
+  }
+ ]
+}

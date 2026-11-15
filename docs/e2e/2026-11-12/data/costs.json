@@ -1,0 +1,50 @@
+{
+ "rows": [
+  {
+   "item": "Azure OpenAI, run B labeling (gpt-6-luna)",
+   "usd": 2.8058,
+   "kind": "Azure"
+  },
+  {
+   "item": "Azure OpenAI, run B quote repair (gpt-5.6-terra)",
+   "usd": 0.3414,
+   "kind": "Azure"
+  },
+  {
+   "item": "Azure OpenAI, run B review (gpt-5.6-terra)",
+   "usd": 1.6692,
+   "kind": "Azure"
+  },
+  {
+   "item": "Azure OpenAI, run A labeling",
+   "usd": 0.299,
+   "kind": "Azure"
+  },
+  {
+   "item": "Azure OpenAI, run A quote repair",
+   "usd": 0.0203,
+   "kind": "Azure"
+  },
+  {
+   "item": "Azure OpenAI, run A review",
+   "usd": 0.1358,
+   "kind": "Azure"
+  },
+  {
+   "item": "AWS, month to date for the team account (credits)",
+   "usd": 0.0,
+   "kind": "AWS"
+  },
+  {
+   "item": "AWS, kgb-graph host standing cost per day (r7g.large + EIP + EBS)",
+   "usd": 2.7,
+   "kind": "AWS"
+  }
+ ],
+ "meta": [
+  {
+   "label": "Source",
+   "value": "Cost lines in the augmentation logs; Cost Explorer for linked account 972034964799, Nov 1-12 2026"
+  }
+ ]
+}

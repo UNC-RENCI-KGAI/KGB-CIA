@@ -1,0 +1,54 @@
+{
+ "rows": [
+  {
+   "source": "eram",
+   "edges": 3652
+  },
+  {
+   "source": "clinvar",
+   "edges": 284
+  },
+  {
+   "source": "mgi",
+   "edges": 241
+  },
+  {
+   "source": "hpo-annotations",
+   "edges": 147
+  },
+  {
+   "source": "orphanet",
+   "edges": 127
+  },
+  {
+   "source": "omim",
+   "edges": 113
+  },
+  {
+   "source": "kgbcia-augmentor",
+   "edges": 82
+  },
+  {
+   "source": "zfin",
+   "edges": 14
+  },
+  {
+   "source": "clingen",
+   "edges": 12
+  },
+  {
+   "source": "rgd",
+   "edges": 8
+  },
+  {
+   "source": "mondo",
+   "edges": 1
+  }
+ ],
+ "meta": [
+  {
+   "label": "Source",
+   "value": "data/final/cardiomyopathy/edges.jsonl on the host, counted by primary_knowledge_source"
+  }
+ ]
+}

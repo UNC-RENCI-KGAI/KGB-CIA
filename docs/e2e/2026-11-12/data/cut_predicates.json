@@ -1,0 +1,38 @@
+{
+ "rows": [
+  {
+   "predicate": "gene_associated_with_condition",
+   "edges": 3318
+  },
+  {
+   "predicate": "has_phenotype",
+   "edges": 818
+  },
+  {
+   "predicate": "model_of",
+   "edges": 263
+  },
+  {
+   "predicate": "has_mode_of_inheritance",
+   "edges": 147
+  },
+  {
+   "predicate": "causes",
+   "edges": 133
+  },
+  {
+   "predicate": "associated_with_increased_likelihood_of",
+   "edges": 1
+  },
+  {
+   "predicate": "disease_has_location",
+   "edges": 1
+  }
+ ],
+ "meta": [
+  {
+   "label": "Source",
+   "value": "data/final/cardiomyopathy/edges.jsonl on the host, counted by predicate"
+  }
+ ]
+}

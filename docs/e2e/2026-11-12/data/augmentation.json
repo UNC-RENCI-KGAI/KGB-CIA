@@ -1,0 +1,60 @@
+{
+ "rows": [
+  {
+   "run": "B (cardiomyopathy, uncapped)",
+   "pairs_selected": 2964,
+   "pairs_searched": 2957,
+   "abstracts": 14200,
+   "pairs_labeled": 2129,
+   "edges_checked": 3361,
+   "edges_supported": 231,
+   "edges_unsupported": 3130,
+   "edges_refined": 62,
+   "edges_proposed": 82,
+   "publications_added": 560,
+   "claims_upheld": 504,
+   "claims_rejected": 107,
+   "review_calls": 217,
+   "label_calls": 2129,
+   "cost_label": 2.8058,
+   "cost_repair": 0.3414,
+   "cost_review": 1.6692,
+   "cost_total": 4.8164,
+   "dry_run_label_estimate": 3.4443,
+   "pubmed_seconds": 2494.9,
+   "paid_seconds": 3612.6,
+   "ncbi_key": "no"
+  },
+  {
+   "run": "A (whole graph, 500-pair cap)",
+   "pairs_selected": 131195,
+   "pairs_searched": 500,
+   "abstracts": 1522,
+   "pairs_labeled": 290,
+   "edges_checked": 532,
+   "edges_supported": 31,
+   "edges_unsupported": 501,
+   "edges_refined": 2,
+   "edges_proposed": 2,
+   "publications_added": 69,
+   "claims_upheld": 45,
+   "claims_rejected": 4,
+   "review_calls": 19,
+   "label_calls": 290,
+   "cost_label": 0.299,
+   "cost_repair": 0.0203,
+   "cost_review": 0.1358,
+   "cost_total": 0.4551,
+   "dry_run_label_estimate": 0.4329,
+   "pubmed_seconds": 74.6,
+   "paid_seconds": 440.8,
+   "ncbi_key": "yes"
+  }
+ ],
+ "meta": [
+  {
+   "label": "Source",
+   "value": "apply_report.json and the cost lines of augment_full_*.log for each run"
+  }
+ ]
+}

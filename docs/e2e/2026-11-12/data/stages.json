@@ -1,0 +1,307 @@
+{
+ "rows": [
+  {
+   "run": "metadata-agents",
+   "where": "laptop",
+   "stage": "metadata_clinvar",
+   "start": "2026-11-12T19:58:55+00:00",
+   "seconds": 716,
+   "status": "ok",
+   "phase": "metadata",
+   "minutes": 11.93,
+   "user": "shared"
+  },
+  {
+   "run": "metadata-agents",
+   "where": "laptop",
+   "stage": "metadata_monarch",
+   "start": "2026-11-12T19:58:57+00:00",
+   "seconds": 831,
+   "status": "ok",
+   "phase": "metadata",
+   "minutes": 13.85,
+   "user": "shared"
+  },
+  {
+   "run": "metadata-agents",
+   "where": "laptop",
+   "stage": "metadata_eram",
+   "start": "2026-11-12T19:58:55+00:00",
+   "seconds": 1235,
+   "status": "ok",
+   "phase": "metadata",
+   "minutes": 20.58,
+   "user": "shared"
+  },
+  {
+   "run": "aws-shared",
+   "where": "aws host",
+   "stage": "transformation",
+   "start": "2026-11-12T20:40:12+00:00",
+   "seconds": 86.9,
+   "status": "ok",
+   "phase": "transformation",
+   "minutes": 1.45,
+   "user": "shared"
+  },
+  {
+   "run": "aws-shared",
+   "where": "aws host",
+   "stage": "cleaning",
+   "start": "2026-11-12T20:41:38+00:00",
+   "seconds": 16.2,
+   "status": "ok",
+   "phase": "cleaning",
+   "minutes": 0.27,
+   "user": "shared"
+  },
+  {
+   "run": "aws-shared",
+   "where": "aws host",
+   "stage": "describe_graph",
+   "start": "2026-11-12T20:41:55+00:00",
+   "seconds": 1.0,
+   "status": "ok",
+   "phase": "describe",
+   "minutes": 0.02,
+   "user": "shared"
+  },
+  {
+   "run": "aws-shared",
+   "where": "aws host",
+   "stage": "filter_whole",
+   "start": "2026-11-12T20:41:56+00:00",
+   "seconds": 0.0,
+   "status": "ok",
+   "phase": "filter",
+   "minutes": 0.0,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "aws-shared",
+   "where": "aws host",
+   "stage": "augment_select_whole",
+   "start": "2026-11-12T20:41:56+00:00",
+   "seconds": 13.1,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 0.22,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "aws-focus",
+   "where": "aws host",
+   "stage": "filter_cardiomyopathy",
+   "start": "2026-11-12T20:44:16+00:00",
+   "seconds": 5.6,
+   "status": "ok",
+   "phase": "filter",
+   "minutes": 0.09,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "aws-focus",
+   "where": "aws host",
+   "stage": "augment_select_cardiomyopathy",
+   "start": "2026-11-12T20:44:22+00:00",
+   "seconds": 1.6,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 0.03,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "laptop-augB-free",
+   "where": "laptop",
+   "stage": "augment_select_B",
+   "start": "2026-11-12T20:46:29+00:00",
+   "seconds": 1.4,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 0.02,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "laptop-augB-free",
+   "where": "laptop",
+   "stage": "augment_pubmed_B",
+   "start": "2026-11-12T20:46:30+00:00",
+   "seconds": 2494.9,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 41.58,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "laptop-augB-paid",
+   "where": "laptop",
+   "stage": "augment_label_dryrun_B",
+   "start": "2026-11-12T21:28:08+00:00",
+   "seconds": 2.4,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 0.04,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "laptop-augB-paid",
+   "where": "laptop",
+   "stage": "augment_full_B",
+   "start": "2026-11-12T21:28:10+00:00",
+   "seconds": 3612.6,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 60.21,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "laptop-augA",
+   "where": "laptop",
+   "stage": "augment_select_A",
+   "start": "2026-11-12T21:28:08+00:00",
+   "seconds": 8.7,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 0.14,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "laptop-augA",
+   "where": "laptop",
+   "stage": "augment_pubmed_A_limit500",
+   "start": "2026-11-12T21:28:17+00:00",
+   "seconds": 74.6,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 1.24,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "laptop-augA",
+   "where": "laptop",
+   "stage": "augment_label_dryrun_A_limit500",
+   "start": "2026-11-12T21:29:31+00:00",
+   "seconds": 2.9,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 0.05,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "laptop-augA",
+   "where": "laptop",
+   "stage": "augment_full_A_limit500",
+   "start": "2026-11-12T21:29:34+00:00",
+   "seconds": 440.8,
+   "status": "ok",
+   "phase": "augmentation",
+   "minutes": 7.35,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "aws-final",
+   "where": "aws host",
+   "stage": "final_cleaning_whole",
+   "start": "2026-11-12T22:30:25+00:00",
+   "seconds": 14.8,
+   "status": "ok",
+   "phase": "final cleaning",
+   "minutes": 0.25,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "aws-final",
+   "where": "aws host",
+   "stage": "mcp_check_whole",
+   "start": "2026-11-12T22:30:40+00:00",
+   "seconds": 3.8,
+   "status": "failed",
+   "phase": "mcp check",
+   "minutes": 0.06,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "aws-final",
+   "where": "aws host",
+   "stage": "final_cleaning_cardiomyopathy",
+   "start": "2026-11-12T22:30:44+00:00",
+   "seconds": 1.6,
+   "status": "ok",
+   "phase": "final cleaning",
+   "minutes": 0.03,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "aws-final",
+   "where": "aws host",
+   "stage": "mcp_check_cardiomyopathy",
+   "start": "2026-11-12T22:30:46+00:00",
+   "seconds": 1.2,
+   "status": "failed",
+   "phase": "mcp check",
+   "minutes": 0.02,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "aws-final2",
+   "where": "aws host",
+   "stage": "mcp_check_whole",
+   "start": "2026-11-12T22:33:29+00:00",
+   "seconds": 3.8,
+   "status": "ok",
+   "phase": "mcp check",
+   "minutes": 0.06,
+   "user": "A (whole graph)"
+  },
+  {
+   "run": "aws-final2",
+   "where": "aws host",
+   "stage": "final_cleaning_cardiomyopathy",
+   "start": "2026-11-12T22:33:33+00:00",
+   "seconds": 1.6,
+   "status": "ok",
+   "phase": "final cleaning",
+   "minutes": 0.03,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "aws-final2",
+   "where": "aws host",
+   "stage": "mcp_check_cardiomyopathy",
+   "start": "2026-11-12T22:33:35+00:00",
+   "seconds": 1.2,
+   "status": "ok",
+   "phase": "mcp check",
+   "minutes": 0.02,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "laptop-dump",
+   "where": "laptop",
+   "stage": "neo4j_dump_build",
+   "start": "2026-11-12T22:34:52+00:00",
+   "seconds": 102,
+   "status": "ok",
+   "phase": "other",
+   "minutes": 1.7,
+   "user": "B (cardiomyopathy)"
+  },
+  {
+   "run": "aws-neo4j",
+   "where": "aws host",
+   "stage": "neo4j_helm_install_kgb-e2e",
+   "start": "2026-11-12T22:37:45+00:00",
+   "seconds": 60,
+   "status": "ok",
+   "phase": "neo4j",
+   "minutes": 1.0,
+   "user": "B (cardiomyopathy)"
+  }
+ ],
+ "meta": [
+  {
+   "label": "Source",
+   "value": "e2e runner summary.json files on the laptop and the AWS host; metadata agent timeline.md files"
+  }
+ ]
+}
