@@ -198,6 +198,7 @@ Reading records with only what this croissant says about the file gives
 Files with semantics need, in `@context`:
 
 - `annotation` → `cr:annotation`, and `value` → `sc:value`. Our older files lack these; with `cr:value`, mlcroissant reads constants back empty.
+- The rest of the standard Croissant context (`subField`, `references`, `equivalentProperty`, `transform`, `parentField`, ...). RoboCroissant writes only the 15 keys its own output uses; without the others mlcroissant can't see entity groups and the validator fails on every one. `apply_plan.py` adds the keys the input lacks.
 - Prefixes for each vocabulary used: `biolink`, `skos`, `sh`, `qudt`, `unit`, `csvw`, `rcv`, and any OBO prefixes.
 - Every identifier prefix that appears in the data (`MESH`, `NCBIGene`, `ECO`, ...), so CURIEs expand to full IRIs. Expansions come from Biolink where it has them, else Bioregistry, and must end in a delimiter (`/`, `#`, `_`, `:`, `=`).
 

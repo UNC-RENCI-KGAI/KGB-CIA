@@ -776,6 +776,49 @@ def apply_dialects(croissant: dict, assignments: dict[str, dict]) -> int:
 # `value` too: constants are written with it, and mlcroissant reads sc:value; a croissant mapping
 # it to cr:value (FlyBase, Dark Kinase Knowledgebase) made every constant load as None
 CONTEXT_REQUIRED = {"data": {"@id": "cr:data", "@type": "@json"}, "value": "sc:value"}
+# The standard Croissant @context, as mlcroissant 1.1.1 defines it (mlcroissant._src.core.rdf
+# .make_context). RoboCroissant writes only the 15 keys its own output uses, so `subField`,
+# `references`, `equivalentProperty`, `transform`, ... expand to schema.org terms mlcroissant
+# doesn't know: it then can't see entity groups, and the validator fails on every one of them.
+# Keys the input lacks are added; a key it defines keeps its definition.
+CROISSANT_CONTEXT = {
+    "@language": "en",
+    "@vocab": "https://schema.org/",
+    "citeAs": "cr:citeAs",
+    "column": "cr:column",
+    "conformsTo": "dct:conformsTo",
+    "cr": "http://mlcommons.org/croissant/",
+    "rai": "http://mlcommons.org/croissant/RAI/",
+    "data": {"@id": "cr:data", "@type": "@json"},
+    "dataType": {"@id": "cr:dataType", "@type": "@vocab"},
+    "dct": "http://purl.org/dc/terms/",
+    "equivalentProperty": "cr:equivalentProperty",
+    "examples": {"@id": "cr:examples", "@type": "@json"},
+    "extract": "cr:extract",
+    "field": "cr:field",
+    "fileProperty": "cr:fileProperty",
+    "fileObject": "cr:fileObject",
+    "fileSet": "cr:fileSet",
+    "format": "cr:format",
+    "includes": "cr:includes",
+    "isLiveDataset": "cr:isLiveDataset",
+    "jsonPath": "cr:jsonPath",
+    "key": "cr:key",
+    "md5": "cr:md5",
+    "parentField": "cr:parentField",
+    "path": "cr:path",
+    "recordSet": "cr:recordSet",
+    "references": "cr:references",
+    "regex": "cr:regex",
+    "repeated": "cr:repeated",
+    "replace": "cr:replace",
+    "samplingRate": "cr:samplingRate",
+    "sc": "https://schema.org/",
+    "separator": "cr:separator",
+    "source": "cr:source",
+    "subField": "cr:subField",
+    "transform": "cr:transform",
+}
 
 
 def update_context(croissant: dict, plan: dict) -> None:
@@ -788,6 +831,16 @@ def update_context(croissant: dict, plan: dict) -> None:
                 file=sys.stderr,
             )
         ctx[key] = definition
+    added = [key for key in CROISSANT_CONTEXT if key not in ctx]
+    for key in added:
+        ctx[key] = CROISSANT_CONTEXT[key]
+    if added:
+        print(
+            f"[apply_plan] note: @context lacked {len(added)} standard Croissant keys "
+            f"({', '.join(added[:6])}{', ...' if len(added) > 6 else ''}); added them (a "
+            "generator problem to report)",
+            file=sys.stderr,
+        )
     wanted = {**CONTEXT_TERMS, **VOCAB, **(plan.get("prefixes") or {})}
     if "rdfs" not in ctx:
         wanted["rdfs"] = "http://www.w3.org/2000/01/rdf-schema#"

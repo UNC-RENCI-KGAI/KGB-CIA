@@ -255,6 +255,52 @@ def test_context_gets_croissant_terms_and_prefixes():
     )
 
 
+def test_context_gets_the_standard_croissant_keys_the_input_lacks(capsys):
+    """RoboCroissant's @context has 15 keys; without subField, references, equivalentProperty,
+    transform, ... mlcroissant can't see entity groups and the validator fails on every one. All
+    three Nov 12 agents patched the context by hand."""
+    c = croissant()
+    c["@context"] = {  # RoboCroissant's 15 keys
+        "@language": "en",
+        "@vocab": "https://schema.org/",
+        "sc": "https://schema.org/",
+        "cr": "http://mlcommons.org/croissant/",
+        "dct": "http://purl.org/dc/terms/",
+        "conformsTo": "dct:conformsTo",
+        "recordSet": "cr:recordSet",
+        "field": "cr:field",
+        "source": "cr:source",
+        "fileObject": "cr:fileObject",
+        "extract": "cr:extract",
+        "column": "cr:column",
+        "fileProperty": "cr:fileProperty",
+        "dataType": {"@id": "cr:dataType", "@type": "@id"},
+        "containedIn": "cr:containedIn",
+    }
+    out, _ = apply_plan(c, plan())
+    ctx = out["@context"]
+    for key in (
+        "citeAs", "equivalentProperty", "fileSet", "format", "includes", "isLiveDataset",
+        "jsonPath", "key", "md5", "parentField", "path", "references", "regex", "repeated",
+        "replace", "samplingRate", "separator", "subField", "transform",
+    ):  # fmt: skip
+        assert ctx[key] == f"cr:{key}"
+    assert ctx["examples"] == {"@id": "cr:examples", "@type": "@json"}
+    assert ctx["rai"] == "http://mlcommons.org/croissant/RAI/"
+    # what the input defined stands; what the semantics need is forced
+    assert ctx["dataType"] == {"@id": "cr:dataType", "@type": "@id"}
+    assert ctx["containedIn"] == "cr:containedIn"
+    assert ctx["data"] == {"@id": "cr:data", "@type": "@json"}
+    assert "standard Croissant keys" in capsys.readouterr().err
+    # a context that has them all gets no note
+    from apply_plan import CROISSANT_CONTEXT
+
+    c = croissant()
+    c["@context"] = dict(CROISSANT_CONTEXT)
+    apply_plan(c, plan())
+    assert "standard Croissant keys" not in capsys.readouterr().err
+
+
 def test_conflicting_prefix_is_an_error():
     c = croissant()
     c["@context"]["biolink"] = "http://example.org/other/"
@@ -1116,6 +1162,10 @@ def test_encoding_format_and_item_pattern():
     assert out["distribution"][0]["encodingFormat"] == ["text/tab-separated-values"]
     rows = [{"genes": "TP53|7157|SRC;BRCA1|672|SRC;odd"}]
     spec = plan["layouts"][0]["columns"]["genes"]
+    # the pattern stops before `|SRC`, so (as in the runtime, which matches whole items) it fits
+    # nothing: every item is kept whole and shows as a misfit
+    assert [v for v, _ in _values(rows, "genes", spec)] == ["TP53|7157|SRC", "BRCA1|672|SRC", "odd"]
+    spec["item_pattern"] = r"^[^|]*\|(\d+)\|.*$"
     assert [v for v, _ in _values(rows, "genes", spec)] == ["7157", "672", "odd"]
 
 
@@ -1139,3 +1189,25 @@ def test_record_sets_name_their_plan_entry():
     plan = {"layouts": [{"id": "things", "match": {"record_sets": ["rs"]}, "columns": {}}]}
     out, _ = apply_plan(croissant, plan)
     assert out["recordSet"][0]["rcv:planLayout"] == "things"
+
+
+def test_a_one_element_list_is_read_as_the_croissant_inside_it(tmp_path, capsys):
+    """RoboCroissant's raw exports are `[{...}]`; every Nov 12 agent unwrapped them by hand."""
+    import gzip
+    import json
+
+    from common import load_croissant
+
+    c = croissant()
+    (tmp_path / "wrapped.json").write_text(json.dumps([c]))
+    assert load_croissant(tmp_path / "wrapped.json") == c
+    assert "one-element JSON list" in capsys.readouterr().err
+    with gzip.open(tmp_path / "wrapped.json.gz", "wt") as f:
+        json.dump([c], f)
+    assert load_croissant(tmp_path / "wrapped.json.gz") == c
+    (tmp_path / "plain.json").write_text(json.dumps(c))
+    assert load_croissant(tmp_path / "plain.json") == c
+    assert capsys.readouterr().err.count("one-element") == 1
+    (tmp_path / "two.json").write_text(json.dumps([c, c]))
+    with pytest.raises(ValueError, match="a list of 2"):
+        load_croissant(tmp_path / "two.json")
