@@ -8,6 +8,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0",
     "httpx>=0.27",
+    "kgbcia-mcp",
     "bmt>=1.5.0",
     "biolink-model==4.4.6",
 ]
@@ -40,6 +41,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agents", "shared", "evaluation"]
+exclude = [
+    "agents/mcp_interface/src",
+    "agents/mcp_interface/pyproject.toml",
+]
+
+[tool.uv.workspace]
+members = ["agents/mcp_interface"]
+
+[tool.uv.sources]
+kgbcia-mcp = { workspace = true }
 
 [tool.ruff]
 line-length = 100

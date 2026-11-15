@@ -1,6 +1,6 @@
 ---
 name: pubmed-evidence
-description: Check a Biolink knowledge graph's edges against PubMed — choose the edges worth checking, search PubMed for each node pair, have an LLM extract the claims each abstract makes about the pair, ground their anatomy to UBERON, have a stronger model review every claim that would count, then refine every checked edge in code: add the PMIDs of the abstracts that support it to its publications, and propose the more specific edges the abstracts state beside the originals. Use when asked to run, tune or rerun the augmentation agent, or to add literature evidence to the KGB-CIA graph.
+description: "Check a Biolink knowledge graph's edges against PubMed — choose the edges worth checking, search PubMed for each node pair, have an LLM extract the claims each abstract makes about the pair, ground their anatomy to UBERON, have a stronger model review every claim that would count, then refine every checked edge in code: add the PMIDs of the abstracts that support it to its publications, and propose the more specific edges the abstracts state beside the originals. Use when asked to run, tune or rerun the augmentation agent, or to add literature evidence to the KGB-CIA graph."
 ---
 
 # PubMed evidence for the graph's edges
