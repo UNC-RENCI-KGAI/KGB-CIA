@@ -531,6 +531,27 @@ def test_native_headerless_source_uses_declared_order(bundle, tmp_path, monkeypa
     assert edges[0]["kgbcia_source_records"][0].endswith("#1")
 
 
+@pytest.mark.parametrize("declared", ["#gene_id", "gene_id"])
+def test_native_header_in_comments_keeps_a_declared_comment_mark(
+    bundle, tmp_path, monkeypatch, native_orion, declared
+):
+    """A header row behind the comment mark ("#GeneID" in ClinVar) matches the column the
+    croissant declares, whether it names the column with the mark or without it."""
+    dist = bundle[1]["distribution"][0]
+    dist["csvw:dialect"]["csvw:commentPrefix"] = "#"
+    dist["rcv:headerInComments"] = True
+    gene_id = bundle[1]["recordSet"][0]["field"][0]["subField"][0]
+    gene_id["source"]["extract"]["column"] = declared
+    _, edges, _, _, _ = run_loader(
+        bundle,
+        tmp_path,
+        monkeypatch,
+        native_orion,
+        "# a comment line\n#gene_id\tdisease_id\tpublications\n1\t0001\tPMID:1\n",
+    )
+    assert [(e["subject"], e["object"]) for e in edges] == [("NCBIGene:1", "MONDO:0001")]
+
+
 def test_native_prefix_code_table_is_executed(bundle, tmp_path, monkeypatch, native_orion):
     doc = bundle[1]
     doc["@context"]["NCBIGene"] = "https://example.test/gene/"
