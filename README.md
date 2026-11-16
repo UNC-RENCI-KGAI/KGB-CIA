@@ -85,13 +85,24 @@ asked for. Cleaning then runs again at the end.
 ```bash
 git clone https://github.com/UNC-RENCI-KGAI/KGB-CIA.git
 cd KGB-CIA
-make setup        # creates .venv with uv and installs the package in editable mode
+make setup        # installs everything into .venv, including Python 3.12 if you lack it
 make test         # lint + tests (offline, under a minute; see tests/README.md)
 make demo         # dry run: prints what each stage does, runs nothing
 ```
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). `make setup` falls back to `pip` if
-uv is not installed.
+**The one thing to install first is [uv](https://docs.astral.sh/uv/getting-started/installation/)**
+(`curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`). `make setup` uses it
+to fetch Python 3.12+ if needed and to install every Python dependency from the lock file. Each
+skill's scripts declare their own dependencies, which uv installs the first time a script runs.
+
+Some steps need more, and only those steps:
+
+| Need | For |
+| --- | --- |
+| [Docker](https://docs.docker.com/get-docker/) | Building the Neo4j copy of the graph for the MCP server (`agents/mcp_interface/deploy/`), and `make test-neo4j` |
+| [Helm](https://helm.sh/docs/intro/install/) and a Kubernetes cluster | Deploying the MCP server with its chart. Not needed to run it locally. |
+| About 100 GB of free disk | Merging every source in `kgb-transform` |
+| API keys | The paid model steps; see below |
 
 ## API keys
 

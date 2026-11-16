@@ -2,11 +2,15 @@
 
 UV := $(shell command -v uv 2>/dev/null)
 
-setup:  ## create .venv and install in editable mode
+setup:  ## create .venv with every dependency (uv fetches Python 3.12+ itself if needed)
 ifdef UV
 	uv sync --dev --all-extras
 else
-	python3 -m venv .venv && .venv/bin/pip install -e '.[augmentation]' pytest ruff
+	@echo "make setup needs uv. Install it with one command, then rerun make setup:"
+	@echo "  curl -LsSf https://astral.sh/uv/install.sh | sh     (macOS / Linux)"
+	@echo "  brew install uv                                      (Homebrew)"
+	@echo "See https://docs.astral.sh/uv/getting-started/installation/"
+	@exit 1
 endif
 
 lint:
