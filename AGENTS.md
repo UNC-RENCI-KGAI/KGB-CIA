@@ -20,7 +20,7 @@ reasoning behind each stage is in [`docs/agent_plan.md`](docs/agent_plan.md).
 ## Commands
 
 ```bash
-make setup     # uv sync --dev (falls back to a pip venv if uv is missing)
+make setup     # uv sync --dev --all-extras (uv is required)
 make lint      # ruff check + ruff format --check
 make format    # ruff --fix + ruff format
 make test      # lint, pytest, then the metadata skill's tests

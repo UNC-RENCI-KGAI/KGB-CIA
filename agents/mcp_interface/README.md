@@ -17,7 +17,7 @@ final graph (nodes.jsonl, edges.jsonl) + transform_report.json files
   <- kgbcia-mcp (this server), run locally over stdio by each MCP client
 ```
 
-The server ships as its own package, `kgbcia-mcp`, so it can be installed from PyPI without the
+The server ships as its own package, `kgbcia-mcp`, so it can be installed without the
 rest of the pipeline. Lineage beyond Biolink fields comes from each edge's
 `kgbcia_source_records`, resolved against the `TransformReport`s (see `agents/AGENTS.md`).
 
