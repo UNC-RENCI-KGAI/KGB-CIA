@@ -60,11 +60,12 @@ stays in sync.
 - **Every node ID goes through NodeNorm** via `shared/nodenorm.py`.
 - **`evaluation/` is deliberately not a stage** and is not in `STAGES`.
 
-`kgb-transform`, `kgb-clean` and `kgb-filter` are the stage commands implemented on `main`; the
-other stages' `main` are stubs that print "not implemented yet". `kgb-transform` builds every source
+Every stage command is implemented on `main` except `kgb-metadata`, which is a stub that prints
+"not implemented yet". `kgb-transform` builds every source
 and merges them into one graph (`data/transformation/merged/`), `kgb-clean` reads that merged graph
-by default and writes `data/cleaning`, and `kgb-filter` cuts the user's subgraph from
-`data/cleaning` into `data/filter`, where augmentation reads it. Semantic metadata comes from the
+by default and writes `data/cleaning`, `kgb-filter` cuts the user's subgraph from
+`data/cleaning` into `data/filter`, `kgb-augment` reads that cut, and `kgb-mcp check` checks the
+final graph before it's loaded into Neo4j. Semantic metadata comes from the
 `croissant-semantics` skill in `.agents/skills/metadata/`, run per source rather than through `kgb-
 metadata`. `make demo` only prints stage descriptions.
 
@@ -84,7 +85,7 @@ metadata`. `make demo` only prints stage descriptions.
 - Never push to `main`; every change goes through a PR. Branch names are
   `<team>/<short-description>`, e.g. `filter/affinity-defaults`.
 - Each directory is owned by one GitHub Team via `.github/CODEOWNERS` (team list in
-  `CONTRIBUTING.md`, members in `docs/teams.md`). Keep a change inside one team's directory
+  `CONTRIBUTING.md`). Keep a change inside one team's directory
   where you can; a PR that touches two needs the `integration` label and review from both.
   `shared/`, `.github/` and root files belong to the leads.
 - The PR template's checklist: `make test` passes, new edges carry provenance, and the agent's
@@ -108,6 +109,6 @@ metadata`. `make demo` only prints stage descriptions.
   change yet, such as a defect from a run, stays a row in the tracking issue until someone opens
   a child for it.
 - No data in git. Source dumps and generated graphs go in `data/` (gitignored except its
-  README) or on the shared RENCI drive; record each source's version and download date in
+  README) or on a shared drive; record each source's version and download date in
   `data/README.md`. `.gitignore` also blocks `*.jsonl`, `*.parquet`, `*.db`, `outputs/` and
   `runs/` anywhere in the tree.

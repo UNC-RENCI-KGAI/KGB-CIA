@@ -1,39 +1,38 @@
 # KGB-CIA: Knowledge Graph Based Creation of Informed Agents
 
-In plain terms: we're building a pipeline of AI agents that reads raw drug-target data (from
-[Pharos](https://pharos.nih.gov/) / TCRD), figures out on its own what the data means and how it
-fits together, and turns it into a proper knowledge graph — then lets other agents query that
-graph. No step requires a human to hand-map columns or write transform code; a person only
-steps in briefly, with sensible defaults, to say which parts of the graph they want.
+KGB-CIA is a pipeline of AI agents. It reads raw biomedical data (drug–target data from
+[Pharos](https://pharos.nih.gov/) / TCRD and the knowledge bases behind it) and works out what
+the data means and how it fits together. It then builds a [Biolink](https://biolink.github.io/biolink-model/)
+knowledge graph and lets other agents query that graph. No step requires a person to hand-map
+columns or write transform code. A person steps in once, and only briefly, to say which part of
+the graph they want, and every question has a working default.
 
-This is our team's entry for the **Bio-Agent Knowledge Graph Construction Challenge** (Structured
-Data Integration and Link Prediction track). The output graph follows the
-[Biolink](https://biolink.github.io/biolink-model/) model, and it's scored by GNN link prediction
-against a Pharos baseline.
+This is a team entry for the **Bio-Agent Knowledge Graph Construction Challenge** (Structured
+Data Integration and Link Prediction track), submitted Nov 17, 2026.
 
-Key dates: progress report **Oct 27, 2026**, final submission **Nov 17, 2026**.
+## What it produces
 
-## Status (as of Nov 12, 2026)
+The submitted graph comes from the Nov 9, 2026 build of 26 sources (45 primary knowledge
+sources):
 
-**The graph is frozen** at the Nov 9 transformation run. Changes we'd like to make to the graph or
-the metadata now go into a report (what, which source, why) instead of code, so the remaining
-time goes to the user-facing steps, the demo and the submission. The cleaned Nov 9 graph is on
-the shared RENCI drive.
+- **943,412 nodes and 11,701,010 edges** after cleaning. Every node ID is normalized with
+  [NodeNorm](https://github.com/TranslatorSRI/NodeNormalization).
+- **Biolink provenance on every edge:** `primary_knowledge_source`, `knowledge_level`,
+  `agent_type`, and publications where the source gives them. Each edge also points back to
+  the source file, columns and record it came from, so an agent can answer "why does A connect
+  to B?".
+- **Pruning with reasons.** Cleaning removed 298,421 edges that can't be right, for example
+  edges with both ends unresolved, broken IDs, or `treats` pointing at a procedure. Each removed
+  edge is listed with its reason in `pruned_edges.tsv`. Cleaning also flagged 2,090,958 kept
+  edges as suspicious and wrote each flag's reason onto the edge.
+- **Evidence from the literature.** One step adds PubMed citations to edges where abstracts
+  support them. Another, the evidence check, drops or flags an edge whose cited abstract says
+  otherwise.
 
-| Stage | On `main` | In progress |
-| --- | --- | --- |
-| 1. Metadata (`agents/metadata/`) | The `croissant-semantics` skill adds Biolink semantics to RoboCroissant's Croissant files, run per source. `kgb-metadata` is still a stub. | [#41](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/41): `kgb-metadata` (closed until after the challenge) |
-| 2. Transformation (`agents/transformation/`) | **Working.** `kgb-transform` generates an ORION parser per source, builds each one, and merges them into one graph with ORION's merge rules. | [#42](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/42): skip unchanged builds (closed until after the challenge) |
-| 3. Cleaning (`agents/cleaning/`) | **Working.** `kgb-clean` drops edges that can't be right (no provenance, missing nodes, both ends unresolved by NodeNorm, drop lists, `treats` edges to a category that can't be treated), keeps an edge with one unresolved end but flags it, flags other suspicious ones (Biolink type violations, rare category combinations, self-loops, opposing predicates), writes each flag and its reason onto the edge, and reports both. | [#49](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/49): evidence check |
-| 4. Filter (`agents/filter/`) | **Working.** The `describe-graph` skill gives a plain-language overview of the graph and recommends which sources to focus on. The `focus-subgraph` skill turns a request into a focus file, and `kgb-filter` cuts that subgraph from the cleaned graph into `data/filter`; with no request, the whole graph. | [#76](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/76): checks from the #50 review; [#65](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/65): list other sources that have a croissant |
-| 5. Augmentation (`agents/augmentation/`) | Stub. Shared PubMed search, fetch and cache are in `shared/pubmed/`. | [#22](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/22): PubMed evidence agent, reading `data/filter` |
-| 6. Final cleaning | The same `kgb-clean`, run on augmentation's output, applying the drop lists and flag lists the evidence check wrote. | |
-| 7. MCP interface (`agents/mcp_interface/`) | Stub. | [#64](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/64): a Neo4j-backed MCP server, being deployed on AWS for the hosted demo |
-| Evaluation (`evaluation/`) | Not started. | [#54](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/54): link-prediction protocol |
-
-The order was settled in [#23](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/23) and [#24](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues/24): cleaning runs first, so the
-paid steps never spend on edges it would drop; the filter runs before augmentation, so those steps
-only see what the user asked for; and cleaning runs again at the end.
+The graph files are too large for git and are distributed separately.
+<!-- TODO before merge: link to where the submitted graph can be downloaded. -->
+What the submitted graph is known to be missing is in
+[`docs/known_limitations.md`](docs/known_limitations.md).
 
 ## Pipeline
 
@@ -65,15 +64,21 @@ Evaluation pipeline      evaluation/             GNN link prediction vs. Pharos 
 Shared code              shared/                 record schema, NodeNorm client, PubMed cache, pipeline runner
 ```
 
-[`docs/KG_AI_plandraft.png`](docs/KG_AI_plandraft.png) (source:
-[`docs/pipeline_diagram.mmd`](docs/pipeline_diagram.mmd)) is the Oct 26 version of this diagram,
-with each stage's planned input and output files; parts of it are out of date.
+| Stage | Command | What it does |
+| --- | --- | --- |
+| 1. Metadata | the [`croissant-semantics`](.agents/skills/metadata/) skill | Adds Biolink semantics to each source's [Croissant](https://mlcommons.org/croissant/) metadata, one source at a time. (`kgb-metadata` is not implemented yet.) |
+| 2. Transformation | `kgb-transform` | Generates an [ORION](https://github.com/RobokopU24/ORION) parser per source, builds each one, and merges them into one graph. |
+| 3. Cleaning | `kgb-clean` | Drops edges that can't be right, flags suspicious ones, and writes the reason onto each edge. |
+| 4. Filter | `kgb-filter` | Gives a plain-language overview of the graph, then cuts the subgraph the user asks for. With no request, it keeps the whole graph. |
+| 5. Augmentation | `kgb-augment` | Adds PubMed evidence to edges, and proposes more specific edges that the abstracts support. |
+| 6. Final cleaning | `kgb-clean` | Applies the evidence check's drop and flag lists. |
+| 7. MCP interface | `kgb-mcp` | A read-only [MCP](https://modelcontextprotocol.io/) server over a Neo4j copy of the graph, for any MCP client. |
+| Evaluation | not a stage | Link prediction against the Pharos baseline, run outside the agents. |
 
-Design rules agreed by the team: agents decide, code transforms (reproducible); every node goes
-through NodeNorm; Biolink is fixed, not user-selectable; strong defaults everywhere, and the
-graph's scope comes from what the user asks for, not a choice we make in advance; evaluation stays
-outside the agent. The original plan, with Chris Bizon's guidance:
-[`docs/agent_plan.md`](docs/agent_plan.md).
+Each stage's README, in its directory under `agents/`, says how to run the stage on its own.
+Cleaning runs before the filter and augmentation, so the paid steps never spend money on edges
+cleaning would drop. The filter runs before augmentation, so those steps only see what the user
+asked for. Cleaning then runs again at the end.
 
 ## Quick start
 
@@ -104,69 +109,38 @@ the two steps that call a paid model:
 only read environment variables, so exporting them from your shell or a secrets manager works
 too. To use the models from the Pi agent harness, see [`.pi/README.md`](.pi/README.md).
 
-## Working on the repo
+## Querying the graph
 
-**Never push to `main`. Every change, however small, goes through a pull request.** That is what
-routes the review to the right team through CODEOWNERS and runs the CI gate. Admins can bypass
-the protection, but should not.
-
-```bash
-git checkout -b <team>/<short-description>
-# ... edit, commit ...
-git push -u origin <team>/<short-description>
-gh pr create
-```
-
-One monorepo, one directory per subagent, one GitHub Team per directory. Each team owns its
-directory through `.github/CODEOWNERS` and reviews its own pull requests. Cross-directory changes
-get the `integration` label. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the branch, review, and
-GitHub Project conventions.
+[`agents/mcp_interface/README.md`](agents/mcp_interface/README.md) explains how to load the
+graph into Neo4j and connect an MCP client (Claude Code, Pi, or any other) to the server. The
+server can search nodes, explore neighbors and paths, explain an edge down to the source record
+it came from, and tell the user when cleaning flagged an edge, and why.
 
 ## Agent skills
 
-Put shared skills in **`.agents/skills/<category>/<skill-name>/SKILL.md`**. Categories
-match the agent packages: `metadata`, `transformation`, `filter`, `augmentation`,
-`cleaning`, and `mcp_interface`. Keep each skill's supporting scripts, references,
-and assets inside its directory.
-
-For example:
-
-```text
-.agents/skills/transformation/biolink-mapping/SKILL.md
-```
-
-Start `SKILL.md` with frontmatter containing a `name` matching the leaf directory
-(`biolink-mapping` in this example) and a nonempty `description`. Skill names must be
-unique across all categories; category prefixes are not required. Remove the
-category's `.gitkeep` when adding its first skill.
-
-Pi discovers the grouped skills directly. For Claude Code, run the sync script to
-create flat, relative symlinks in `.claude/skills/` pointing to the shared originals:
-
-```bash
-# Preview new links and cleanup of broken links
-python3 scripts/sync_claude_skills.py --prune --dry-run
-
-# Create links and remove broken links targeting this project's shared skills
-python3 scripts/sync_claude_skills.py --prune
-```
-
-Run sync after adding, moving, renaming, or deleting skills. Edit the originals in
-`.agents/skills/`, not separate copies in `.claude/skills/`. The script rejects
-duplicate names and refuses to overwrite existing content; unrelated links and
-real files/directories are preserved.
-
-Both harnesses can preload a skill by its leaf name: Pi subagent frontmatter uses
-`skills: biolink-mapping`; Claude subagent frontmatter uses `skills: [biolink-mapping]`.
-Run `/reload` in Pi and restart Claude Code after changes, then verify discovery.
-See [the shared skills guide](.agents/skills/README.md) for a complete `SKILL.md`
-example, loader details, and pruning limitations.
+The agents' skills live in [`.agents/skills/`](.agents/skills/), one folder per stage. Each
+skill is a `SKILL.md` that an agent follows, plus its scripts, references and tests. Pi reads
+them directly. For Claude Code, run `python3 scripts/sync_claude_skills.py --prune`, which links
+them into `.claude/skills/`. See [the skills guide](.agents/skills/README.md).
 
 ## Data
 
-No data lives in this repo. TCRD dumps, Pharos exports, and generated graphs go under `data/`
-locally (gitignored) or on the shared RENCI drive. Record the download date and version in
-`data/README.md` when you add a source.
+No data lives in this repo. Source downloads, caches and generated graphs go under `data/`,
+which git ignores (see [`data/README.md`](data/README.md)). Each source keeps the license of its
+upstream knowledge base.
+
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers branches, reviews and conventions. Coding agents
+should read [`AGENTS.md`](AGENTS.md) first.
+
+## Team
+
+Built by Ashok Krishnamurthy, Chris Bizon, Cheng-Han Chung, Gaurav
+Vaidya, Hina Shah, Hong Yi, James McManus, Jason Reilly, Kathleen Carter, Kushal Koirala, Matt
+Satusky, Olawumi Olasunkanmi, Sahil Kapadia, Suparna Goswami, Swaroopa Dola, Yaphet Kebede and
+Yogesh Kale. The original plan, with Chris Bizon's guidance, is in
+[`docs/agent_plan.md`](docs/agent_plan.md).
 
 ## License
 

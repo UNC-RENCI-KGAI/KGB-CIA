@@ -27,7 +27,7 @@ it touches.
   while only it exists). Agents that
   share the cache file share what each fetched. Only one process may write to a cache file at
   a time: SQLite's locking isn't reliable on a network drive, so two people running
-  augmentation and the evidence check at once against a cache on the RENCI drive can hit lock
+  augmentation and the evidence check at once against a cache on a network drive can hit lock
   errors or corrupt it. Run them one after the other, or keep a local cache each and have one
   person refresh the shared copy. Keep the abstract text format (`parse_efetch`)
   and the cache's table and column names as they are: quotes checked against the text, caches
