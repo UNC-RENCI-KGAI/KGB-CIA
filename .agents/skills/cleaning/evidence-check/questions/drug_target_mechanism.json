@@ -1,0 +1,36 @@
+{
+  "name": "drug_target_mechanism",
+  "select": {
+    "predicate": "biolink:interacts_with",
+    "primary_knowledge_source": ["infores:drugcentral", "infores:gtopdb", "infores:chembl"]
+  },
+  "instructions": "Does `text` report that `subject` acts on `object` the way `claim` says? `subject` and `object` give each entity's name, the other names it goes by (a development code, a gene symbol), and its identifier. Judge only what `text` says, not what is generally known.",
+  "options": [
+    {
+      "name": "different_action",
+      "role": "contradicts",
+      "what": "`text` reports `subject` acting on `object`, but in a different way from `claim`: an agonist where the claim says inhibition or antagonism, an activator where it says inhibitor, or the reverse.",
+      "examples": ["X acted as a partial agonist at the receptor (claim: antagonism)"],
+      "flag": "wrong_mechanism",
+      "flag_reason": "A cited paper reports the drug acting on this target, but not in the way this edge says"
+    },
+    {
+      "name": "no_activity",
+      "role": "contradicts",
+      "what": "`text` reports that `subject` was tested on `object` and showed no binding or no meaningful effect.",
+      "examples": ["no significant inhibition at 10 uM", "did not bind the receptor"]
+    },
+    {
+      "name": "not_reported",
+      "role": "silent",
+      "what": "`text` does not report `subject` acting on `object`: one of them isn't mentioned, the activity reported is on a different protein, or the two are only listed together.",
+      "examples": ["a review of kinase inhibitors that never names this target"]
+    },
+    {
+      "name": "acts_as_claimed",
+      "role": "supports",
+      "what": "`text` reports `subject` binding or acting on `object` consistently with `claim` (for example a Ki, IC50 or EC50, or a stated inhibition, agonism or channel block).",
+      "examples": ["imatinib inhibited ABL1 with an IC50 of 0.1 uM"]
+    }
+  ]
+}

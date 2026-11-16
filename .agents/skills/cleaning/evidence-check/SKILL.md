@@ -56,6 +56,12 @@ and one or two short examples in your own words.
 
 ## 3. Run it
 
+**In the pipeline**, the `evidence_check` stage (`kgb-evidence`) runs every question for you
+after augmentation: the ones in this skill's `questions/` folder (`drug_target_mechanism.json`,
+the worked example) and any you saved in `data/cleaning/evidence/*.json` (the same `name`
+replaces a shipped one). So a question you write and save there is checked on every later
+pipeline run. To try a question first, or to run its steps one at a time, use the scripts:
+
 ```bash
 S=.agents/skills/cleaning/evidence-check/scripts
 uv run python $S/gather_evidence.py QUESTION --limit 50   # a trial on 50 edges first

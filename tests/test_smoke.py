@@ -31,11 +31,17 @@ def test_stage_order():
     names = [name for name, _, _ in STAGES]
     assert names.index("cleaning") < names.index("filter") < names.index("augmentation")
     assert (
-        names.index("augmentation") < names.index("final_cleaning") < names.index("mcp_interface")
+        names.index("augmentation")
+        < names.index("evidence_check")
+        < names.index("final_cleaning")
+        < names.index("mcp_interface")
     )
     # the MCP serves the final pass's output; on its own kgb-mcp would pick data/cleaning
     stage_args = {name: args for name, _, args in STAGES}
     assert "data/final" in stage_args["final_cleaning"]
+    # the evidence check judges augmentation's output, the graph the final pass cleans
+    assert stage_args["evidence_check"] == ["--graph", "data/augmentation"]
+    assert "data/augmentation" in stage_args["final_cleaning"]
     assert stage_args["mcp_interface"] == ["--input", "data/final"]
 
 

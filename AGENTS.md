@@ -39,7 +39,7 @@ stays in sync.
 
 - **Stages are packages under `agents/`, run in the order listed in `STAGES` in
   `shared/pipeline.py`:** metadata → transformation → cleaning → filter → augmentation →
-  final_cleaning → mcp_interface (settled in #23 and #24). The runner imports each
+  evidence_check → final_cleaning → mcp_interface (settled in #23 and #24). The runner imports each
   `agents.<stage>.cli` module, prints its `DESCRIPTION`, and (without `--dry-run`) calls `main`
   with that stage's arguments from `STAGES`; a nonzero return stops the pipeline. The two
   cleaning passes are the same `kgb-clean`: the first cleans the merged graph, the last applies
@@ -47,7 +47,8 @@ stays in sync.
   writes `data/final`, which the MCP interface is then given with `--input` (on its own,
   `kgb-mcp` would fall back to `data/cleaning`).
 - **Each stage is also a console script** (`kgb-metadata`, `kgb-transform`, `kgb-filter`,
-  `kgb-augment`, `kgb-clean`, `kgb-mcp`, `kgb-pipeline`) declared in `pyproject.toml`.
+  `kgb-augment`, `kgb-evidence`, `kgb-clean`, `kgb-mcp`, `kgb-pipeline`) declared in
+  `pyproject.toml`.
 - **Handoffs between stages use the pydantic records in `shared/schema.py`** (`Node`, `Edge`,
   `Graph`, `TransformReport`). `Node` and `Edge` are flat Biolink/KGX records shaped like
   ORION's `nodes.jsonl` and `edges.jsonl`. Every `Edge` must carry its Biolink provenance
