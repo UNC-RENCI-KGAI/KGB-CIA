@@ -59,13 +59,16 @@ def register_graph_tools(mcp: FastMCP, svc: Any) -> None:
 
     @mcp.tool
     def summarize_node_edges(node_id: str) -> dict[str, Any]:
-        """Count a node's edges by direction, predicate and neighbor category.
+        """Count a node's edges by direction, predicate and the neighbor's most specific
+        categories. Each edge is counted once, so the counts add up to the node's degree.
 
         Example: summarize ``NCBIGene:1017`` before fetching neighbors.
         Presentation Guidelines: present each row by its ``reads_as`` statement (subject →
         predicate → object) rather than an incoming/outgoing column, keep exact Biolink
-        predicates, and do not imply that counts are evidence. Next call ``get_node_edges``
-        with a predicate/category filter.
+        predicates, and do not imply that counts are evidence. A row can list more than one
+        neighbor category (for example Drug + SmallMolecule): those are the same neighbors.
+        Next call ``get_node_edges`` with a predicate filter and one of the row's
+        ``neighbor_categories``.
         """
 
         return _safe(svc.summarize_node_edges, node_id)
