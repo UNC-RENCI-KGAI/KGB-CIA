@@ -85,19 +85,36 @@ contradict it.
 | Tier | Subject → predicate → object | Main TCRD sources |
 | --- | --- | --- |
 | Query | ChemicalEntity/Drug → `treats`, `contraindicated_in`, `treats_or_applied_or_studied_to_treat` → Disease | DrugCentral |
+| Query | ChemicalEntity/Drug → the same → PhenotypicFeature | DrugCentral |
 | Query | ChemicalEntity → `affects`, `directly_physically_interacts_with`, `binds` → Gene/Protein | DrugCentral, ChEMBL, IUPHAR |
+| Query | ChemicalEntity ↔ `interacts_with` (the rest of it: drug-target activity) ↔ Gene/Protein | ChEMBL, WOMBAT-PK, DrugMatrix, DrugCentral, GtoPdb, PDSP |
 | Query | Gene → `associated_with` (and everything below it: `gene_associated_with_condition`, `genetically_associated_with`, `associated_with_increased_likelihood_of`, `correlated_with`, `biomarker_for`, ...), `contributes_to` (and `causes`) → Disease | DisGeNET, JensenLab, OMIM, Monarch (ClinGen), GWAS Catalog |
 | Query, capped | Gene ↔ `physically_interacts_with`, `interacts_with` ↔ Gene | STRING, BioPlex, Reactome |
 | Query, capped | Gene → `has_phenotype` → PhenotypicFeature | IMPC, MGI, HPO via Monarch |
-| Skip | Gene → `participates_in` → Pathway; Gene → `enables`, `participates_in`, `located_in` → GO terms | Reactome, KEGG, WikiPathways, GO |
+| Query, capped | Gene → `associated_with`, `contributes_to` → PhenotypicFeature, DiseaseOrPhenotypicFeature (traits) | TIGA |
+| Query, capped | Gene → `located_in` → CellularComponent, as `knowledge_level: text_co_occurrence` | COMPARTMENTS' text mining |
+| Skip | Gene → `participates_in` → Pathway; Gene → `enables`, `participates_in`, `located_in` → GO terms (all but text co-occurrence locations) | Reactome, KEGG, WikiPathways, GO |
 | Skip | Gene → `expressed_in` → AnatomicalEntity/Cell | GTEx, HPA, Jensen TISSUES |
 | Skip | `orthologous_to`, `has_part`, `subclass_of`, `member_of` | Orthologs, Pfam, PANTHER, DTO |
 | Skip | `occurs_together_in_literature_with` | Literature co-occurrence |
-| Capped, by provenance | any edge a query or capped rule above keeps with `knowledge_level: text_co_occurrence` or `agent_type: text_mining_agent`, whatever its predicate | eRAM's text mining (`gene_associated_with_condition`) |
+| Capped, by provenance | any edge a query or capped rule above keeps with `knowledge_level: text_co_occurrence` or `agent_type: text_mining_agent`, whatever its predicate | eRAM's text mining (`gene_associated_with_condition`), COMPARTMENTS' |
 
 - **Capped:** gene–gene interactions are numerous and symmetric, and many come from a single
   high-throughput screen. Query only pairs above a confidence cutoff, and dedupe unordered
-  pairs. Phenotype names are long and varied, so expect low recall.
+  pairs. Phenotype and trait names are long and varied, so expect low recall.
+- **Drug targets, traits and text-mined locations** joined the defaults on 2026-11-16 (rules
+  `drug-target`, `chemical-treats-phenotype`, `gene-trait`, `text-mined-location`). Before,
+  the defaults left drug-target `interacts_with` (25,148 pairs in the cleaned Nov 9 2026 graph),
+  TIGA's gene-trait associations (564,098) and DrugCentral's phenotype indications (920)
+  unmatched, and skipped COMPARTMENTS' text-mined locations (4,782,056) as GO. The 2026-11-13
+  PubMed search and the 2026-11-16 label run used the same rules in a rules file, so a default
+  run now shares their label prompt version, and their cached claims. Order matters:
+  `drug-target` comes after the chemical-gene rule, which keeps `binds`, below
+  `interacts_with`; `gene-trait` after gene-disease, since Disease is below
+  DiseaseOrPhenotypicFeature; and `text-mined-location`, which names the knowledge level,
+  before the GO skip, so curated GO locations stay skipped. The location edges are text
+  co-occurrence, so they are capped by the provenance rule below, in its cap
+  (`reference/rules.md`).
 - **Text-mined edges are capped,** in caps of their own, whatever statement rule keeps them.
   They are the least trustworthy edges in the graph, and they carry no publications or
   supporting sentence, so the cleaning stage's evidence check can't judge them: this step is
@@ -106,8 +123,9 @@ contradict it.
   the cost: eRAM writes 113,706 co-mentions as `gene_associated_with_condition` with
   `knowledge_level: text_co_occurrence`, and the Nov 12 2026 run, which skipped only
   `occurs_together_in_literature_with`, put 127,774 of its 131,195 pairs in the query tier
-  that way. How many pairs the capped default keeps on the whole graph needs a rerun. Two
-  provenance rules (below) set the cap; a rules file can make them skip rules instead.
+  that way. In the cleaned Nov 9 2026 graph the edges they take are all COMPARTMENTS'
+  text-mined locations: 4,782,056 pairs, of which the cap keeps 10,000. Two provenance rules
+  (below) set the cap; a rules file can make them skip rules instead.
 - **Skipped:** pathway and GO names rarely appear verbatim in abstracts, and GO annotations
   already carry their own references and evidence codes. Expression edges are measurements
   rather than claims and are very numerous. Literature co-occurrence isn't a claim, and

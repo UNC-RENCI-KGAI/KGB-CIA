@@ -10,9 +10,10 @@ picks are covered, and, if it lists them, by how the edge was made (its `knowled
 `agent_type`). The first statement rule that matches an edge decides its tier:
 
 - `query` rules keep every matching edge.
-- `capped` rules (gene-gene, gene-phenotype) keep only their best-scored `--capped-limit` pairs,
-  after dropping statements below `--min-score` if given; ties, unscored pairs included, go to
-  the pair with the most sources, then by a hash of the pair id (`cap_rank`).
+- `capped` rules (gene-gene, gene-phenotype, gene-trait, text-mined-location) keep only their
+  best-scored `--capped-limit` pairs, after dropping statements below `--min-score` if given;
+  ties, unscored pairs included, go to the pair with the most sources, then by a hash of the
+  pair id (`cap_rank`).
 - `skip` rules keep nothing. They exist so the report can say which skip rule covered an
   edge type, and so an edge type no rule covers shows up as `unmatched`.
 
@@ -216,6 +217,20 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         ),
         object=("biolink:Disease",),
     ),
+    # DrugCentral writes some indications to a phenotype (an HP term) rather than a disease:
+    # 920 `treats` pairs in the Nov 9 2026 graph. Disease and PhenotypicFeature are siblings, so
+    # this takes nothing from chemical-treats-disease.
+    Rule(
+        id="chemical-treats-phenotype",
+        tier="query",
+        subject=(CHEMICAL,),
+        predicates=(
+            "biolink:treats",
+            "biolink:treats_or_applied_or_studied_to_treat",
+            "biolink:contraindicated_in",
+        ),
+        object=("biolink:PhenotypicFeature",),
+    ),
     Rule(
         id="chemical-affects-gene",
         tier="query",
@@ -225,6 +240,17 @@ DEFAULT_RULES: tuple[Rule, ...] = (
             "biolink:directly_physically_interacts_with",
             "biolink:binds",
         ),
+        object=(GENE,),
+    ),
+    # Drug-target activity: ChEMBL, WOMBAT-PK, DrugMatrix, DrugCentral, GtoPdb, PDSP and others
+    # write it as `interacts_with`, a quarter with a `causal_mechanism_qualifier` (25,148 pairs
+    # in the Nov 9 2026 graph). After chemical-affects-gene, which keeps `binds` and
+    # `directly_physically_interacts_with`: both are below `interacts_with`.
+    Rule(
+        id="drug-target",
+        tier="query",
+        subject=(CHEMICAL,),
+        predicates=("biolink:interacts_with",),
         object=(GENE,),
     ),
     # `associated_with` covers gene_associated_with_condition, genetically_associated_with,
@@ -251,6 +277,31 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         subject=(GENE,),
         predicates=("biolink:has_phenotype",),
         object=("biolink:PhenotypicFeature",),
+    ),
+    # TIGA's GWAS gene-trait associations, to EFO traits (564,098 pairs in the Nov 9 2026
+    # graph), which NodeNorm types PhenotypicFeature or only DiseaseOrPhenotypicFeature. Capped
+    # like gene-phenotype: numerous, and trait names are long. After gene-disease, since
+    # Disease is below DiseaseOrPhenotypicFeature.
+    Rule(
+        id="gene-trait",
+        tier="capped",
+        subject=(GENE,),
+        predicates=("biolink:associated_with", "biolink:contributes_to"),
+        object=("biolink:PhenotypicFeature", "biolink:DiseaseOrPhenotypicFeature"),
+    ),
+    # COMPARTMENTS' text mining: a protein `located_in` a cellular component that abstracts
+    # mention together (4,782,056 pairs in the Nov 9 2026 graph, scored, with no publications),
+    # so only this step can check it. Its edges are all text co-occurrence, so they go into the
+    # text-co-occurrence provenance rule's cap and the report counts them there; this rule sets
+    # the predicates their pairs' claims may use. Before pathway-go, whose skip covers
+    # `located_in` CellularComponent: curated GO locations stay skipped.
+    Rule(
+        id="text-mined-location",
+        tier="capped",
+        subject=(GENE,),
+        predicates=("biolink:located_in",),
+        object=("biolink:CellularComponent",),
+        knowledge_level=("text_co_occurrence",),
     ),
     # Pathway and GO names rarely appear verbatim in abstracts, and GO annotations carry their
     # own references and evidence codes. Pathway is below BiologicalProcessOrActivity.
@@ -789,9 +840,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--capped-limit",
         type=int,
         default=config.CAPPED_LIMIT,
-        help=f"pairs kept per capped rule (gene-gene, gene-phenotype, and text-co-occurrence "
-        f"and text-mined for edges mined from the literature), best-scored first "
-        f"(default {config.CAPPED_LIMIT:,})",
+        help=f"pairs kept per capped rule (gene-gene, gene-phenotype, gene-trait, and "
+        f"text-co-occurrence and text-mined for edges mined from the literature, COMPARTMENTS' "
+        f"locations among them), best-scored first (default {config.CAPPED_LIMIT:,})",
     )
     parser.add_argument(
         "--min-score",
