@@ -129,13 +129,15 @@ quotes made plain, brackets removed and outer punctuation stripped, so it accept
 of three ..." for "(GAMT-D) is one of three ...", but not a paraphrase. An ellipsis (`...`, `…`
 or `[...]`) splits a quote into at most 3 parts that must appear in order in the same text,
 each at least 20 characters, so two entity names joined by an ellipsis don't pass. A claim
-whose sentence isn't found is kept, and the repair pass (below) asks for its sentence again; if
-that finds none, the claim counts for nothing.
+whose sentence isn't found is kept, and the repair pass repairs it: code puts back the whole
+sentences the quote was taken from (`quote_align.repair`), and the repair model (below) is
+asked only when code can't place the quote. If neither finds one, the claim counts for
+nothing.
 
 ## Repair reply (end of step 3)
 
 Strict structured output, with `repair.REPLY_SCHEMA`, for one claim whose evidence sentence
-wasn't found:
+wasn't found and that code couldn't place (under half the quote's words are in the abstract):
 
 ```json
 {"quote": "Imatinib bound the ABL1 kinase domain"}

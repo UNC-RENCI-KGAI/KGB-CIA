@@ -120,14 +120,14 @@ def scene(w: World, *extra: Edge) -> None:
     w.answer(GENE_PAIR, "208", liver, design="in_vitro")
     with PubMedCache() as cache:
         cache.put_groundings([Grounding("liver", "anatomy", LIVER, "liver", "test")])
-    repairer, version = repair.current()
+    repairer, version = repair.model_current()
     with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
         cache.put_claim_repairs(
             [ClaimRepairRow(GENE_PAIR, "206", PV, MODEL, fixed, repairer, version, INHIBITED, True)]
         )
     run = records.read_label_run(w.work)
-    update = {"repairer": repairer, "repair_prompt_version": version}
-    records.write_label_run(w.work, run.model_copy(update=update))
+    run.set_repairs(repair.current())
+    records.write_label_run(w.work, run)
 
 
 def review(w: World, verdicts: dict[str, str | None] | None = None) -> None:

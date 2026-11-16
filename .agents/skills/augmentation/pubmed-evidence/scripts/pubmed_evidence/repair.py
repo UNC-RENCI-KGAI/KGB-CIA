@@ -1,41 +1,63 @@
-"""The end of step 3: a stronger model repairs the evidence sentences code couldn't find.
+"""The end of step 3: repair the evidence sentences the label model misquoted, with code first
+and the repair model only for what code can't place.
 
-About 1% of the bulk model's quotes aren't in the abstract: it paraphrased, shortened or
-stitched them. A claim whose evidence sentence isn't found counts for nothing (rule 1 in
-DESIGN.md's step 6). So once the claims are in and checked, each claim that passes every check
-but the sentence's, and whose sentence wasn't found, gets one small call to the repair model
-(config.REPAIR_MODEL, the review model): the claim, the sentence that wasn't found, and the
-abstract. The reply is a verbatim quote or null, and code checks it as it checks the first
-pass's. A repair supplies a sentence and never changes the claim, which stays as stored.
+About 1% of the bulk model's quotes aren't in their abstract (`quotes.quote_found`), and a claim
+whose evidence sentence isn't found counts for nothing (rule 1 in DESIGN.md's step 6). Nearly
+all of them are the abstract's own words, slightly off: sentences stitched together without
+'...', words dropped or changed, punctuation, a 'Title:' prefix. So once the claims are in and
+checked, each claim that passes every check but the sentence's, and whose sentence wasn't
+found, is repaired in two passes:
+
+1. Code (`quote_align.repair`) finds the sentences of the title or abstract the quote was taken
+   from and quotes them whole, joining a sentence that names an entity the passage doesn't. It
+   makes no call, and its quote is verbatim by construction (`quote_found` checks it anyway).
+   Its repairs are stored under the repairer 'code' and `quote_align.VERSION`, even when it
+   returns none, so a claim is placed by code once.
+2. A claim code can't place (under half the quote's words are in the abstract: a made-up or
+   rewritten quote) gets one small call to the repair model (config.REPAIR_MODEL, the review
+   model): the claim, the sentence that wasn't found, and the abstract. The reply is a verbatim
+   quote or null, and code checks it as it checks the first pass's. A claim code placed is
+   never sent, even when the passage doesn't name both entities.
+
+On the 409 such claims of the 2026-11-16 test, code placed 393 (every one verbatim) and left 16
+for the model, which found 9: 402 sentences found with 16 calls, against 347 with the model
+alone on all 409. A repair supplies a sentence and never changes the claim, which stays as
+stored.
 
 Repairs go to the label cache's `claim_repairs` table by claim (`cache.claim_id`) under
-(repairer, repair prompt version), one answered attempt per claim: a null, or a sentence that
-still isn't found, is kept and not asked again. A failed call stores nothing, so the next run
-asks again; until then the sentence counts as not found. Step 6 takes a claim's sentence from
-its repair when the repair's sentence was found (`sentence_repairs`), from the repairs
-`label_run.json` names, as it names the review.
+(repairer, repair prompt version), one answered attempt per claim and repairer: code's none,
+the model's null, or a sentence that still isn't found, is kept and not tried again. A failed
+model call stores nothing, so the next run asks again; until then the sentence counts as not
+found. Step 6 takes a claim's sentence from the repairs `label_run.json` names (`repairers`, in
+priority order: the code's, then the model's), as it names the review: the first of them whose
+sentence was found (`sentence_repairs`). So where a claim has both, as one an earlier run sent
+to the model has, the code's counts and the model's is the fallback.
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pubmed_evidence import config, llm, records, sentences
+from pubmed_evidence import config, llm, quote_align, records, sentences
 from pubmed_evidence.cache import ClaimRepairRow, LabelCache, PubMedCache, claim_id
 from pubmed_evidence.quotes import quote_found
 from shared.pubmed import Abstract
 
+# The repairer code repairs are stored under, with quote_align.VERSION as their version.
+CODE_REPAIRER = "code"
 # Version of the code that writes the user message; with the reply schema, part of the repair
 # prompt version.
 FORMAT_VERSION = "repair-message-2"
 REPLY_SCHEMA = llm.Schema(
     "repair_reply", llm.strict_object({"quote": llm.nullable({"type": "string"})})
 )
+
+ClaimKey = tuple[str, str, str]  # (pair_id, pmid, claim_id)
 
 
 def repair_prompt(prompt: Path = config.REPAIR_PROMPT) -> tuple[str, str]:
@@ -47,55 +69,86 @@ def repair_prompt(prompt: Path = config.REPAIR_PROMPT) -> tuple[str, str]:
     return llm.load_prompt(prompt, extra=extra)
 
 
-def current() -> tuple[str, str]:
-    """(repairer, repair prompt version) of the repairs a label run makes now: config's repair
+def code_current() -> tuple[str, str]:
+    """(repairer, version) of the repairs code makes now: 'code' and quote_align.VERSION."""
+    return CODE_REPAIRER, quote_align.VERSION
+
+
+def model_current() -> tuple[str, str]:
+    """(repairer, repair prompt version) of the repairs the model makes now: config's repair
     model with the skill's repair prompt."""
     return config.REPAIR_MODEL, repair_prompt()[1]
 
 
+def current() -> list[tuple[str, str]]:
+    """(repairer, version) of the repairs a label run makes now, in priority order: the
+    code's, then the repair model's."""
+    return [code_current(), model_current()]
+
+
+def _describe(order: Sequence[tuple[str, str]]) -> str:
+    return ", then ".join(f"{repairer} ({version})" for repairer, version in order)
+
+
 def stale(run: records.LabelRun) -> str | None:
     """A warning when the repairs the run names aren't the ones a label run would make now (the
-    repair prompt or model changed since); None if they are, or the run names none."""
-    if run.repairer is None or (run.repairer, run.repair_prompt_version) == current():
+    aligner, the repair prompt or the model changed since, or the run is from before code
+    repairs); None if they are, or the run names none."""
+    order = run.repair_order()
+    if not order or order == current():
         return None
-    repairer, version = current()
     return (
-        f"the quote repairs that count are {run.repairer}'s with {run.repair_prompt_version}, "
-        f"which label_run.json names; rerun `kgb-augment label` to repair the quotes with "
-        f"{repairer} and {version}"
+        f"the quote repairs that count are {_describe(order)}, which label_run.json names; "
+        f"rerun `kgb-augment label` to repair the quotes with {_describe(current())}"
     )
 
 
 @dataclass
 class Item:
-    """A claim of the first-pass run whose evidence sentence wasn't found."""
+    """A claim of the first-pass run whose evidence sentence wasn't found, with the repairs it
+    has so far."""
 
     pair_id: str
     pmid: str
     claim_id: str
     claim: dict[str, Any]
+    code: ClaimRepairRow | None = None  # its code repair at quote_align.VERSION, once made
+    model_answered: bool = False  # the repair model, with the skill's prompt, answered it
 
     @property
-    def key(self) -> tuple[str, str, str]:
+    def key(self) -> ClaimKey:
         return (self.pair_id, self.pmid, self.claim_id)
+
+    @property
+    def for_model(self) -> bool:
+        """Whether it goes to the repair model: code tried it without placing the sentence,
+        and the model hasn't answered it."""
+        return self.code is not None and not self.code.sentence_valid and not self.model_answered
+
+
+def _key(row: ClaimRepairRow) -> ClaimKey:
+    return (row.pair_id, row.pmid, row.claim_id)
 
 
 def pending(
     labels: LabelCache, prompt_version: str, model: str, pair_ids: Iterable[str]
 ) -> list[Item]:
     """The run's claims for these pairs that pass every check but the sentence's, whose
-    sentence wasn't found, and that have no repair yet by config.REPAIR_MODEL with the skill's
-    prompt. The checks are the ones the label step just stored (`label.check_pairs`)."""
+    sentence wasn't found, and that still need a repair: code hasn't tried them (at
+    quote_align.VERSION), or it didn't place the sentence and the repair model
+    (config.REPAIR_MODEL with the skill's prompt) hasn't answered. The checks are the ones the
+    label step just stored (`label.check_pairs`)."""
     ids = list(dict.fromkeys(pair_ids))
-    done = {
-        (r.pair_id, r.pmid, r.claim_id)
-        for r in labels.claim_repairs(prompt_version, model, *current(), ids)
-    }
+    code = {_key(r): r for r in labels.claim_repairs(prompt_version, model, *code_current(), ids)}
+    answered = {_key(r) for r in labels.claim_repairs(prompt_version, model, *model_current(), ids)}
     wanted = {
         (c.pair_id, c.pmid, c.claim_id)
         for c in labels.claim_checks(prompt_version, model, ids)
         if c.valid and not c.sentence_valid
-    } - done
+    }
+    wanted = {
+        k for k in wanted if k not in code or (not code[k].sentence_valid and k not in answered)
+    }
     if not wanted:
         return []
     pairs = sorted({pair for pair, _, _ in wanted})
@@ -104,8 +157,49 @@ def pending(
         for claim in answer.claims:
             key = (answer.pair_id, answer.pmid, claim_id(claim))
             if key in wanted:
-                items[key] = Item(*key, claim)
+                items[key] = Item(*key, claim, code.get(key), key in answered)
     return [items[k] for k in sorted(items)]
+
+
+def entity_terms(
+    node: str, names: Mapping[str, str], synonyms: Mapping[str, Sequence[str]]
+) -> list[str]:
+    """What an abstract may call a node: its name, then its synonyms, once each."""
+    terms = [names.get(node), *synonyms.get(node, ())]
+    return list(dict.fromkeys(t.strip() for t in terms if t and t.strip()))
+
+
+def code_repair(
+    item: Item,
+    abstract: Abstract,
+    names: Mapping[str, str],
+    synonyms: Mapping[str, Sequence[str]],
+    prompt_version: str,
+    model: str,
+) -> tuple[ClaimRepairRow, dict[str, Any]]:
+    """Code's repair of one claim, as stored, and what the aligner found (`quote_align.repair`'s
+    info): the passage, whether `quote_found` finds it, or none."""
+    statement = item.claim["statement"]
+    quote, info = quote_align.repair(
+        item.claim["evidence_sentence"],
+        abstract.title,
+        abstract.abstract,
+        [entity_terms(statement[side], names, synonyms) for side in ("subject", "object")],
+        sentences.claim_sentence(item.claim, names),
+    )
+    valid = quote_found(quote, abstract.title, abstract.abstract) if quote else None
+    row = ClaimRepairRow(
+        item.pair_id,
+        item.pmid,
+        prompt_version,
+        model,
+        item.claim_id,
+        *code_current(),
+        quote,
+        valid,
+        answered_by=CODE_REPAIRER,
+    )
+    return row, info
 
 
 def build_message(item: Item, names: dict[str, str], abstract: Abstract) -> str:
@@ -144,20 +238,32 @@ def repair_quotes(
     model: str,
     pair_ids: Iterable[str],
     names: dict[str, str],
+    synonyms: Mapping[str, Sequence[str]] | None = None,
     client: Any = None,
     workers: int = config.WORKERS,
 ) -> dict[str, Any]:
-    """Repair the evidence sentences of the first-pass run's claims for these pairs that have
-    no repair yet (`pending`), and return a summary. `names` maps node ids to names, for the
-    claim in words. `client` (anything with a client's `call`) is built for config.REPAIR_MODEL
-    if not given and there is something to send; without its credentials the pass is skipped,
-    and the summary says why."""
+    """Repair the evidence sentences of the first-pass run's claims for these pairs that still
+    need a repair (`pending`), with code first, then with the repair model those code couldn't
+    place, and return a summary. `names` maps node ids to names, for the claim in words, and
+    `synonyms` node ids to the other names the label step gave them (synonyms and MeSH
+    headings), which code looks for in the abstract. `client` (anything with a client's `call`)
+    is built for config.REPAIR_MODEL if not given and there is something to send it; without
+    its credentials the model's pass is skipped, and the summary says why. The summary's
+    `repairers` are the repairs that count after this pass, in priority order: the code's, then
+    the model's unless its pass was skipped."""
     system, version = repair_prompt()
     summary: dict[str, Any] = {
+        "repairers": [code_current(), (config.REPAIR_MODEL, version)],
+        "code_version": quote_align.VERSION,
         "repairer": config.REPAIR_MODEL,
         "repair_prompt_version": version,
         "pending": 0,
         "no_abstract": 0,
+        "code_tried": 0,
+        "code_found": 0,
+        "code_none": 0,
+        "code_unresolved": 0,
+        "for_model": 0,
         "calls": 0,
         "failed_calls": 0,
         "found": 0,
@@ -171,6 +277,24 @@ def repair_quotes(
     summary["no_abstract"] = sum(i.pmid not in abstracts for i in items)
     items = [i for i in items if i.pmid in abstracts]
     summary["pending"] = len(items)
+
+    rows = []
+    for item in items:
+        if item.code is not None:
+            continue
+        row, info = code_repair(
+            item, abstracts[item.pmid], names, synonyms or {}, prompt_version, model
+        )
+        item.code = row
+        rows.append(row)
+        summary["code_found" if row.sentence_valid else "code_none"] += 1
+        summary["code_unresolved"] += bool(row.sentence_valid and info.get("unresolved"))
+    summary["code_tried"] = len(rows)
+    if rows:
+        labels.put_claim_repairs(rows)
+
+    items = [i for i in items if i.for_model]
+    summary["for_model"] = len(items)
     if not items:
         return summary
     if client is None:
@@ -178,6 +302,7 @@ def repair_quotes(
             client = llm.client_for(llm.model(config.REPAIR_MODEL))
         except llm.LLMError as e:
             summary["skipped"] = str(e)
+            summary["repairers"] = [code_current()]
             return summary
 
     def calls() -> Iterator[llm.Call]:
@@ -226,41 +351,68 @@ def repair_quotes(
     return summary
 
 
+def chosen_repairs(
+    labels: LabelCache,
+    prompt_version: str,
+    model: str,
+    repairers: Sequence[tuple[str, str]] | None,
+    pair_ids: Iterable[str] | None = None,
+) -> dict[ClaimKey, ClaimRepairRow]:
+    """The repair that counts for each of the first-pass run's claims these repairers repaired,
+    by (pair_id, pmid, claim_id): of the repairs by `repairers` ((repairer, repair prompt
+    version) in priority order), the first whose sentence was found, else the last made."""
+    ids = None if pair_ids is None else list(pair_ids)
+    out: dict[ClaimKey, ClaimRepairRow] = {}
+    for repairer, version in repairers or ():
+        for row in labels.claim_repairs(prompt_version, model, repairer, version, ids):
+            held = out.get(_key(row))
+            if held is None or not (held.sentence_valid and held.evidence_sentence):
+                out[_key(row)] = row
+    return out
+
+
 def sentence_repairs(
     labels: LabelCache,
     prompt_version: str,
     model: str,
-    repairer: str | None,
-    repair_prompt_version: str | None,
+    repairers: Sequence[tuple[str, str]] | None,
     pair_ids: Iterable[str] | None = None,
-) -> dict[tuple[str, str, str], str]:
+) -> dict[ClaimKey, str]:
     """The first-pass run's repaired evidence sentences that were found, by (pair_id, pmid,
-    claim_id), from the repairs of this repairer and repair prompt version; none without
-    them. A claim's sentence counts as found when its check found it or its repair here was."""
-    if repairer is None or repair_prompt_version is None:
-        return {}
-    rows = labels.claim_repairs(prompt_version, model, repairer, repair_prompt_version, pair_ids)
+    claim_id), from the repairs of `repairers` ((repairer, repair prompt version) in priority
+    order, as `LabelRun.repair_order` gives them): each claim's from the first whose sentence
+    was found. None without repairers. A claim's sentence counts as found when its check found
+    it or one of these repairs did."""
     return {
-        (r.pair_id, r.pmid, r.claim_id): r.evidence_sentence
-        for r in rows
-        if r.sentence_valid and r.evidence_sentence
+        key: row.evidence_sentence
+        for key, row in chosen_repairs(labels, prompt_version, model, repairers, pair_ids).items()
+        if row.sentence_valid and row.evidence_sentence
     }
 
 
 def print_summary(s: dict[str, Any], step: str = "label") -> None:
+    if not s["pending"]:
+        return
+    placed = f"code ({s['code_version']}) placed {s['code_found']} of {s['code_tried']}"
+    if s["code_unresolved"]:
+        placed += f" ({s['code_unresolved']} with no sentence naming both entities, kept)"
+    print(
+        f"{step}: quote repair: {s['pending']} evidence sentences not found and not yet "
+        f"repaired; {placed}; {s['for_model']} left for {s['repairer']}"
+    )
     if s["skipped"]:
         print(
-            f"{step}: warning: quote repair skipped ({s['skipped']}); the {s['pending']} evidence "
-            "sentences not found count as not found until a run repairs them",
+            f"{step}: warning: {s['repairer']}'s quote repair skipped ({s['skipped']}); the "
+            f"{s['for_model']} evidence sentences code couldn't place count as not found until "
+            "a run repairs them",
             file=sys.stderr,
         )
         return
-    if not s["pending"]:
+    if not s["for_model"]:
         return
     cost = "unknown" if s["cost"] is None else f"${s['cost']:.4f}"
     print(
-        f"{step}: quote repair by {s['repairer']}: {s['pending']} evidence sentences not found; "
-        f"repaired "
-        f"{s['found']}, none {s['none']}, still not found {s['not_found']}; "
-        f"{s['calls']} calls, {s['failed_calls']} failed (retried next run); cost {cost}"
+        f"{step}: quote repair by {s['repairer']}: repaired {s['found']}, none {s['none']}, "
+        f"still not found {s['not_found']}; {s['calls']} calls, {s['failed_calls']} failed "
+        f"(retried next run); cost {cost}"
     )

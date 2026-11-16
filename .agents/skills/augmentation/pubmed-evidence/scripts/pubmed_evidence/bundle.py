@@ -29,8 +29,9 @@ Steps 5 and 6 read the bundles: the review step sends the claims that would coun
   is a matter of the edge, for step 6 to add.
 - **Claims.** Each abstract's claims as `ClaimRecord`s, but for those that failed a check other
   than the sentence's (`claim_checks`): they count for nothing. A
-  sentence counts as found when its check found it or a repair by the run's repairer did
-  (`repair.sentence_repairs`), and is then the repair's. Anatomy is grounded through the ground
+  sentence counts as found when its check found it or a repair the run names did
+  (`repair.sentence_repairs`: the code's, then the repair model's), and is then the first such
+  repair's. Anatomy is grounded through the ground
   step's cache (`ground.groundings`); a name it looked up and didn't ground stays as
   `anatomy_name`, which goes to `lit_context_notes`. Each
   statement reads the way round Biolink's domain and range put it (`refine.directed`), so
@@ -288,9 +289,7 @@ def _load_chunk(
     pv, model = run.prompt_version, run.model
     answers = {(a.pair_id, a.pmid): a for a in labels.abstract_claims(pv, model, pair_ids)}
     checks = {(c.pair_id, c.pmid, c.claim_id): c for c in labels.claim_checks(pv, model, pair_ids)}
-    repairs = repair.sentence_repairs(
-        labels, pv, model, run.repairer, run.repair_prompt_version, pair_ids
-    )
+    repairs = repair.sentence_repairs(labels, pv, model, run.repair_order(), pair_ids)
     verdicts: dict[ClaimKey, tuple[ReviewVerdict, str]] = {}
     if review is not None:
         for r in labels.claim_reviews(pv, model, *review, pair_ids=pair_ids):

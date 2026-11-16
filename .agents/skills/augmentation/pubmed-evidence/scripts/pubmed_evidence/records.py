@@ -95,9 +95,9 @@ class Pair(shared.pubmed.Pair):
 
 class LabelRun(BaseModel):
     """Which claims step 6 applies: the model, prompt and effort of the last label run, the
-    model and prompt of the quote repairs that count (its repair pass's), the model, prompt and
-    effort of the review that followed it, if any; and the UBERON release the ground step
-    pinned."""
+    quote repairs that count (its repair pass's: the code's, then the repair model's), the
+    model, prompt and effort of the review that followed it, if any; and the UBERON release the
+    ground step pinned."""
 
     model: str
     prompt_version: str
@@ -114,14 +114,42 @@ class LabelRun(BaseModel):
         description="Effort the review sent ('none' for none); the full run continues with it "
         "while its reviewer reviews",
     )
-    repairer: str | None = None
-    repair_prompt_version: str | None = None
+    repairer: str | None = Field(
+        default=None,
+        description="The last of `repairers`, the repair model when its pass ran: the one "
+        "repairer a file from before `repairers` names, read only when `repairers` is absent",
+    )
+    repair_prompt_version: str | None = Field(
+        default=None, description="`repairer`'s repair prompt (or code) version"
+    )
+    repairers: list[tuple[str, str]] | None = Field(
+        default=None,
+        description="(repairer, repair prompt version) of the quote repairs that count, in "
+        "priority order: a claim's sentence is the first of their repairs that was found, "
+        "e.g. [('code', 'align-2'), ('gpt-5.6-terra', 'repair@...')]. None in a file written "
+        "before code repairs",
+    )
     uberon_version: str | None = Field(
         default=None,
         description="data-version of the uberon-basic.obo in the cache directory, whose "
         "is_a/part_of closure decides which anatomy is at or below which; the ground step "
         "records it",
     )
+
+    def repair_order(self) -> list[tuple[str, str]]:
+        """(repairer, repair prompt version) of the repairs that count, in priority order:
+        `repairers`, or in a file from before it, the one `repairer` it names; [] for none."""
+        if self.repairers is not None:
+            return [(r, v) for r, v in self.repairers]
+        if self.repairer and self.repair_prompt_version:
+            return [(self.repairer, self.repair_prompt_version)]
+        return []
+
+    def set_repairs(self, order: list[tuple[str, str]]) -> None:
+        """Name the repairs that count, in priority order, with the last of them in `repairer`
+        and `repair_prompt_version` too, for readers from before `repairers`."""
+        self.repairers = [(r, v) for r, v in order] or None
+        self.repairer, self.repair_prompt_version = order[-1] if order else (None, None)
 
 
 def read_records[M: BaseModel](path: Path, model: type[M]) -> Iterator[M]:

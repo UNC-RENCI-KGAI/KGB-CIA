@@ -608,7 +608,7 @@ def _answers(
     inputs: _Inputs,
     model: str,
     version: str,
-    repairs_by: tuple[str | None, str | None],
+    repairs_by: list[tuple[str, str]],
 ) -> _Answers:
     pair_ids = sorted({pid for pid, _ in gold.abstracts})
     out = _Answers()
@@ -623,7 +623,7 @@ def _answers(
     checks = {
         (c.pair_id, c.pmid, c.claim_id): c for c in labels.claim_checks(version, model, pair_ids)
     }
-    repairs = repair.sentence_repairs(labels, version, model, *repairs_by, pair_ids)
+    repairs = repair.sentence_repairs(labels, version, model, repairs_by, pair_ids)
     grounded, out.anatomy = inputs.grounded(c for a in out.own.values() for c in a.claims)
     counts = out.counts
     for key, a in sorted(out.own.items()):
@@ -804,11 +804,12 @@ def _score_run(
 
 def _repairs_by(
     label_run: records.LabelRun | None, model: str, version: str
-) -> tuple[str | None, str | None]:
-    """(repairer, repair prompt version) whose sentence repairs count for a run: those
-    `label_run.json` names, if it names this run, else those a label run makes now."""
+) -> list[tuple[str, str]]:
+    """(repairer, repair prompt version) whose sentence repairs count for a run, in priority
+    order: those `label_run.json` names, if it names this run, else those a label run makes
+    now (the code's, then the repair model's)."""
     if label_run is not None and (label_run.model, label_run.prompt_version) == (model, version):
-        return label_run.repairer, label_run.repair_prompt_version
+        return label_run.repair_order()
     return repair.current()
 
 
@@ -841,7 +842,7 @@ def evaluate(
     a prompt version is scored once per prompt version it has answers for in the cache,
     skipping those with none for a gold abstract. A run given with its prompt version is always
     scored, even with no answers. Repaired sentences are those `label_run` names for its own
-    run, and the current repair model's and prompt's for any other. `species_in_proposals`
+    run, and the current code's and repair model's for any other. `species_in_proposals`
     keeps the species in both sides' proposals (default config.SPECIES_IN_PROPOSALS). Anatomy
     names the PubMed cache hasn't grounded are grounded through `lookup` and `nodenorm` (by
     default the Name Resolver and NodeNorm), as the ground step grounds them."""
@@ -894,8 +895,7 @@ def evaluate(
                         "model": model,
                         "prompt_version": v,
                         "run": f"{model}@{v}",
-                        "repairer": repairs_by[0],
-                        "repair_prompt_version": repairs_by[1],
+                        "repairers": [list(r) for r in repairs_by],
                     }
                     | result
                     | {"usage": usage}
@@ -1165,7 +1165,8 @@ def report(gold: Gold, result: dict[str, Any]) -> str:
             ),
             f"- Claims: {claims['claims']}, of which {claims['failing_checks']} failed a check "
             f"and {claims['sentences_not_found']} have an evidence sentence not found; "
-            f"{claims['sentences_repaired']} sentences repaired by {r['repairer']}",
+            f"{claims['sentences_repaired']} sentences repaired by "
+            f"{', then '.join(name for name, _ in r['repairers']) or 'no repairer'}",
             *([f"- Anatomy: {_anatomy(r['anatomy'])}"] if _anatomy(r["anatomy"]) else []),
             f"- Edges refined: {r['edges_covered']} of {r['edges']}, in {r['pairs_covered']} of "
             f"{r['pairs']} pairs",

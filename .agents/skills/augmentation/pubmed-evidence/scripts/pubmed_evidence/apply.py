@@ -136,6 +136,7 @@ def resolve_run(
         or (stored.review_prompt_version if stored else None),
         repairer=stored.repairer if stored else None,
         repair_prompt_version=stored.repair_prompt_version if stored else None,
+        repairers=stored.repairers if stored else None,
         uberon_version=stored.uberon_version if stored else None,
     )
     if not run.model or not run.prompt_version:

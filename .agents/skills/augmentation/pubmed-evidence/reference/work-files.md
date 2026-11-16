@@ -54,8 +54,15 @@ Fields by file:
 - **`label_run.json`** (`LabelRun`): the run that ground, review, apply and the full run use.
   - `model`, `prompt_version`, `prompt` (path of the prompt file) and `reasoning_effort` (the
     effort the run sent, `none` for none) of the label run;
-  - `repairer` and `repair_prompt_version`: the sentence repairs that count, those of the label
-    run's repair pass, or of an earlier pass of the same run if this one made none;
+  - `repairers`: the sentence repairs that count, as `[repairer, version]` pairs in priority
+    order, `[["code", "align-2"], ["gpt-5.6-terra", "repair@..."]]`: a claim's sentence is the
+    first of their repairs that was found. Those of the label run's repair pass: the code's,
+    then the model's, or an earlier pass's of the same run if the model's was skipped for lack
+    of credentials; all of an earlier pass's if no pass ran (`--no-repair`);
+  - `repairer` and `repair_prompt_version`: the last of `repairers` (the model's when its pass
+    ran), for readers from before `repairers`. A file from before it names only these, and
+    they are then the repairs that count; review and apply warn that it is stale, and a label
+    run adds the code's repairs, first, without a model call for a claim the model answered;
   - `reviewer`, `review_prompt_version` and `review_reasoning_effort`, written by review. The
     full run continues the review's effort while the same reviewer reviews;
   - `uberon_version`: the `data-version` of the `uberon-basic.obo` that ground pinned, kept
@@ -67,8 +74,9 @@ Fields by file:
 - **`label_sample.md`**: per sample pair (chosen with `--sample`'s seed, or named by the
   `--pairs` file), the entities, then each abstract's title, design and publication types, and
   its claims: each in words with its role, hedging, finding type and context, its evidence
-  sentence and whether it was found, the repair of one that wasn't, its `also_supports` in
-  words, and its check errors if it's invalid. What you read to tune the prompt.
+  sentence and whether it was found, the repair of one that wasn't and who made it (the first
+  found of the code's and the model's, else the last made), its `also_supports` in words, and
+  its check errors if it's invalid. What you read to tune the prompt.
 - **`label_sample.jsonl`**: one line per (pair, PMID) of the sample: `pair_id`, `pmid`,
   `title`, `abstract`, `publication_types`, `study_design` (the model's), and `claims`, each
   `{claim_id, claim, valid, errors, sentence_valid, repaired_sentence}` with `claim` as stored.
@@ -184,7 +192,7 @@ publication types are cached. Ground's `--refresh` looks names up again.
 | `abstract_claims` | (pair_id, pmid, prompt_version, model) | `study_design` (the model's), `claims` (JSON list of stored claims), `created`, `answered_by` (the model that answered: a fallback's, if one did) |
 | `claim_checks` | … + claim_id | `valid` (every check but the sentence's passed), `errors` (JSON list), `sentence_valid` (the sentence was found as given) |
 | `claim_reviews` | … + claim_id, reviewer, review_prompt_version | `verdict` (`upheld` or `reject`), `reason`, `created`, `answered_by` |
-| `claim_repairs` | … + claim_id, repairer, repair_prompt_version | `evidence_sentence` (null when the repairer found none), `sentence_valid`, `created`, `answered_by` |
+| `claim_repairs` | … + claim_id, repairer, repair_prompt_version | `evidence_sentence` (null when the repairer found none), `sentence_valid`, `created`, `answered_by`. `repairer` is `code` (with `quote_align.VERSION`, `align-2`, as its version, and `answered_by` `code`) or the repair model (with the repair prompt version) |
 | `calls` | autoincrement id | `step` (`label`/`review`/`repair`), `pair_id`, `model`, `prompt_version`, `input_tokens` (every prompt token), `cache_read_tokens` and `cache_write_tokens` (those of them the service's prompt cache read and wrote), `output_tokens`, `cost` (USD, null if unknown), `seconds`, `error`, `created`, `answered_by` |
 
 `…` is `abstract_claims`' key. Columns added to `calls` since the first release (the cache
@@ -225,3 +233,7 @@ cache's years, publication types and groundings, the UBERON file, the graph,
   `repair-message-2` in `repair.py`. Any edit to a prompt file or a schema starts fresh
   answers (or reviews, or repairs); bump `FORMAT_VERSION` when the code that writes the request
   changes.
+- **Code repair version** (`quote_align.VERSION`, `align-2`): the version code's quote repairs
+  are stored under, beside the repairer `code`. It names no prompt: bump it by hand on any
+  change to what `quote_align.repair` returns, and the next label run repairs every claim
+  again with code (no model call for a claim the model has answered).

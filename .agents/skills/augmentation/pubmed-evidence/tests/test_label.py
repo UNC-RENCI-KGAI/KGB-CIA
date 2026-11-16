@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClient, Sent
-from pubmed_evidence import biolink, config, label, llm, records, repair, scope
+from pubmed_evidence import biolink, config, label, llm, quote_align, records, repair, scope
 from pubmed_evidence.cache import (
     AbstractClaimsRow,
     ClaimCheckRow,
@@ -962,7 +962,7 @@ def repairer(answer=None) -> FakeClient:
 
 def repairs_of(w: Work, summary: dict) -> dict:
     with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
-        rows = cache.claim_repairs(summary["prompt_version"], MODEL, *repair.current())
+        rows = cache.claim_repairs(summary["prompt_version"], MODEL, *repair.model_current())
         return {(r.pair_id, r.pmid): r for r in rows}
 
 
@@ -983,11 +983,16 @@ def test_only_valid_claims_whose_sentence_wasnt_found_are_repaired(w):
     )
     assert row.answered_by == config.REPAIR_MODEL
     assert summary["repairs"]["found"] == 1 and summary["repairs"]["pending"] == 1
+    # Code tried it first, and couldn't place it: under half its words are in the abstract.
+    with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
+        [code] = cache.claim_repairs(summary["prompt_version"], MODEL, *repair.code_current())
+    assert (code.claim_id, code.evidence_sentence, code.answered_by) == (row.claim_id, None, "code")
+    assert summary["repairs"]["code_none"] == 1 and summary["repairs"]["for_model"] == 1
     # The stored claim is never rewritten: the repair sits beside it.
     [stored] = w.answers()[(GENE_PAIR, "1001")].claims
     assert stored["evidence_sentence"] == MADE_UP and row.claim_id == claim_id(stored)
     with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
-        found = repair.sentence_repairs(cache, summary["prompt_version"], MODEL, *repair.current())
+        found = repair.sentence_repairs(cache, summary["prompt_version"], MODEL, repair.current())
     assert found == {(GENE_PAIR, "1001", row.claim_id): BOUND}
 
 
@@ -1002,8 +1007,7 @@ def test_a_repair_answered_is_not_asked_again(w):
     assert again.sent == []
     with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
         assert (
-            repair.sentence_repairs(cache, summary["prompt_version"], MODEL, *repair.current())
-            == {}
+            repair.sentence_repairs(cache, summary["prompt_version"], MODEL, repair.current()) == {}
         )
 
 
@@ -1020,7 +1024,92 @@ def test_a_failed_repair_call_is_retried(w):
 def test_label_run_names_the_repairs_that_count(w):
     run_label(w, labeler(misquoted), repair_client=repairer())
     run = records.read_label_run(w.work)
-    assert (run.repairer, run.repair_prompt_version) == repair.current()
+    assert run.repair_order() == repair.current()
+    assert (run.repairer, run.repair_prompt_version) == repair.model_current()
+
+
+NEAR = "Imatinib bound the ABL1 kinase domain, inhibiting its catalytic activity in vitro"
+FIRST = "STI571 inhibited the kinase in every leukemia cell line we tested."
+SECOND = "Its target in these cells was c-Abl, as shown by pull-down."
+
+
+def near_misquote(sent: Sent):
+    """The gene pair's first claim quotes A1001 with a word changed, and a claim on A1004
+    quotes its first sentence with a word dropped."""
+    if "1001" not in pmids_of(sent):
+        return reply(sent)
+    claims = gene_claims(sent)
+    [first] = claims["1001"]
+    claims["1001"] = [{**first, "evidence_sentence": NEAR}]
+    claims["1004"] = [{**first, "evidence_sentence": FIRST.replace("we tested", "tested")}]
+    return reply(sent, claims)
+
+
+def test_code_repairs_near_verbatim_quotes_without_a_call(w):
+    w.add_abstracts([Abstract("1004", "Kinase inhibition in leukemia cells", f"{FIRST} {SECOND}")])
+    w.write_pubmed(["1001", "1002", "1003", "1004"], ["2001"])
+    fixer = repairer()
+    summary = run_label(w, labeler(near_misquote), repair_client=fixer)
+    assert fixer.sent == []
+    s = summary["repairs"]
+    assert (s["code_tried"], s["code_found"], s["for_model"], s["calls"]) == (2, 2, 0, 0)
+    pv = summary["prompt_version"]
+    with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
+        made = {r.pmid: r for r in cache.claim_repairs(pv, MODEL, *repair.code_current())}
+        assert cache.claim_repairs(pv, MODEL, *repair.model_current()) == []
+        run = records.read_label_run(w.work)
+        found = repair.sentence_repairs(cache, pv, MODEL, run.repair_order())
+    assert run.repair_order() == repair.current()
+    assert {(r.repairer, r.repair_prompt_version, r.answered_by) for r in made.values()} == {
+        ("code", quote_align.VERSION, "code")
+    }
+    assert found == {
+        (GENE_PAIR, "1001", made["1001"].claim_id): ABSTRACTS["1001"].abstract,
+        # c-Abl, a synonym step 2 searched ABL1 by, names it, so its sentence is joined.
+        (GENE_PAIR, "1004", made["1004"].claim_id): f"{FIRST} {SECOND}",
+    }
+
+
+def test_the_synonyms_code_looks_for_are_the_label_messages():
+    imatinib = Entity(id=IMATINIB, name="imatinib")
+    abl1 = Entity(id=ABL1, name="ABL1")
+    mesh = {IMATINIB: ["Imatinib Mesylate"]}
+    jobs = [
+        label.PairJob(
+            "p1", [imatinib, abl1], {IMATINIB: ["Gleevec"], ABL1: ["c-Abl"]}, mesh, (), ()
+        ),
+        label.PairJob("p2", [imatinib, abl1], {IMATINIB: ["STI571", "Gleevec"]}, {}, (), ()),
+    ]
+    assert label.entity_synonyms(jobs) == {
+        IMATINIB: ["Gleevec", "Imatinib Mesylate", "STI571"],
+        ABL1: ["c-Abl"],
+    }
+
+
+def test_a_label_run_json_from_before_code_repairs_keeps_its_model_repairs(w):
+    summary = run_label(w, labeler(misquoted), repair_quotes=False)
+    old = {
+        "model": MODEL,
+        "prompt_version": summary["prompt_version"],
+        "repairer": config.REPAIR_MODEL,
+        "repair_prompt_version": "repair@0ld",
+    }
+    (w.work / records.LABEL_RUN).write_text(json.dumps(old))
+    earlier = (config.REPAIR_MODEL, "repair@0ld")
+    # No pass: the repairs it names still count, now in the list.
+    run_label(w, labeler(), repair_quotes=False)
+    assert records.read_label_run(w.work).repairers == [earlier]
+    # The model's pass skipped: the code's repairs first, then the earlier model repairs.
+    summary = run_label(w, labeler())
+    assert summary["repairs"]["skipped"]
+    run = records.read_label_run(w.work)
+    assert run.repair_order() == [repair.code_current(), earlier]
+    assert (run.repairer, run.repair_prompt_version) == earlier
+    assert "rerun `kgb-augment label`" in repair.stale(run)
+    # The pass made: the current repairs replace them.
+    run_label(w, labeler(), repair_client=repairer())
+    run = records.read_label_run(w.work)
+    assert run.repair_order() == repair.current() and repair.stale(run) is None
 
 
 def test_no_repair_and_no_credentials(w, capsys):
@@ -1043,7 +1132,9 @@ def test_sample_files(w):
     rows = list(read_jsonl(jsonl))
     if rows[0]["pair_id"] == GENE_PAIR:
         assert "**positive**: imatinib causes decreased activity of ABL1" in text
-        assert "(NOT FOUND)" in text and f'repair: "{BOUND}" (found)' in text
+        assert (
+            "(NOT FOUND)" in text and f'repair by {config.REPAIR_MODEL}: "{BOUND}" (found)' in text
+        )
         assert "**negative**: ABL1 does not bind imatinib" in text and "- no claims" in text
         assert [len(r["claims"]) for r in rows] == [1, 1, 0]
     else:

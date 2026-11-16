@@ -317,18 +317,43 @@ come in the claim's context instead.
   plain dashes and quote marks, brackets removed and outer punctuation stripped. A quote may
   join up to three spans with `...`, each at least 20 characters, so two entity names joined by
   an ellipsis don't pass.
-- **Repair:** the label step ends with a repair pass (`repair.py`; `--no-repair` skips it).
-  Each claim that passes every other check, but whose sentence wasn't found, gets one small
-  call to the review model (`config.REPAIR_MODEL`) with the abstract, the claim and the failed
-  sentence. The reply is a verbatim quote or null, and code checks it the same way. Under the
-  earlier statement labels, about 1% of decisive quotes needed it. A repair supplies a sentence
-  and never changes the claim, and null is a normal answer, since a model asked for a quote may
-  grab a loosely related sentence.
-- **Which repairs count:** repairs are cached per claim under the repairer and its prompt
-  version, one answered attempt each, and a failed call is retried on the next run. Review,
-  step 6 and `evaluate` use the repairs `label_run.json` names, as it names the review, and
-  warn when the repair prompt or model has changed since. A repaired sentence is flagged on the
-  claim record (`evidence_sentence_repaired`) and counted in the apply report.
+- **Repair:** the label step ends with a repair pass (`repair.py`; `--no-repair` skips it) for
+  each claim that passes every other check but whose sentence wasn't found, about 1% of them.
+  Nearly all such quotes are the abstract's own words, slightly off: sentences stitched
+  together without `...`, words dropped, one to three words changed, punctuation, hyphens, a
+  `Title:` prefix, title and abstract mixed. So code repairs them first, and the review model
+  only what code can't place:
+  - **Code** (`quote_align.py`, standard library only) covers the quote's words with at most
+    two of the abstract's sentences (difflib's matching blocks; the title and the abstract
+    apart, since a quote can't mix them) and quotes those sentences whole, so its quote is
+    verbatim by construction (`quote_found` checks it anyway). If the passage doesn't name both
+    entities, by the names and synonyms the label message gave them, it joins with `...` a
+    sentence that names the missing one, as the label prompt's own rule asks. Where no sentence
+    does, the passage is kept as it is ("unresolved") and not sent to the model.
+  - **The model:** a claim code can't place, where under half the quote's words are in the
+    abstract (a made-up or rewritten quote), gets one small call to the review model
+    (`config.REPAIR_MODEL`) with the abstract, the claim and the failed sentence. The reply is
+    a verbatim quote or null, and code checks it the same way. Null is a normal answer, since a
+    model asked for a quote may grab a loosely related sentence.
+
+  A repair supplies a sentence and never changes the claim. Measured on the 409 claims of the
+  2026-11-16 repair test (`data/augmentation/quote-repair-methods-2026-11-16/`, not in git,
+  with the claims and caches in `../repair-model-test-2026-11-16/`): code placed 393, every one
+  verbatim, and left 16 for the model, which found 9. That is 402 of 409 sentences found (98%)
+  with 16 calls, against 347 (85%) with the model alone on all 409 ($0.06 instead of $1.55).
+  On the 34 claims where code's passage and the model's share no sentence, a reading judged
+  code's the better evidence 13 times, as good 13 times and worse 8 times. Embeddings, a
+  cross-encoder and a single-sentence choice by Jev all did worse than the alignment.
+- **Which repairs count:** repairs are cached per claim under the repairer (`code`, or the
+  model) and its version (`quote_align.VERSION`, or the repair prompt version), one answered
+  attempt each: code's none is kept too, so code places a claim once and the model is asked
+  once. A failed call is retried on the next run. `label_run.json` names the repairs that count
+  in priority order, the code's then the model's (`repairers`), as it names the review; review,
+  step 6 and `evaluate` take each claim's sentence from the first of them that found it, so
+  the code's wins and the model's is the fallback, even for a claim the model repaired before
+  code repairs existed. They warn when the aligner, the repair prompt or the model has changed
+  since. A repaired sentence is flagged on the claim record (`evidence_sentence_repaired`) and
+  counted in the apply report.
 
 ### Structured replies
 
@@ -747,10 +772,11 @@ across a team:
   `data/cache/augmentation`), with
   the pinned `uberon-basic.obo` beside it. Each abstract's answer for a pair, keyed by (pair,
   PMID, prompt version, model), with its design and claims; each claim's checks; the review's
-  verdicts and the sentence repairs, keyed by the claim's id and their own model and prompt
-  version; and a log of every call's tokens and cost. A rerun asks only for what has no answer
-  yet, and a new prompt version starts fresh. Step 6 reads this cache, the publication types in
-  the PubMed cache and the work files, so the graph can be rebuilt without calling a model.
+  verdicts and the sentence repairs, keyed by the claim's id and their own model (or `code`)
+  and prompt (or aligner) version; and a log of every call's tokens and cost. A rerun asks
+  only for what has no answer yet, and a new prompt version starts fresh. Step 6 reads this
+  cache, the publication types in the PubMed cache and the work files, so the graph can be
+  rebuilt without calling a model.
 - **Prompt versions** hash the prompt file's text with the files it includes, the step's
   `FORMAT_VERSION` (the version of the request layout), its reply schema or schemas and the
   reasoning effort sent. Any edit to a prompt or a schema, or another effort, starts fresh
@@ -772,7 +798,9 @@ calls are free. The dry run's estimate assumes
 replace, and it covers labeling alone; the dry run says so, since review and quote repair come
 on top and no multiplier is assumed for them. On the Nov 12 2026 run labeling was 58% of the
 total, review 35% and repair 7%, with the labeling estimate itself 20% over the actual
-($3.44 estimated, $2.81 spent). `label --dry-run --budget USD` exits 1 when the estimate is
+($3.44 estimated, $2.81 spent). Repair has since gone code first: the model is called for
+about 4% of the claims it used to be (16 of 409 in the 2026-11-16 test), so repair's share is
+now near nothing. `label --dry-run --budget USD` exits 1 when the estimate is
 over the budget, and the full run's `--budget` stops the run before any model call on the
 same estimate; `--max-label-cost` instead labels the first pairs that fit. If a 20-abstract
 call's 95th percentile of output tokens exceeds 70% of the model's 16,000-token cap, reasoning

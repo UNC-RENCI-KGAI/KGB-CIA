@@ -52,7 +52,7 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 |---|---|
 | `augment.py select [--rules FILE] [--capped-limit N] [--min-score X]` | Step 1: keep the edges worth checking, by scope rule (`reference/rules.md`), grouped by node pair; `scope_report.json` counts what each rule kept and every edge type skipped |
 | `augment.py pubmed [--limit N] [--max-abstracts N] [--refresh] [--without-key]` | Step 2: one PubMed search per pair (names, synonyms, MeSH), the abstracts it finds and those the edges already cite |
-| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run [--budget USD]] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and the review model repairs evidence sentences that weren't found |
+| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run [--budget USD]] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and repairs evidence sentences that weren't found: code first, the review model only for those code can't place |
 | `augment.py ground [--refresh]` | Step 4: the anatomy the claims name, to UBERON terms; pins the UBERON release. No model calls |
 | `augment.py review [--model M] [--review-support-only]` | Step 5: a stronger model upholds or rejects, in one pass, each claim that would count: one that would add a PMID to an edge or propose a more specific edge. A support-only statement (`ameliorates_condition` under `treats`, `config.SUPPORT_ONLY`) isn't sent unless `--review-support-only` |
 | `augment.py apply [--no-review] [--species-in-proposals] [--review-support-only]` | Step 6: refine each checked edge from its pair's claims (its supporting PMIDs, and the more specific edges they propose) and write the graph, `refinements.jsonl` and `apply_report.json` |
@@ -68,8 +68,9 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
   for the Azure OpenAI models (`AZURE_OPENAI_BASE_URL` for your own endpoint), and for Claude
   models (`claude-...`) `ANTHROPIC_API_KEY` or an
   `ant auth login` profile. If they're missing, the step stops and says so; stop too, and
-  don't look for a key. Labeling also uses the review model's, for the sentence repair pass;
-  the label summary says if the pass was skipped for lack of them.
+  don't look for a key. Labeling also uses the review model's, for the few evidence sentences
+  code can't repair (about 4% of those not found); without them code's repairs still count,
+  and the label summary says the model's pass was skipped.
 - `NCBI_EMAIL` should be set (NCBI asks for a contact address); `NCBI_API_KEY` raises the rate
   from 3 to 10 requests a second. Never fill either in yourself with an address or key you
   found. If they're unset the script says so at the start of the pubmed step and runs at the
@@ -121,9 +122,10 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    Read that file once to see exactly what the model gets. The estimate assumes 2,000 output
    tokens a call, a guess until a sample measures it, and it covers labeling alone: the review
    and quote repair passes that follow aren't estimated (on the Nov 12 2026 run they were 35%
-   and 7% of the total, with labeling 58%). `--budget USD` makes the dry run exit 1 when the
-   estimate is over it. Unless you were given a budget, don't start a full labeling run
-   estimated above $100: tune the prompt on samples, then stop and report the estimate.
+   and 7% of the total, with labeling 58%; quote repair has since gone code first, and calls
+   the model for about 4% of the claims it did then). `--budget USD` makes the dry run exit 1
+   when the estimate is over it. Unless you were given a budget, don't start a full labeling
+   run estimated above $100: tune the prompt on samples, then stop and report the estimate.
 
 4. **Tune the prompt on a sample.** Copy `prompts/label.md` to `work/prompts/label.md` and run
    `augment.py label --prompt work/prompts/label.md --sample 25 --seed 1`. The prompt includes
@@ -131,8 +133,8 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    a copy reads `claim-rules.md` from beside it if there is one, else the skill's. Read
    `work/label_sample.md` and judge every claim against its abstract yourself. Look for:
    - evidence sentences `NOT FOUND`: paraphrased or stitched ones, and each one's repair beside
-     it, which should be the sentence the claim rests on or `none`, never a loosely related
-     one;
+     it with who made it (`code`, or the review model for a quote code couldn't place), which
+     should be the sentence the claim rests on or `none`, never a loosely related one;
    - `INVALID` claims and their errors (the summary lists the most common): qualifiers the
      predicate doesn't take, `causes` without an aspect or direction, a predicate that "fits
      neither way" between the nodes, `also_supports` entries that add nothing;
@@ -182,11 +184,12 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 6. **Label everything.** `augment.py label --prompt work/prompts/label.md --model MODEL`, as a
    background task (stderr to `work/label.log`). When it succeeds it writes
    `work/label_run.json`, which names the model, prompt version, effort and sentence repairs
-   that ground, review, step 6 and the pipeline's full run use (`--sample`, `--pairs` and
-   `--dry-run` runs never change it). If more than 5% of the calls its pairs need fail (those
-   answered by earlier runs count too, so a few calls that keep failing don't stop later runs)
-   it returns 1; rerun the same command to retry, since answers already made are cached. A pair
-   with an abstract still unanswered stays unchecked until a run answers it.
+   (the code's, then the review model's) that ground, review, step 6 and the pipeline's full
+   run use (`--sample`, `--pairs` and `--dry-run` runs never change it). If more than 5% of the
+   calls its pairs need fail (those answered by earlier runs count too, so a few calls that
+   keep failing don't stop later runs) it returns 1; rerun the same command to retry, since
+   answers already made are cached. A pair with an abstract still unanswered stays unchecked
+   until a run answers it.
 
 7. **Ground the anatomy.** `augment.py ground`. Its summary counts the anatomy names grounded
    to UBERON and those that weren't (they stay notes and narrow nothing), and names the UBERON
