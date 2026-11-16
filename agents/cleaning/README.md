@@ -49,6 +49,15 @@ final pass runs. `--strict` returns nonzero instead, for running a question by h
   their edges, with the CURIE prefixes that didn't resolve; every dropped edge and node by
   reason and by primary knowledge source; unresolved nodes by prefix; flags on kept edges; and a
   few examples of each.
+- `pruned_edges.tsv`: the record of what cleaning removed and why. One KGX TSV row per dropped
+  edge: `subject`, `predicate`, `object`, `primary_knowledge_source`, `statement_id`,
+  `publications`, `reason` (as in the report), an `explanation` in plain words, and a
+  `confidence` only for a drop-listed edge whose list line carries one (the evidence check
+  writes the judge's probability). It is not a gold set: a rule drops an edge because it can't
+  be used (its ids don't resolve, say), which says nothing about whether the claim is true. The
+  scored gold set is the evidence check's `gold_set.tsv`. `malformed` and
+  `no_primary_knowledge_source` edges are counted in the report but not listed, since their rows
+  wouldn't be valid KGX.
 - `flagged_edges.jsonl`: the kept edges worth a look, one per line, keyed like a drop list (see
   below).
 - `unresolved_nodes.tsv`: every node NodeNorm couldn't resolve, with its prefix, name, the

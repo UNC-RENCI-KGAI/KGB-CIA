@@ -54,8 +54,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Cleaning: {e}")
         print("  run the transformation stage first, or pass --input")
         return 1
+    except ValueError as e:  # a drop- or flag-list line it can't use, named with its line
+        print(f"Cleaning: {e}")
+        return 1
     print(garbage.summary(report))
-    print(f"Wrote {args.output}/nodes.jsonl, edges.jsonl and cleaning_report.json")
+    print(
+        f"Wrote {args.output}/nodes.jsonl, edges.jsonl, cleaning_report.json, "
+        "pruned_edges.tsv, flagged_edges.jsonl and unresolved_nodes.tsv"
+    )
     return 0
 
 

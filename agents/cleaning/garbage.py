@@ -64,6 +64,16 @@ id pattern or prefix). `unresolved_nodes.tsv` lists every unresolved node with i
 edges it took down and the edges kept with a flag, and the sources and predicates of those
 edges, most costly first: the identifiers a plan fix needs, not just the prefix.
 
+Every dropped edge is also written to `pruned_edges.tsv`, one KGX TSV row per edge with the
+`reason` and an `explanation` in plain words: the record of what cleaning removed and why (see
+PRUNED_COLUMNS). It is not a gold set. A rule drops an edge because it can't be used (its ids
+don't resolve, say), which says nothing about whether the claim is true, so rule rows carry no
+confidence. A drop-listed row carries the `confidence` and `reason` of the line that dropped it,
+when the line has them (the evidence check writes the judge's probability). The scored gold set
+is the evidence check's `gold_set.tsv`. `malformed` and `no_primary_knowledge_source` edges are
+left out of the file, since a row without a predicate or source isn't valid KGX; the report
+counts them.
+
 Drop and flag lists key edges by subject, predicate, object and primary knowledge source, not
 by edge id: the merge assigns new uuids on every run, so ids wouldn't match the next build. A
 line can also name the edge's statement, so it matches only the edge that makes it, not others
@@ -74,6 +84,7 @@ neither matches the edge however it is qualified.
 
 from __future__ import annotations
 
+import csv
 import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
@@ -107,6 +118,32 @@ LISTED_FLAGS = (
 # Vertebrate Trait ids as `OBA:VT0001253` (it should be `VT:0001253`), an id in no ontology; the
 # phenopacket-store plan makes a node per patient ("individual II-3"), not a biological concept.
 BROKEN_ID_PREFIXES = ("OBA:VT", "phenopacket.store:")
+# pruned_edges.tsv: what cleaning removed and why; not a gold set (see the module docstring)
+PRUNED_COLUMNS = (
+    "subject",
+    "predicate",
+    "object",
+    "primary_knowledge_source",
+    "statement_id",
+    "publications",
+    "reason",
+    "explanation",
+    "confidence",
+)
+# drop reasons left out of pruned_edges.tsv: their rows would have no predicate or source
+UNLISTED_DROPS = ("malformed", "no_primary_knowledge_source")
+PRUNE_EXPLANATIONS = {
+    "malformed": "the edge lacks a subject, predicate or object",
+    "no_primary_knowledge_source": "the edge has no primary knowledge source, so it can't be "
+    "explained",
+    "dangling": "the edge names a node that isn't in the graph",
+    "broken_id": "an end's identifier is malformed (a trait written as OBA:VT, or a "
+    "case-report patient), not a concept NodeNorm could resolve",
+    "unresolved_both_ends": "NodeNorm resolves neither end, so the edge can't connect to the "
+    "rest of the graph",
+    "type_violation": "Biolink doesn't allow this category at this end of the predicate, and a "
+    "reviewer found these edges wrong",
+}
 FLAGS_FIELD = "kgbcia_flags"
 REASONS_FIELD = "kgbcia_flag_reasons"
 # the reason an input edge already carried for rare_category_combination, carried between the
@@ -174,13 +211,23 @@ def edge_list_keys(edge: dict) -> tuple[ListKey, ListKey]:
     return (*key, edge_statement_id(edge)), (*key, "")
 
 
-def load_drop_list(path: Path) -> set[ListKey]:
-    """List keys from a JSON-lines file, one edge per line with the four key fields and,
-    optionally, its statement (`list_key`).
+@dataclass(frozen=True)
+class DropLine:
+    """What a drop-list line says beyond its key: a `confidence` (0 to 1) and a plain `reason`,
+    either of which may be absent."""
 
-    Other fields on a line (a reason, a score) are allowed and ignored here.
-    """
-    keys = set()
+    confidence: float | None = None
+    reason: str | None = None
+
+
+DropList = dict[ListKey, DropLine]
+
+
+def load_drop_list(path: Path) -> DropList:
+    """A JSON-lines drop list, one edge per line with the four key fields and, optionally, its
+    statement (`list_key`), a `confidence` and a `reason`. Other fields are ignored. A missing key
+    field or a confidence that isn't a number from 0 to 1 is an error naming the line."""
+    lines: DropList = {}
     with open(path) as f:
         for number, line in enumerate(f, 1):
             if not line.strip():
@@ -192,11 +239,79 @@ def load_drop_list(path: Path) -> set[ListKey]:
                     f"{path}:{number}: a drop-list line needs subject, predicate, object and "
                     "primary_knowledge_source"
                 )
-            keys.add(key)
-    return keys
+            confidence = record.get("confidence")
+            if confidence is not None:
+                try:
+                    confidence = float(confidence)
+                except (TypeError, ValueError):
+                    confidence = None
+                if confidence is None or not 0 <= confidence <= 1:
+                    raise ValueError(
+                        f"{path}:{number}: confidence must be a number from 0 to 1, "
+                        f"not {record['confidence']!r}"
+                    )
+            reason = record.get("reason")
+            lines[key] = DropLine(confidence, reason if isinstance(reason, str) else None)
+    return lines
 
 
-def load_drop_lists(directory: Path) -> dict[str, set[ListKey]]:
+def drop_list_match(edge: dict, drop_lists: dict[str, DropList]) -> tuple[str, DropLine] | None:
+    """The first drop list, by name, with a line matching the edge, and that line: the one
+    naming the edge's statement if the list has it, else the one naming none."""
+    exact, any_statement = edge_list_keys(edge)
+    for name, lines in drop_lists.items():
+        line = lines.get(exact) or lines.get(any_statement)
+        if line is not None:
+            return name, line
+    return None
+
+
+def type_violation_reason(predicate: str, category: str) -> str:
+    """The drop reason for a promoted type violation; `type_violation_parts` reads it back."""
+    return f"type_violation:{predicate}->{category}"
+
+
+def type_violation_parts(reason: str) -> tuple[str, str] | None:
+    """(predicate, category) from a `type_violation_reason`, or None if it isn't one."""
+    kind, _, rest = reason.partition(":")
+    predicate, arrow, category = rest.partition("->")
+    return (predicate, category) if kind == "type_violation" and arrow else None
+
+
+def as_list(value) -> list:
+    """A field that may hold one value or several, as a list."""
+    if value is None or value == "":
+        return []
+    return list(value) if isinstance(value, list | tuple) else [value]
+
+
+def pruned_row(edge: dict, reason: str, drop_lists: dict[str, DropList]) -> dict:
+    """A dropped edge's row in pruned_edges.tsv. A drop-listed row takes its confidence and
+    explanation from the line that dropped it (`drop_list_match`, as `edge_drop_reason` uses)."""
+    kind = reason.split(":", 1)[0]
+    explanation = PRUNE_EXPLANATIONS.get(kind, reason.replace("_", " "))
+    confidence = ""
+    if parts := type_violation_parts(reason):
+        explanation = f"{short(parts[0])} to {short(parts[1])}: {explanation}"
+    elif kind == "drop_list" and (match := drop_list_match(edge, drop_lists)):
+        name, line = match
+        explanation = line.reason or f"listed in drop list {name}"
+        if line.confidence is not None:
+            confidence = f"{line.confidence:.3f}"
+    return {
+        "subject": edge["subject"],
+        "predicate": edge["predicate"],
+        "object": edge["object"],
+        "primary_knowledge_source": edge["primary_knowledge_source"],
+        "statement_id": edge_statement_id(edge),
+        "publications": "|".join(map(str, as_list(edge.get("publications")))),
+        "reason": reason,
+        "explanation": explanation,
+        "confidence": confidence,
+    }
+
+
+def load_drop_lists(directory: Path) -> dict[str, DropList]:
     """Every `*.jsonl` drop list in a directory, by file stem. A missing directory means none."""
     if not directory.is_dir():
         return {}
@@ -398,7 +513,7 @@ def edge_drop_reason(
     edge: dict,
     known: set[str],
     unresolved: set[str],
-    drop_lists: dict[str, set[ListKey]],
+    drop_lists: dict[str, DropList],
 ) -> str | None:
     """Why this edge is dropped, or None to keep it.
 
@@ -417,11 +532,8 @@ def edge_drop_reason(
         return "broken_id"
     if subject in unresolved and obj in unresolved:
         return "unresolved_both_ends"
-    if drop_lists:
-        exact, any_statement = edge_list_keys(edge)
-        for name, keys in drop_lists.items():
-            if exact in keys or any_statement in keys:
-                return f"drop_list:{name}"
+    if drop_lists and (match := drop_list_match(edge, drop_lists)):
+        return f"drop_list:{match[0]}"
     return None
 
 
@@ -445,7 +557,7 @@ def promoted_type_violation(
         return None
     failing = subject_specific if side == "domain" else object_specific
     hits = sorted(set(failing) & promoted)
-    return f"type_violation:{predicate}->{hits[0]}" if hits else None
+    return type_violation_reason(predicate, hits[0]) if hits else None
 
 
 def edge_flags(
@@ -590,7 +702,12 @@ def collect(
     lost_from: dict[str, set[tuple[str, str]]] = defaultdict(set)
     # kept edges before their flags are known; pass 3 writes them to edges.jsonl with flags
     unflagged = output_dir / "edges.unflagged.tmp"
-    with open(unflagged, "w") as out:
+    with (
+        open(unflagged, "w") as out,
+        open(output_dir / "pruned_edges.tsv", "w", newline="") as pruned_file,
+    ):
+        pruned = csv.DictWriter(pruned_file, PRUNED_COLUMNS, delimiter="\t", lineterminator="\n")
+        pruned.writeheader()
         for edge in read_jsonl(edges_path):
             inherited = inherited_rare_reason(edge)
             edge.pop(FLAGS_FIELD, None)
@@ -608,6 +725,8 @@ def collect(
                 report.dropped_edges[reason] += 1
                 report.dropped_edges_by_source[source][reason] += 1
                 report.example(reason, edge)
+                if reason not in UNLISTED_DROPS:
+                    pruned.writerow(pruned_row(edge, reason, drop_lists))
                 if reason in ("unresolved_both_ends", "broken_id"):
                     for end in {edge["subject"], edge["object"]} & unresolved_ids:
                         report.unresolved_prefixes_by_source[source][prefix(end)] += 1
