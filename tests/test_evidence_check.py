@@ -286,7 +286,11 @@ def test_judge_then_build_writes_the_drop_list_cleaning_reads(workspace, fake_sd
 
     keys = garbage.load_drop_list(Path("data/cleaning/drop_lists/drug_target.jsonl"))
     statement = edge_statement_id(_edge("C:B", "P:2"))
-    assert keys == {("C:B", "biolink:interacts_with", "P:2", "infores:dc", statement)}
+    key = ("C:B", "biolink:interacts_with", "P:2", "infores:dc", statement)
+    assert set(keys) == {key}
+    # cleaning carries the judge's confidence and the line's reason into pruned_edges.tsv
+    assert keys[key].confidence == drops[0]["confidence"]
+    assert keys[key].reason == drops[0]["reason"]
     assert drops[0]["causal_mechanism_qualifier"] == "biolink:inhibition"
 
 
