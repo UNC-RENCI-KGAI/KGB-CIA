@@ -457,7 +457,8 @@ def test_provenance_rules_have_no_schema_and_leave_the_version_alone():
     """A provenance rule names no predicates: it has no reply schema (its predicate enum would
     be empty), a pair never names it, and adding one, in any tier, leaves the prompt version
     and so the cached claims as they were. Only the statement rules that aren't skips make
-    the version, the same five as before provenance rules existed."""
+    the version: nine of the defaults, text-mined-location among them, since it is a statement
+    rule that also names a knowledge level."""
     statement_rules = tuple(r for r in scope.DEFAULT_RULES if not r.is_provenance)
     more = (
         scope.Rule(id="mined", tier="capped", agent_type=("text_mining_agent",)),
@@ -467,10 +468,14 @@ def test_provenance_rules_have_no_schema_and_leave_the_version_alone():
     schemas = label.rule_schemas(more)
     assert set(schemas) == {
         "chemical-treats-disease",
+        "chemical-treats-phenotype",
         "chemical-affects-gene",
+        "drug-target",
         "gene-disease",
         "gene-gene",
         "gene-phenotype",
+        "gene-trait",
+        "text-mined-location",
     }
     for schema in schemas.values():
         assert schema.body["$defs"]["statement"]["properties"]["predicate"]["enum"]

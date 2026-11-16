@@ -71,7 +71,7 @@ new default, it is used with a warning that says how to move it.
 
 | Step | Main options (default) |
 | --- | --- |
-| `select` | `--rules FILE` (built-in rules), `--capped-limit` (10,000 pairs per capped rule: gene–gene, gene–phenotype, and the edges mined from the literature, which carry no publications for any other step to check), `--min-score` (none) |
+| `select` | `--rules FILE` (built-in rules), `--capped-limit` (10,000 pairs per capped rule: gene–gene, gene–phenotype, gene–trait, and the edges mined from the literature, which carry no publications for any other step to check), `--min-score` (none) |
 | `pubmed` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm`, `--without-key` (search more than 500 uncached pairs without `NCBI_API_KEY`; the step stops otherwise) |
 | `label` | `--model` (gpt-6-luna), `--reasoning-effort E` (the model's: low for gpt-6-luna), `--prompt FILE`, `--sample N --seed S` or `--pairs FILE`, `--dry-run` (with `--budget USD`: exit 1 over it), `--no-repair`, `--abstracts-per-call` (20), `--workers` (8), `--limit N` |
 | `ground` | `--refresh` |
