@@ -55,7 +55,9 @@ The original reasoning is in `docs/agent_plan.md`; where this list differs, this
   self-loops), writing each flag and its reason onto the edge (`kgbcia_flags`,
   `kgbcia_flag_reasons`) and listing flagged edges in `flagged_edges.jsonl`. It runs twice: on the
   merged graph before the filter, and as `final_cleaning` on augmentation's output, applying the
-  drop lists and flag lists the evidence check wrote. An edge isn't dropped just because no
+  drop lists and flag lists the evidence check wrote. The evidence check runs just before it as
+  its own stage, `evidence_check` (`kgb-evidence`, `agents/cleaning/evidence_check.py`), which
+  runs the evidence-check skill's scripts for every question file. An edge isn't dropped just because no
   abstract supports it. See `agents/cleaning/README.md`.
 - **filter**: the only stage that talks to the user. It turns what the user asks for ("human
   kinases and the drugs that target them", or their own dataset) into a subgraph of the cleaned

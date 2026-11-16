@@ -3,6 +3,7 @@
 import csv
 import importlib.util
 import json
+import subprocess
 import sys
 import types
 from collections import Counter
@@ -526,3 +527,151 @@ def test_build_refuses_evidence_from_before_statement_keys(tmp_path, monkeypatch
     (work / "answers.jsonl").write_text(json.dumps({**old, "choice": "x", "probabilities": {}}))
     assert build.main([str(qpath)]) == 1
     assert "rerun gather_evidence.py" in capsys.readouterr().out
+
+
+# The pipeline stage (agents/cleaning/evidence_check.py): the same scripts, run for every question.
+
+
+def _stage_runs_in_process(monkeypatch, jev):
+    """Run the stage's steps in this process, with the workspace's fake PubMed and a fake Jev."""
+    from agents.cleaning import evidence_check
+
+    steps = []
+
+    def run_step(script, args):
+        steps.append(script)
+        if script == "gather_evidence":
+            return gather.main(args)
+        if script == "judge_evidence":
+            return judge.main(args, client=jev)
+        return build.main(args)
+
+    monkeypatch.setattr(evidence_check, "run_step", run_step)
+    return evidence_check, steps
+
+
+def test_stage_writes_the_lists_the_final_pass_applies(workspace, fake_sdk, monkeypatch):
+    graph, qpath = workspace
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    stage, steps = _stage_runs_in_process(monkeypatch, FakeJev())
+    assert stage.main(["--graph", str(graph), "--question", str(qpath)]) == 0
+    assert steps == ["gather_evidence", "judge_evidence", "build_drop_list"]
+    drops = [json.loads(line) for line in open("data/cleaning/drop_lists/drug_target.jsonl")]
+    assert [(d["subject"], d["object"]) for d in drops] == [("C:B", "P:2")]
+
+
+def test_stage_without_a_key_writes_requests_and_carries_on(workspace, monkeypatch, capsys):
+    graph, qpath = workspace
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    stage, steps = _stage_runs_in_process(monkeypatch, None)
+    assert stage.main(["--graph", str(graph), "--question", str(qpath)]) == 0
+    assert steps == ["gather_evidence", "judge_evidence"]  # nothing to build from
+    assert Path("data/cleaning/evidence/drug_target/requests.jsonl").exists()
+    assert not Path("data/cleaning/drop_lists/drug_target.jsonl").exists()
+    out = capsys.readouterr().out
+    assert "TYPESAFE_API_KEY isn't set" in out and "lists are unchanged" in out
+
+
+def test_stage_skips_a_question_nothing_cites(workspace, monkeypatch, capsys):
+    graph, qpath = workspace
+    q = {**QUESTION, "select": {"predicate": "biolink:causes"}}
+    qpath.write_text(json.dumps(q))
+    # an evidence file from an earlier run must not be judged again
+    work = Path("data/cleaning/evidence/drug_target")
+    work.mkdir(parents=True)
+    (work / "evidence.jsonl").write_text("{}\n")
+    stage, steps = _stage_runs_in_process(monkeypatch, None)
+    assert stage.main(["--graph", str(graph), "--question", str(qpath)]) == 0
+    assert steps == ["gather_evidence"]
+    assert "nothing to check" in capsys.readouterr().out
+
+
+def test_stage_finds_shipped_questions_and_user_ones_replace_them(tmp_path):
+    from agents.cleaning import evidence_check
+
+    shipped = evidence_check.find_questions(evidence_check.DEFAULT_QUESTIONS)
+    assert [p.name for p in shipped] == ["drug_target_mechanism.json"]
+    for path in shipped:
+        question.load(path)  # every shipped question is valid
+    user = tmp_path / "evidence"
+    user.mkdir()
+    mine = user / "mine.json"
+    mine.write_text(json.dumps({**QUESTION, "name": "drug_target_mechanism"}))
+    other = user / "other.json"
+    other.write_text(json.dumps({**QUESTION, "name": "another"}))
+    found = evidence_check.find_questions(evidence_check.DEFAULT_QUESTIONS, user)
+    assert found == [other, mine]  # by name: another, drug_target_mechanism (the user's)
+
+
+def test_stage_runs_the_scripts_for_real_without_a_key(workspace, monkeypatch):
+    """The real subprocess path: gather in this environment, the judge through uv. With no
+    key and no PubMed, nothing is selected, so only gather runs; this checks the wiring."""
+    from agents.cleaning import evidence_check
+
+    graph, qpath = workspace
+    q = {**QUESTION, "select": {"predicate": "biolink:causes"}}
+    qpath.write_text(json.dumps(q))
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    assert evidence_check.main(["--graph", str(graph), "--question", str(qpath)]) == 0
+
+
+def test_stage_needs_the_graph_it_is_given(tmp_path, capsys):
+    from agents.cleaning import evidence_check
+
+    assert evidence_check.main(["--graph", str(tmp_path / "nowhere")]) == 1
+    assert "run augmentation first" in capsys.readouterr().out
+
+
+def test_stage_failure_carries_on_unless_strict(workspace, monkeypatch, capsys):
+    """A failing step (NCBI or TypeSafe down) doesn't stop the pipeline: the other questions
+    still run and the stage returns 0, so final cleaning applies the lists there are."""
+    from agents.cleaning import evidence_check
+
+    graph, qpath = workspace
+    other = qpath.with_name("other.json")
+    other.write_text(json.dumps({**QUESTION, "name": "other"}))
+    ran = []
+
+    def check(question, graph):
+        ran.append(question.name)
+        return 3 if question == qpath else 0
+
+    monkeypatch.setattr(evidence_check, "check", check)
+    args = ["--graph", str(graph), "--question", str(qpath), "--question", str(other)]
+    assert evidence_check.main(args) == 0
+    assert ran == [qpath.name, "other.json"]
+    out = capsys.readouterr().out
+    assert "1 of 2 question(s) failed" in out and "carrying on" in out
+    assert evidence_check.main([*args, "--strict"]) == 3
+
+
+def test_stage_judges_without_uv_when_there_is_no_key(monkeypatch):
+    """Without a key the judge only writes requests, so it runs in this environment: no `uv`,
+    no network to install the SDK. With a key it goes through `uv run --script`."""
+    from agents.cleaning import evidence_check
+
+    commands = []
+
+    def run(command):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(evidence_check.subprocess, "run", run)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    evidence_check.run_step("judge_evidence", ["q.json"])
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    evidence_check.run_step("judge_evidence", ["q.json"])
+    assert commands[0][0] == sys.executable
+    assert commands[1][:3] == ["uv", "run", "--script"]
+
+
+def test_stage_step_that_cannot_start_is_a_failed_step(monkeypatch, capsys):
+    from agents.cleaning import evidence_check
+
+    def run(command):
+        raise FileNotFoundError(2, "No such file or directory", "uv")
+
+    monkeypatch.setattr(evidence_check.subprocess, "run", run)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    assert evidence_check.run_step("judge_evidence", ["q.json"]) == 127
+    assert "could not run judge_evidence" in capsys.readouterr().out

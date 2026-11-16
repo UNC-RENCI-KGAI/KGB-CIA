@@ -4,8 +4,9 @@
 
 The order (settled in #23 and #24): clean the merged graph before the filter, so the paid steps
 (augmentation, the evidence check) never spend on edges cleaning would drop; filter before
-augmentation, so they only run on what the user asked for; clean again at the end, to apply the
-drop lists the evidence check wrote. Each entry is (name, module, arguments): the two cleaning
+augmentation, so they only run on what the user asked for; check the edges against the abstracts
+they cite (the evidence check, which writes drop and flag lists); clean again at the end, to
+apply those lists. Each entry is (name, module, arguments): the two cleaning
 passes run the same command with different inputs and outputs.
 """
 
@@ -21,7 +22,9 @@ STAGES: list[tuple[str, str, list[str]]] = [
     ("cleaning", "agents.cleaning.cli", []),
     ("filter", "agents.filter.cli", []),
     ("augmentation", "agents.augmentation.cli", []),
-    # the evidence check writes its drop lists to data/cleaning/drop_lists; this pass applies them
+    # data/augmentation -> data/cleaning/drop_lists and flag_lists; skipped without a TypeSafe key
+    ("evidence_check", "agents.cleaning.evidence_check", ["--graph", "data/augmentation"]),
+    # applies the drop and flag lists the evidence check wrote
     (
         "final_cleaning",
         "agents.cleaning.cli",

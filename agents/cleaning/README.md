@@ -20,6 +20,21 @@ augmentation's output (the third line). `--drop-lists` is only for that second p
 reads the drop lists the evidence check wrote for the first pass's output directory, and the
 flag lists beside them (`data/cleaning/flag_lists`), since the two folders travel together.
 
+The evidence check runs between augmentation and the final pass as its own pipeline stage:
+
+```bash
+uv run kgb-evidence --graph data/augmentation          # every question; what the pipeline runs
+uv run kgb-evidence --question data/cleaning/evidence/my_question.json   # one question
+```
+
+It runs the evidence-check skill's three scripts (gather, judge with Jev, build the lists) for
+each question: the ones the skill ships in its `questions/` folder, and any an agent wrote in
+`data/cleaning/evidence/*.json` (same `name` replaces the shipped one). Without
+`TYPESAFE_API_KEY` it asks Jev nothing, writes each question's requests, leaves its lists as
+they were, and the pipeline carries on. A question whose step fails (NCBI unreachable, TypeSafe
+down, `uv` missing) is reported and its lists left as they were; the stage still returns 0 so the
+final pass runs. `--strict` returns nonzero instead, for running a question by hand.
+
 ## Input / output
 
 **Input:** a directory with `nodes.jsonl` and `edges.jsonl` in ORION KGX format

@@ -26,6 +26,7 @@ kgb-transform = "agents.transformation.cli:main"
 kgb-filter = "agents.filter.cli:main"
 kgb-augment = "agents.augmentation.cli:main"
 kgb-clean = "agents.cleaning.cli:main"
+kgb-evidence = "agents.cleaning.evidence_check:main"
 kgb-mcp = "agents.mcp_interface.cli:main"
 kgb-pipeline = "shared.pipeline:main"
 
