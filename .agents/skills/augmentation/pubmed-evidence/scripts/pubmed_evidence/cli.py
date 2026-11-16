@@ -310,8 +310,30 @@ def _finish_labeling(common: argparse.Namespace, run, label, args: argparse.Name
     return 0
 
 
+def _missing_sdks(common: argparse.Namespace, run) -> list[str]:
+    """The model SDKs the full run's model calls need that aren't installed, so a full run
+    stops before step 1 instead of after select and the PubMed search. Unknown model ids are
+    left for the step that calls them to report."""
+    llm = importlib.import_module("pubmed_evidence.llm")
+    ids = {_step_args("label", common, run).model, config.REPAIR_MODEL}
+    if not common.skip_review:
+        ids.add(_step_args("review", common, run).model)
+    missing = []
+    for backend in sorted({config.MODELS[i].backend for i in ids if i in config.MODELS}):
+        try:
+            llm._import_sdk(backend)
+        except llm.LLMError as e:
+            missing.append(str(e))
+    return missing
+
+
 def run_all(common: argparse.Namespace) -> int:
     run = records.read_label_run(common.work)
+    missing = _missing_sdks(common, run)
+    if missing:
+        for message in missing:
+            print(f"[augmentation] error: {message}", file=sys.stderr)
+        return 1
     steps = [s for s in FULL_RUN if not (common.skip_review and s == "review")]
     for i, name in enumerate(steps, 1):
         print(f"[augmentation] {i}/{len(steps)} {name}", file=sys.stderr)

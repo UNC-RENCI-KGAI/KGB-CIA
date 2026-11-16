@@ -734,3 +734,16 @@ def test_an_old_label_cache_is_used_until_it_is_moved(tmp_path, monkeypatch, cap
     new.mkdir(parents=True)
     (new / config.LABEL_CACHE).write_bytes(b"")
     assert config.default_cache_dir() == new
+
+
+def test_full_run_stops_before_any_step_without_a_model_sdk(tmp_path, capsys, fakes, monkeypatch):
+    def no_sdk(name):
+        raise llm.LLMError(f"the {name} package isn't installed")
+
+    monkeypatch.setattr(llm, "_import_sdk", no_sdk)
+    assert cli.main(common_args(tmp_path)) == 1
+    err = capsys.readouterr().err
+    assert "[augmentation] error: the openai package isn't installed" in err
+    # stopped before select and the PubMed search, not after them
+    assert "[augmentation] 1/" not in err and fakes == []
+    assert not (tmp_path / "out" / "work").exists()
