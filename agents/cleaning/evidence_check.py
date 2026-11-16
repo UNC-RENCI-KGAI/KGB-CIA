@@ -18,6 +18,13 @@ judge step writes the requests it would send, and this stage says so and carries
 that question's lists as they were. A list left from an earlier run still applies: it names
 statements by subject, predicate, object, qualifiers and source, and a statement the literature
 contradicted is wrong in any graph that has it.
+
+Because the check is optional, it doesn't stop the pipeline either. Without a key the judge runs
+in this environment (it imports the TypeSafe SDK only to send), so no network or `uv` install is
+needed just to write requests. A question whose step fails (NCBI unreachable, TypeSafe down, `uv`
+missing) is reported and its lists are left as they were, the other questions still run, and the
+stage returns 0 so the final cleaning pass and the MCP interface run on what there is. `--strict`
+returns nonzero instead, for running a question by hand.
 """
 
 from __future__ import annotations
@@ -53,15 +60,21 @@ def find_questions(*folders: Path) -> list[Path]:
 
 
 def run_step(script: str, args: list[str]) -> int:
-    """Run one of the skill's scripts. The judge runs through `uv run --script`, which installs
-    the TypeSafe SDK its header names; the others run in this environment."""
+    """Run one of the skill's scripts. With a key, the judge runs through `uv run --script`,
+    which installs the TypeSafe SDK its header names; without one it only writes requests, which
+    needs no SDK, so it runs in this environment like the others. A command that can't start
+    (`uv` not installed) is a failed step, not a crash."""
     path = str(SCRIPTS / f"{script}.py")
-    if script == "judge_evidence":
+    if script == "judge_evidence" and os.environ.get(KEY_VARIABLE):
         command = ["uv", "run", "--script", path, *args]
     else:
         command = [sys.executable, path, *args]
     sys.stdout.flush()  # keep this stage's lines in order with the script's
-    return subprocess.run(command).returncode
+    try:
+        return subprocess.run(command).returncode
+    except OSError as e:
+        print(f"  could not run {script}: {e}")
+        return 127
 
 
 def check(question: Path, graph: Path | None) -> int:
@@ -107,6 +120,12 @@ def main(argv: list[str] | None = None) -> int:
         help="check only this question file (repeatable); use it to run one question by hand. "
         f"Default: the skill's questions/ and {USER_QUESTIONS}/*.json",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="return nonzero when a question's step fails (default: report it, leave that "
+        "question's lists as they were, and carry on, so the pipeline isn't stopped)",
+    )
     args = parser.parse_args(argv)
 
     questions = args.question or find_questions(DEFAULT_QUESTIONS, USER_QUESTIONS)
@@ -121,11 +140,21 @@ def main(argv: list[str] | None = None) -> int:
             f"Evidence check: {KEY_VARIABLE} isn't set, so Jev won't be asked. Each question's "
             "requests are written for later, and the pipeline carries on."
         )
+    failed: list[tuple[Path, int]] = []
     for question in questions:
         rc = check(question, args.graph)
         if rc:
-            print(f"Evidence check: {question} failed with exit code {rc}")
-            return rc
+            print(f"  {question} failed with exit code {rc}; its lists are unchanged")
+            failed.append((question, rc))
+    if not failed:
+        return 0
+    print(
+        f"Evidence check: {len(failed)} of {len(questions)} question(s) failed: "
+        + ", ".join(str(q) for q, _ in failed)
+    )
+    if args.strict:
+        return failed[0][1]
+    print("  carrying on: the final cleaning pass applies the lists there are")
     return 0
 
 

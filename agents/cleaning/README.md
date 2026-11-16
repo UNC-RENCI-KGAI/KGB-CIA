@@ -31,7 +31,9 @@ It runs the evidence-check skill's three scripts (gather, judge with Jev, build 
 each question: the ones the skill ships in its `questions/` folder, and any an agent wrote in
 `data/cleaning/evidence/*.json` (same `name` replaces the shipped one). Without
 `TYPESAFE_API_KEY` it asks Jev nothing, writes each question's requests, leaves its lists as
-they were, and the pipeline carries on.
+they were, and the pipeline carries on. A question whose step fails (NCBI unreachable, TypeSafe
+down, `uv` missing) is reported and its lists left as they were; the stage still returns 0 so the
+final pass runs. `--strict` returns nonzero instead, for running a question by hand.
 
 ## Input / output
 

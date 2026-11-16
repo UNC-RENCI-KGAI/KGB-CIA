@@ -3,6 +3,7 @@
 import csv
 import importlib.util
 import json
+import subprocess
 import sys
 import types
 from collections import Counter
@@ -619,3 +620,58 @@ def test_stage_needs_the_graph_it_is_given(tmp_path, capsys):
 
     assert evidence_check.main(["--graph", str(tmp_path / "nowhere")]) == 1
     assert "run augmentation first" in capsys.readouterr().out
+
+
+def test_stage_failure_carries_on_unless_strict(workspace, monkeypatch, capsys):
+    """A failing step (NCBI or TypeSafe down) doesn't stop the pipeline: the other questions
+    still run and the stage returns 0, so final cleaning applies the lists there are."""
+    from agents.cleaning import evidence_check
+
+    graph, qpath = workspace
+    other = qpath.with_name("other.json")
+    other.write_text(json.dumps({**QUESTION, "name": "other"}))
+    ran = []
+
+    def check(question, graph):
+        ran.append(question.name)
+        return 3 if question == qpath else 0
+
+    monkeypatch.setattr(evidence_check, "check", check)
+    args = ["--graph", str(graph), "--question", str(qpath), "--question", str(other)]
+    assert evidence_check.main(args) == 0
+    assert ran == [qpath.name, "other.json"]
+    out = capsys.readouterr().out
+    assert "1 of 2 question(s) failed" in out and "carrying on" in out
+    assert evidence_check.main([*args, "--strict"]) == 3
+
+
+def test_stage_judges_without_uv_when_there_is_no_key(monkeypatch):
+    """Without a key the judge only writes requests, so it runs in this environment: no `uv`,
+    no network to install the SDK. With a key it goes through `uv run --script`."""
+    from agents.cleaning import evidence_check
+
+    commands = []
+
+    def run(command):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(evidence_check.subprocess, "run", run)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    evidence_check.run_step("judge_evidence", ["q.json"])
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    evidence_check.run_step("judge_evidence", ["q.json"])
+    assert commands[0][0] == sys.executable
+    assert commands[1][:3] == ["uv", "run", "--script"]
+
+
+def test_stage_step_that_cannot_start_is_a_failed_step(monkeypatch, capsys):
+    from agents.cleaning import evidence_check
+
+    def run(command):
+        raise FileNotFoundError(2, "No such file or directory", "uv")
+
+    monkeypatch.setattr(evidence_check.subprocess, "run", run)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    assert evidence_check.run_step("judge_evidence", ["q.json"]) == 127
+    assert "could not run judge_evidence" in capsys.readouterr().out
