@@ -351,6 +351,24 @@ def test_message_names_the_pair_and_never_its_edges(w):
     assert "treats" in enums[1] and "treats" not in enums[0]
 
 
+def test_message_shows_each_nodes_most_specific_category_whatever_the_order():
+    # The cleaned graph lists categories alphabetically, BiologicalEntity before Gene.
+    gene = ["biolink:BiologicalEntity", *GENE, "biolink:GeneOrGeneProduct", "biolink:NamedThing"]
+
+    def message(chemical: list[str], gene: list[str]) -> str:
+        entities = [Entity(id=IMATINIB, category=chemical), Entity(id=ABL1, category=gene)]
+        job = label.PairJob(GENE_PAIR, entities, {}, {}, (), ("biolink:affects",), ["1001"])
+        return label.build_message(label.Request(job, ["1001"]), ABSTRACTS, [])
+
+    user = message(sorted(CHEMICAL), gene)
+    assert "X: CHEBI:45783 (CHEBI:45783)\n  category: SmallMolecule\n" in user
+    assert "Y: NCBIGene:25 (NCBIGene:25)\n  category: Gene\n" in user
+    # The same message as with the most specific category first, which the Nov 16 run's
+    # entities were reordered to: its labels stay under the same FORMAT_VERSION.
+    assert user == message(CHEMICAL, [*GENE, *(c for c in gene if c not in GENE)])
+    assert "  category: unknown\n" in message([], gene)
+
+
 # --- Schemas and versions -------------------------------------------------------------------
 
 

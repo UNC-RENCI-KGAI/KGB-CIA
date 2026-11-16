@@ -116,6 +116,12 @@ def _bare(curie: str) -> str:
     return curie.removeprefix("biolink:")
 
 
+def _category(categories: Sequence[str]) -> str:
+    """The category the message shows for a node (`biolink.shown_category`), bare."""
+    category = biolink.shown_category(tuple(categories))
+    return _bare(category) if category else "unknown"
+
+
 # --- Scope rules and reply schemas ----------------------------------------------------------
 
 
@@ -581,9 +587,10 @@ def build_message(
     for side, e in zip(SIDES, job.entities, strict=True):
         name = e.name or e.id
         lines.append(f"{side}: {name} ({e.id})")
-        # The most specific category: KGX lists every ancestor and mixin after it.
-        category = e.category[0].removeprefix("biolink:") if e.category else "unknown"
-        lines.append(f"  category: {category}")
+        # The node's most specific category, not its first: the cleaned graph lists them
+        # alphabetically. FORMAT_VERSION stays: the Nov 16 run's entities were reordered to
+        # list this one first, so its messages are the same.
+        lines.append(f"  category: {_category(e.category)}")
         synonyms = [
             s
             for s in dict.fromkeys(t.strip() for t in job.synonyms.get(e.id, []))
@@ -999,7 +1006,7 @@ def write_sample(
         md += [f"## {n}. {names[x.id]} and {names[y.id]}", "", f"Pair `{job.pair_id}`", ""]
         for side, e in zip(SIDES, job.entities, strict=True):
             synonyms = "; ".join(job.synonyms.get(e.id, [])[:MAX_SYNONYMS_SHOWN]) or "none"
-            category = e.category[0].removeprefix("biolink:") if e.category else "unknown"
+            category = _category(e.category)
             md.append(f"- {side}: {names[e.id]} ({e.id}; {category}); synonyms: {synonyms}")
         md.append("")
         abstracts = pubmed.get_abstracts(job.pmids)

@@ -111,6 +111,53 @@ def test_fits_by_domain_and_range_with_mixins():
     assert biolink.fits([], "biolink:treats", ["biolink:NotInBiolink"])
 
 
+# A gene's categories as the cleaned graph lists them: alphabetically, so BiologicalEntity first.
+GRAPH_GENE = [
+    "biolink:BiologicalEntity",
+    "biolink:ChemicalEntityOrGeneOrGeneProduct",
+    "biolink:Gene",
+    "biolink:GeneOrGeneProduct",
+    "biolink:GeneOrGeneProductOrGeneFamily",
+    "biolink:GenomicEntity",
+    "biolink:MacromolecularMachineMixin",
+    "biolink:NamedThing",
+    "biolink:OntologyClass",
+    "biolink:PhysicalEssence",
+    "biolink:PhysicalEssenceOrOccurrent",
+    "biolink:ThingWithTaxon",
+]
+
+
+@pytest.mark.parametrize(
+    "categories, shown",
+    [
+        (GRAPH_GENE, "biolink:Gene"),
+        (GRAPH_GENE[::-1], "biolink:Gene"),
+        (sorted(CHEMICAL), "biolink:SmallMolecule"),
+        (["biolink:NamedThing", "biolink:Protein"], "biolink:Protein"),
+        # A mixin above another category is as broad as any ancestor.
+        (["biolink:ChemicalEntity", "biolink:ChemicalOrDrugOrTreatment"], "biolink:ChemicalEntity"),
+        (["biolink:BiologicalEntity", "biolink:ThingWithTaxon"], "biolink:BiologicalEntity"),
+        # A mixin below none of the others ties with them: the narrowest is shown, whether it
+        # is a mixin (gene or gene product, 13 classes, under biological entity's 64) or not.
+        (["biolink:BiologicalEntity", "biolink:GeneOrGeneProduct"], "biolink:GeneOrGeneProduct"),
+        (["biolink:ChemicalOrDrugOrTreatment", "biolink:Gene"], "biolink:Gene"),
+        # Two classes, neither above the other: the narrower, then the first listed.
+        (["biolink:Protein", "biolink:Gene"], "biolink:Gene"),
+        (["biolink:Disease", "biolink:PhenotypicFeature"], "biolink:Disease"),
+        (["biolink:SmallMolecule", "biolink:Drug"], "biolink:SmallMolecule"),
+        (["biolink:Drug", "biolink:SmallMolecule"], "biolink:Drug"),
+        # Unknown categories are left out, and a node with none Biolink knows shows its first.
+        (["biolink:NamedThing", "biolink:NotInBiolink"], "biolink:NamedThing"),
+        (["biolink:NotInBiolink", "biolink:AlsoNot"], "biolink:NotInBiolink"),
+        ([], None),
+    ],
+)
+def test_shown_category_is_the_most_specific_whatever_the_order(categories, shown):
+    assert biolink.shown_category(categories) == shown
+    assert biolink.shown_category(tuple(categories)) == shown
+
+
 @pytest.mark.parametrize(
     "subject, predicate, object, expected",
     [

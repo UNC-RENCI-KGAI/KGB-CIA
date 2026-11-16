@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, get_args
 
-from pubmed_evidence import bundle, config, llm, records, refine, repair, sentences
+from pubmed_evidence import biolink, bundle, config, llm, records, refine, repair, sentences
 from pubmed_evidence.bundle import Bundles, ClaimKey
 from pubmed_evidence.cache import ClaimReviewRow, LabelCache, PubMedCache
 from pubmed_evidence.graphio import chunks, pair_nodes
@@ -125,8 +125,10 @@ def _entity(
         if term.lower() not in seen:
             seen.add(term.lower())
             others.append(term)
-    category = entity.category[0].removeprefix("biolink:") if entity and entity.category else None
-    return {"name": name, "category": category, "synonyms": others[:MAX_SYNONYMS]}
+    # Its most specific category, not its first (the cleaned graph lists them alphabetically).
+    category = biolink.shown_category(tuple(entity.category)) if entity else None
+    shown = category.removeprefix("biolink:") if category else None
+    return {"name": name, "category": shown, "synonyms": others[:MAX_SYNONYMS]}
 
 
 def _context(context: ClaimContext) -> dict[str, str | None]:
