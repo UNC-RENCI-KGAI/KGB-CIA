@@ -180,7 +180,8 @@ Every in-scope pair is searched, even when its edges arrive with PMIDs in `publi
 (likely GeneRIF, ChEMBL activity references and DrugCentral references; the TCRD columns still
 need checking). Those PMIDs are always fetched and read as well, even when they fall outside
 the search's top results. This matters most for ChEMBL compound–target edges, where a name
-search finds little.
+search finds little. The one exception is a paper that a hundred pairs or more cite and whose
+abstract doesn't name the pair: step 3 leaves it unread ("Source papers many pairs cite").
 
 ### What step 2 records for each pair
 
@@ -281,6 +282,62 @@ alone, so every refinement can be reproduced and audited.
   quote verbatim). The domain rules (what counts as a negative, treatment and comparators,
   which entity a finding is about, genes and qualifiers) are in `prompts/claim-rules.md`, which
   both the label and the review prompt include, so the reviewer judges by the same rules.
+
+### Source papers many pairs cite
+
+- **The rule.** A PMID that a pair has only as a source citation (origin `source`: its edges
+  cite it, and the search didn't find it) isn't read when at least
+  `config.SOURCE_SCREEN_MIN_PAIRS` (100) pairs of the selection cite it, unless its title and
+  abstract name both nodes (`label.screened`). A paper the search found is always read.
+- **Why.** Such a paper is a high-throughput study, such as BioPlex 3.0 (167,351 pairs of the
+  Nov 13 search) or a GWAS paper (30,000-116,000 pairs each). Its abstract names few of the
+  pairs that cite it, so reading it for each one costs a call and finds nothing.
+  - **Cost.** In the Nov 13 search's parts, 1.23M of the 3.72M (pair, PMID) jobs were source
+    citations of just 17,247 papers.
+  - **No loss measured.** Replaying the Nov 6 runs, Monarch's 558 answers from source papers
+    cited by 100 or more pairs held no claim, and skipping them changed no edge, proposal or
+    PMID.
+  - **Looser rules lose evidence.** Skipping every source paper whose abstract names neither
+    node lost 16% of Monarch's supported edges, and skipping those cited by 20 or more pairs
+    lost 25%: a source paper is often an edge's only evidence.
+  - **At scale.** The Nov 16 label run screened its parts 001-045 by hand
+    (`data/augmentation/cost-reduction-2026-11-16/scripts/screen_sources.py`): 1,073,966 of
+    3,120,426 jobs left out (34%), 1,316 kept because the abstract names both nodes, and
+    694,469 pairs left with nothing to read.
+- **The count is the selection's.** Select counts, for each source PMID, the pairs it keeps
+  that cite it (`scope.citing_pairs`), and writes each pair's counts on the pair
+  (`Pair.source_pmid_pairs`).
+  - So the screen doesn't depend on how pairs.jsonl is split into parts, which copy the
+    records, or merged back, or on how many pairs step 2 searches.
+  - A count over a work dir's `pubmed.jsonl` would change with each of those.
+  - It counts every pair whose edges cite the paper, whether or not the search also found it
+    there. The hand screen counted only the pairs that had it as a source alone, over the
+    searched parts (001-069).
+  - Both put the same 613 papers at 100 or more, and the selection's count adds 7. Two have no
+    abstract, so they are never read anyway. The other 5 are GWAS papers cited by 101-104
+    pairs, 93-99 of them as a source alone.
+  - On parts 001-045, the code with the hand screen's counts keeps exactly the hand screen's
+    2,046,460 jobs. With the selection's counts it leaves out 478 more (0.02%), all from those
+    5 papers, and 259 more pairs have nothing to read.
+- **Naming both nodes.** `label.names_both` looks for any term step 2 searched each node by
+  (`PubmedRecord.synonyms`), as whole words with case and punctuation aside, or, for a term of
+  3 characters or more, with spaces and hyphens squashed out of both. It is permissive, so a
+  doubtful abstract is read. A lexical check alone would be unsafe (above), so it only keeps a
+  paper back from the screen.
+- **What follows from it.** Steps 5 and 6 ask the same question (`label.pair_pmids`), so a
+  paper left unread never holds a pair or leaves it not fully labeled.
+  - A pair is checked on the abstracts read. One the screen leaves with none is checked with no
+    evidence, its edges unsupported with score 0, as when the search finds nothing. That is
+    what reading the papers gave on Nov 6, and how the hand-screened run's step 6 sees it too.
+  - Treating a paper left unread as unanswered would leave its pair not fully labeled for
+    good, its edges unchecked however often label runs.
+  - What was left unread is recorded instead. `refinements.jsonl` names it per pair
+    (`abstracts_screened`), and the label summary and apply report count it (`source abstracts
+    screened out`, `pairs left without abstracts by the source screen`).
+  - The edge keeps the paper in its `publications`, as its source cited it, and `lit_evidence`
+    lists only the abstracts read.
+- **Off, or from before.** `SOURCE_SCREEN_MIN_PAIRS = None` turns the screen off. A
+  `pairs.jsonl` written before select counted citations has no counts, and screens nothing.
 
 ### Which predicates, and which way round
 
@@ -521,9 +578,10 @@ qualifier value is an enum, so code checks only what a schema can't say (above).
 - **Checked edges:** an edge is checked when select kept its statement and its pair is fully
   labeled: every abstract step 3 asks about has an answer of the run, and every claim of those
   answers has been checked. A pair with no abstracts is checked too, and its edges are
-  unsupported. A pair with a failed call, or with claims a label run stored but stopped before
-  checking, leaves its edges unchanged until a label run finishes it; it is never refined on
-  part of its claims.
+  unsupported. A source paper step 3's screen left unread isn't asked about, so it holds
+  nothing ("Source papers many pairs cite"). A pair with a failed call, or with claims a label
+  run stored but stopped before checking, leaves its edges unchanged until a label run
+  finishes it; it is never refined on part of its claims.
 - **Evidence:** one record per abstract read for the pair, with its claims. Claims that failed
   a check are left out and counted. Anatomy is grounded through step 4's cache, and every
   statement is read Biolink's way round. Each claim carries the verdict of the review
@@ -681,7 +739,8 @@ them back out.
   claims that make it, and `source` the PMIDs its originals cite. It is never negated, and it
   carries no `kgbcia_source_records`.
 - **Refinement records:** `work/refinements.jsonl` has one line per refined pair, by pair id:
-  the number of abstracts read for it; each in-scope edge's statement, support, score,
+  the number of abstracts read for it, and the source papers step 3's screen left unread;
+  each in-scope edge's statement, support, score,
   supporting and added PMIDs and `refined_by`;
   the proposed edges; and the links, each with the edges it names (`linked_to`). Held and
   unchecked pairs get no line, and neither do folded proposals, which only the report counts.
@@ -848,6 +907,9 @@ saves little. Revisit if we move to full text and need to choose which paragraph
   often a claim is invalid as a whole for one bad `also_supports` entry, how often the model
   puts the wrong node first, and how many claims review gets. Then the comparison pages are
   rewritten around refinements.
+- **The source screen's threshold** (100 pairs) is validated only on Monarch's Nov 6 source
+  papers. The edges themselves don't say that their source paper went unread: only
+  `refinements.jsonl` and the report do.
 - **A support threshold:** an edge is supported from one abstract on. "Supported by 2+
   abstracts" would be one filter on `lit_support_score`, here or in the cleaning stage; the
   gold set can show whether one abstract is precise enough.

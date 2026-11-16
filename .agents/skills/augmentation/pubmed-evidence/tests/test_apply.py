@@ -275,6 +275,7 @@ def test_a_supported_edge_keeps_its_record_and_gains_its_pmids(world, capsys):
     assert line == {
         "pair_id": TREATS_PAIR,
         "abstracts_read": 7,
+        "abstracts_screened": [],
         "edges": [
             {
                 "edge_id": checked["id"],
@@ -388,6 +389,28 @@ def test_unsupported_and_unchecked_edges(world, capsys):
     assert line["abstracts_read"] == 0
     assert line["edges"][0]["supported"] is False and line["edges"][0]["support_score"] == 0
     assert "1 pairs aren't fully labeled" in capsys.readouterr().err
+
+
+def test_an_edge_whose_only_paper_the_source_screen_left_unread_is_checked(world):
+    """Select counted 167,351 pairs citing PMID 9, and the search found nothing, so the label
+    step never read it: the edge is checked and unsupported, with its publications as its
+    source cited them, and the pair's refinement names the paper left unread."""
+    gene_disease = edge(
+        ABL1, "biolink:gene_associated_with_condition", CML, publications=["PMID:9"]
+    )
+    world.edges(gene_disease)
+    pid = graphio.pair_id(ABL1, CML)
+    world.abstract(pid, "9", "A proteome-scale map of 120,000 interactions.", origin="source")
+    world.cite({pid: {"9": 167_351}})
+    report, [checked] = run_apply(world)
+    assert checked["augmentation"] == "checked" and checked["publications"] == ["PMID:9"]
+    assert (checked["lit_support_score"], checked["lit_evidence"]) == (0, [])
+    [line] = refinements(world).values()
+    assert (line["abstracts_read"], line["abstracts_screened"]) == (0, ["PMID:9"])
+    assert report["edges_checked"] == report["edges_unsupported"] == 1
+    assert report["unchecked"]["pairs_not_fully_labeled"] == 0
+    assert report["skipped"]["source abstracts screened out"] == 1
+    assert report["skipped"]["pairs left without abstracts by the source screen"] == 1
 
 
 def test_a_pair_with_claims_never_checked_is_left_unchecked(world, capsys):

@@ -57,6 +57,8 @@ step reads claims Biolink's way round, so claims rarely reach them.
 Kept edges become one `SelectedStatement` per distinct statement (`graphio.edge_statement_id`),
 one `Pair` per unordered node pair and one `Entity` per node in a kept pair, in the work directory:
 `statements.jsonl`, `pairs.jsonl`, `entities.jsonl`, and `scope_report.json` with the counts.
+Each pair also carries, for each of its source PMIDs, the number of kept pairs that cite it
+(`citing_pairs`), which step 3's source screen reads.
 
 `--rules FILE` replaces the built-in rules with a JSON list of objects (or `{"rules": [...]}`)
 with the same fields as `Rule`, in order of precedence:
@@ -588,6 +590,15 @@ def cap_rank(pair: str, best: float | None, sources: int) -> tuple:
     return (best is None, -(best or 0.0), -sources, digest, pair)
 
 
+def citing_pairs(pair_pmids: Iterable[Iterable[str]]) -> Counter[str]:
+    """PMID -> the number of pairs citing it, from each kept pair's source PMIDs. Select
+    counts over every pair it keeps and writes each pair's counts on it
+    (`Pair.source_pmid_pairs`), so the label step's source screen (config.SOURCE_SCREEN_MIN_PAIRS)
+    doesn't depend on how pairs.jsonl is later split into parts or how many pairs step 2
+    searches."""
+    return Counter(p for pmids in pair_pmids for p in set(pmids))
+
+
 def _apply_caps(
     statements: dict[str, _Accumulator],
     rules: tuple[Rule, ...],
@@ -699,18 +710,23 @@ def select(
     pair_statements: dict[str, list[str]] = defaultdict(list)
     for sid, acc in statements.items():
         pair_statements[acc.pair_id].append(sid)
+    pair_pmids = {
+        pid: sorted(set().union(*(statements[s].pmids for s in sids)), key=pmid_key)
+        for pid, sids in pair_statements.items()
+    }
+    cited = citing_pairs(pair_pmids.values())
     pairs = []
     for pid in sorted(pair_statements):
         sids = sorted(pair_statements[pid])
-        pmids = set().union(*(statements[s].pmids for s in sids))
         rule_ids = sorted({statements[s].rule for s in sids}, key=order.__getitem__)
         pairs.append(
             Pair(
                 pair_id=pid,
                 nodes=pair_nodes(pid),
                 statement_ids=sids,
-                source_pmids=sorted(pmids, key=pmid_key),
+                source_pmids=pair_pmids[pid],
                 rules=rule_ids,
+                source_pmid_pairs={p: cited[p] for p in pair_pmids[pid]},
             )
         )
     statement_records = [

@@ -205,6 +205,27 @@ def _edge(subject, predicate, object, **kw) -> Edge:
     return Edge(subject=subject, predicate=predicate, object=object, **{**fields, **kw})
 
 
+def test_each_pair_carries_how_many_kept_pairs_cite_its_source_pmids(tmp_path):
+    """Counted over the pairs select keeps, each once however many of its edges cite a PMID:
+    a pair past the cap counts for nothing."""
+    genes = [Node(id=f"NCBIGene:{i}", category=["biolink:Gene"], name=f"G{i}") for i in range(5)]
+    i = "biolink:interacts_with"
+    edges = [
+        _edge("NCBIGene:0", i, "NCBIGene:1", score=0.9, publications=["PMID:5", "PMID:6"]),
+        _edge("NCBIGene:1", i, "NCBIGene:2", score=0.8, publications=["PMID:5"]),
+        _edge("NCBIGene:2", i, "NCBIGene:1", score=0.8, publications=["PMID:5"]),
+        _edge("NCBIGene:2", i, "NCBIGene:3", score=0.7, publications=["PMID:5"]),
+        _edge("NCBIGene:3", i, "NCBIGene:4", score=0.1, publications=["PMID:5", "PMID:6"]),
+    ]
+    graph = _graph(tmp_path / "g", genes, edges)
+    _, _, pairs, _ = _run(graph, tmp_path / "work", capped_limit=3)
+    assert {pid: p.source_pmid_pairs for pid, p in pairs.items()} == {
+        pair_id("NCBIGene:0", "NCBIGene:1"): {"5": 3, "6": 1},
+        pair_id("NCBIGene:1", "NCBIGene:2"): {"5": 3},
+        pair_id("NCBIGene:2", "NCBIGene:3"): {"5": 3},
+    }
+
+
 def test_capped_rule_keeps_best_scored_pairs(tmp_path):
     genes = [Node(id=f"NCBIGene:{i}", category=["biolink:Gene"], name=f"G{i}") for i in range(5)]
     edges = [

@@ -860,6 +860,108 @@ def test_the_rules_select_used_are_read_from_its_report(w):
         run_label(w, labeler())
 
 
+# --- The source screen ----------------------------------------------------------------------
+
+# Papers the gene pair's edges cite: a high-throughput study that names neither node (4001),
+# one that names both, as "STI-571" and "c-Abl" (4002), and one that names only imatinib (4003).
+SOURCE_ABSTRACTS = [
+    Abstract("4001", "A proteome-scale map", "Affinity purification found 120,000 interactions."),
+    Abstract("4002", "An interactome screen", "Among its hits, STI-571 bound c-Abl."),
+    Abstract("4003", "Kinase inhibitor profiling", "Imatinib was profiled against 400 kinases."),
+]
+
+
+def cite(w: Work, counts: dict[str, int], search: tuple[str, ...] = ("1001",)) -> None:
+    """The gene pair with the search's hits `search`, and the source PMIDs `counts` names, each
+    cited by that many pairs of the selection, as select records them (a PMID in both is
+    `source+search`). The work directory holds two pairs: the counts are the selection's."""
+    record = pubmed_record(GENE_PAIR, list(search))
+    for p in record.pmids:
+        p.origin = "source+search" if p.pmid in counts else "search"
+    record.pmids += [FetchedPmid(pmid=p, origin="source") for p in counts if p not in search]
+    write_jsonl(w.work / records.PUBMED, [record, pubmed_record(CML_PAIR, ["2001"])])
+    pairs = list(records.read_records(w.work / records.PAIRS, Pair))
+    update = {"source_pmids": list(counts), "source_pmid_pairs": counts}
+    pairs[0] = pairs[0].model_copy(update=update)
+    write_jsonl(w.work / records.PAIRS, pairs)
+    w.add_abstracts(SOURCE_ABSTRACTS)
+
+
+def gene_pmids(client: FakeClient) -> list[str]:
+    return sorted(p for s in client.sent for p in pmids_of(s) if not p.startswith("2"))
+
+
+def test_a_mass_cited_source_paper_is_read_only_where_it_names_both_nodes(w):
+    cite(w, {"4001": 100, "4002": 100, "4003": 167_351})
+    client = labeler()
+    summary = run_label(w, client)
+    assert gene_pmids(client) == ["1001", "4002"]
+    assert summary["skipped"] == {"source abstracts screened out": 2}
+
+
+def test_source_papers_cited_by_fewer_pairs_are_read(w):
+    cite(w, {"4001": 99, "4003": 1})
+    client = labeler()
+    summary = run_label(w, client)
+    assert gene_pmids(client) == ["1001", "4001", "4003"]
+    assert summary["skipped"] == {}
+
+
+def test_a_paper_the_search_found_is_read_however_many_pairs_cite_it(w):
+    cite(w, {"4001": 5000}, search=("1001", "4001"))
+    client = labeler()
+    run_label(w, client)
+    assert gene_pmids(client) == ["1001", "4001"]
+
+
+def test_a_pair_the_screen_leaves_without_abstracts_is_skipped(w):
+    cite(w, {"4001": 500, "4003": 500}, search=())
+    client = labeler()
+    summary = run_label(w, client)
+    assert gene_pmids(client) == []
+    assert summary["skipped"] == {
+        "source abstracts screened out": 2,
+        "pairs left without abstracts by the source screen": 1,
+    }
+    # The pair is labeled: it has nothing left to ask, so label_run.json is written.
+    assert summary["label_run_written"]
+
+
+def test_no_counts_or_the_screen_off_reads_every_paper(w, monkeypatch):
+    """A pairs.jsonl from before select counted citations screens nothing, nor does a run with
+    config.SOURCE_SCREEN_MIN_PAIRS None."""
+    cite(w, {"4001": 1000})
+    pairs = list(records.read_records(w.work / records.PAIRS, Pair))
+    pairs[0] = pairs[0].model_copy(update={"source_pmid_pairs": {}})
+    write_jsonl(w.work / records.PAIRS, pairs)
+    client = labeler()
+    run_label(w, client)
+    assert gene_pmids(client) == ["1001", "4001"]
+
+    cite(w, {"4001": 1000})
+    monkeypatch.setattr(config, "SOURCE_SCREEN_MIN_PAIRS", None)
+    assert label.mass_cited(next(records.read_records(w.work / records.PAIRS, Pair))) == set()
+    monkeypatch.setattr(config, "SOURCE_SCREEN_MIN_PAIRS", 1000)
+    assert label.mass_cited(next(records.read_records(w.work / records.PAIRS, Pair))) == {"4001"}
+
+
+@pytest.mark.parametrize(
+    ("text", "named"),
+    [
+        ("Imatinib inhibits ABL1.", True),
+        ("IMATINIB/ABL1 complexes", True),  # case and punctuation aside
+        ("STI-571 bound c-Abl.", True),  # squashed: "sti571"
+        ("Imatinib bound ABL.", False),  # ABL isn't ABL1
+        ("Imatinib bound the kinase.", False),  # one side only
+        ("Gleevec bound ABL1.", True),  # any term the search used
+        ("Imatinib bound ABL, ABL1's paralog.", True),  # "ABL1's": whole words "abl1 s"
+    ],
+)
+def test_names_both(text, named):
+    record = pubmed_record(GENE_PAIR, [])
+    assert label.names_both(record, Abstract("1", "", text)) is named
+
+
 # --- Failures -------------------------------------------------------------------------------
 
 

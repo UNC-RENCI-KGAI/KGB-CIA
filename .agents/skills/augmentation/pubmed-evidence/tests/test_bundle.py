@@ -147,6 +147,23 @@ class World:
         with PubMedCache() as cache:
             cache.put_abstracts([Abstract(pmid, f"Title {pmid}", text, year, "", types)])
 
+    def cite(self, counts: dict[str, dict[str, int]]) -> None:
+        """pairs.jsonl as select writes it: each pair's source PMIDs, with the number of pairs
+        of the selection citing each (`Pair.source_pmid_pairs`)."""
+        graphio.write_jsonl(
+            self.work / records.PAIRS,
+            [
+                records.Pair(
+                    pair_id=pid,
+                    nodes=graphio.pair_nodes(pid),
+                    statement_ids=[],
+                    source_pmids=list(cited),
+                    source_pmid_pairs=cited,
+                )
+                for pid, cited in counts.items()
+            ],
+        )
+
     def answer(
         self,
         pair_id: str,
@@ -216,6 +233,29 @@ def test_a_searched_pair_with_no_abstracts_is_bundled_with_no_evidence(world):
     world.edges(edge(IMATINIB, "biolink:treats", CML))
     [b] = world.load().pairs
     assert b.evidence == () and b.claims == [] and len(b.edges) == 1
+
+
+def test_a_paper_the_source_screen_leaves_unread_holds_no_pair(world):
+    """Select counted 500 pairs citing PMID 7, which neither pair's search found and whose
+    abstract names neither node, so the label step never asks about it: the treats pair is
+    bundled on its other abstract, and the gene pair, left with none, with no evidence."""
+    world.edges(edge(IMATINIB, "biolink:treats", CML), edge(IMATINIB, "biolink:affects", ABL1))
+    world.abstract(TREATS_PAIR, "1", "Imatinib treats CML.")
+    for pid in (TREATS_PAIR, GENE_PAIR):
+        world.abstract(pid, "7", "A map of 120,000 protein interactions.", origin="source")
+    world.cite({TREATS_PAIR: {"7": 500}, GENE_PAIR: {"7": 500}})
+    world.answer(TREATS_PAIR, "1")
+    loaded = world.load()
+    assert loaded.unlabeled == []
+    treats, gene = sorted(loaded.pairs, key=lambda b: b.pair_id != TREATS_PAIR)
+    assert [e.publication for e in treats.evidence] == ["PMID:1"]
+    assert gene.evidence == ()
+    assert treats.screened == gene.screened == ("7",)
+    assert loaded.counts["source abstracts screened out"] == 2
+    assert loaded.counts["pairs left without abstracts by the source screen"] == 1
+    # Without select's counts (a pairs.jsonl from before them, or none), PMID 7 is asked about.
+    (world.work / records.PAIRS).unlink()
+    assert sorted(world.load().unlabeled) == sorted([TREATS_PAIR, GENE_PAIR])
 
 
 def test_edges_in_scope_with_their_ids(world):

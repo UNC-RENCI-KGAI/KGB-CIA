@@ -5,6 +5,12 @@ most config.ABSTRACTS_PER_CALL): the pair's nodes go as X and Y, with names, syn
 categories, and the graph's edges are never sent. So a pair's claims serve every edge between
 the pair, from any graph, now or later; step 6 refines each edge from them (`refine.py`).
 
+A pair's abstracts are those step 2 fetched with text (`pair_pmids`), less those the source
+screen leaves unread (`screened`): a PMID the pair has only as a source citation, that at least
+config.SOURCE_SCREEN_MIN_PAIRS pairs of the selection cite (select's count), and whose title
+and abstract don't name both nodes, is a high-throughput paper that states nothing about the
+pair. Steps 5 and 6 ask `pair_pmids` too, so a PMID screened out never holds a pair.
+
 For each abstract the model gives a study design and zero or more claims: an abstract with no
 claims states nothing about the pair. A claim's statement names X or Y as its subject, a
 predicate and its qualifiers, and code stores it with the pair's CURIEs in their place and its
@@ -44,11 +50,12 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import sys
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any, get_args
 
@@ -309,12 +316,78 @@ def read_pairs(path: Path) -> list[str]:
     return list(out)
 
 
-def pair_pmids(record: PubmedRecord, texts: Mapping[str, Abstract]) -> list[str]:
+def mass_cited(pair: Pair) -> frozenset[str]:
+    """The pair's source PMIDs that at least config.SOURCE_SCREEN_MIN_PAIRS pairs of the
+    selection cite, by the counts select recorded on it (`Pair.source_pmid_pairs`): none
+    without counts (a pairs.jsonl from before them) or with the screen off (None)."""
+    least = config.SOURCE_SCREEN_MIN_PAIRS
+    if least is None:
+        return frozenset()
+    return frozenset(p for p, n in pair.source_pmid_pairs.items() if n >= least)
+
+
+def _words(text: str) -> str:
+    """Lowercase, with every run of characters but a-z and 0-9 one space."""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+@lru_cache(maxsize=4096)
+def _screen_text(title: str, abstract: str) -> tuple[str, str]:
+    """A title and abstract as `names_both` searches them: as words, with a space at each end,
+    and with the spaces squashed out. Cached: a mass-cited abstract is screened for many pairs."""
+    words = _words(f"{title} {abstract}")
+    return f" {words} ", words.replace(" ", "")
+
+
+def _names(terms: Iterable[str], spaced: str, squashed: str) -> bool:
+    for term in terms:
+        words = _words(term)
+        if len(words) >= 2 and f" {words} " in spaced:
+            return True
+        joined = words.replace(" ", "")
+        if len(joined) >= 3 and joined in squashed:
+            return True
+    return False
+
+
+def names_both(record: PubmedRecord, abstract: Abstract) -> bool:
+    """Whether a title and abstract name both of the pair's nodes, each by any of the terms
+    step 2 searched it by (`record.synonyms`): as whole words, case and punctuation aside
+    ("c-Abl" names "c abl"), or, for a term of 3 characters or more, with the spaces squashed
+    out of both ("STI-571" names "STI571"). Permissive, so that a doubtful abstract is read."""
+    spaced, squashed = _screen_text(abstract.title or "", abstract.abstract or "")
+    return all(
+        _names(record.synonyms.get(node) or (), spaced, squashed)
+        for node in pair_nodes(record.pair_id)
+    )
+
+
+def screened(
+    record: PubmedRecord, texts: Mapping[str, Abstract], cited: Collection[str]
+) -> list[str]:
+    """The pair's PMIDs the source screen leaves unread, once each, in order: each it has only
+    as a source citation (origin `source`: the search didn't find it), that at least
+    config.SOURCE_SCREEN_MIN_PAIRS pairs cite (`cited`, from `mass_cited`), and whose title and
+    abstract don't name both nodes (`names_both`; one missing from the cache names neither)."""
+    out: dict[str, None] = {}
+    for p in record.pmids:
+        if p.origin == "source" and p.pmid in cited:
+            abstract = texts.get(p.pmid)
+            if abstract is None or not names_both(record, abstract):
+                out[p.pmid] = None
+    return list(out)
+
+
+def pair_pmids(
+    record: PubmedRecord, texts: Mapping[str, Abstract], cited: Collection[str] = frozenset()
+) -> list[str]:
     """The PMIDs step 3 asks about for a pair: those step 2 found whose abstract the PubMed
-    cache (`texts`) has with text, once each, in order. A pair is fully labeled when each has an
-    answer."""
+    cache (`texts`) has with text, once each, in order, but those the source screen leaves
+    unread (`screened`, with `cited` the pair's `mass_cited` PMIDs). A pair is fully labeled
+    when each has an answer: a PMID screened out never holds it."""
+    skip = set(screened(record, texts, cited)) if cited else set()
     pmids = dict.fromkeys(p.pmid for p in record.pmids)
-    return [p for p in pmids if p in texts and texts[p].has_text]
+    return [p for p in pmids if p in texts and texts[p].has_text and p not in skip]
 
 
 @dataclass
@@ -363,9 +436,16 @@ def build_jobs(inputs: Inputs, pubmed: PubMedCache) -> tuple[list[PairJob], Coun
         missing = sum(p not in texts for p in found)
         if missing:
             skipped["abstracts missing from the PubMed cache"] += missing
-        pmids = pair_pmids(record, texts)
+        cited = mass_cited(pair)
+        pmids = pair_pmids(record, texts, cited)
+        screened_out = len(pair_pmids(record, texts)) - len(pmids) if cited else 0
+        if screened_out:
+            skipped["source abstracts screened out"] += screened_out
         if not pmids:
-            skipped["pairs without abstracts"] += 1
+            if screened_out:
+                skipped["pairs left without abstracts by the source screen"] += 1
+            else:
+                skipped["pairs without abstracts"] += 1
             continue
         entities = [inputs.entities.get(n) or Entity(id=n) for n in pair_nodes(pair.pair_id)]
         synonyms = {

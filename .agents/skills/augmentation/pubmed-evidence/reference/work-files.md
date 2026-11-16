@@ -44,7 +44,13 @@ Fields by file:
   in their `publications`), `score` (capped rules; may be absent).
 - **`pairs.jsonl`** (`Pair`): `pair_id`, `nodes` (sorted), `statement_ids`, `source_pmids`
   (union of its statements'), `rules` (the statement rules its statements matched, never a
-  provenance rule, which set the predicates its claims may use).
+  provenance rule, which set the predicates its claims may use), `source_pmid_pairs` (each of
+  its `source_pmids` -> the number of pairs select kept that cite it, this one included).
+  - The counts are the whole selection's, written on every pair, so a part split from
+    `pairs.jsonl`, or parts merged back, keep them.
+  - Step 3's source screen reads them, and steps 5 and 6 read them again to ask the same
+    abstracts (`config.SOURCE_SCREEN_MIN_PAIRS`, DESIGN.md "Source papers many pairs cite").
+  - A `pairs.jsonl` written before them has none, and screens nothing.
 - **`pubmed.jsonl`** (`PubmedRecord`): `pair_id`; `query` (`""` for a pair not searched because a
   node has no usable name, kept for its source PMIDs); `retrieved` (ISO date of the search);
   `total` (ESearch hit count); `synonyms` and `mesh` (node id → the `[tiab]` terms and `[mh]`
@@ -86,7 +92,11 @@ Fields by file:
   labeled, gets none.
   - `pair_id`;
   - `abstracts_read`: the number of abstracts read for the pair (those step 2 found with
-    text); `evaluate --draw` leaves out the pairs with 0;
+    text, but those the source screen left unread); `evaluate --draw` leaves out the pairs
+    with 0;
+  - `abstracts_screened`: the source papers with text the source screen left unread, as
+    `PMID:` CURIEs (`[]` for none). A pair with 0 abstracts read and some here had only
+    mass-cited source papers to read;
   - `edges`: each in-scope edge of the pair, once: `edge_id`, `statement` (subject, predicate,
     object, `qualified_predicate` and qualifiers, `negated`), `supported`, `support_score`
     (its distinct supporting PMIDs), `supporting_publications`, `added_publications` (those its
@@ -122,7 +132,8 @@ Fields by file:
     `sentences_repaired`; and `counting`, those that support an edge of a refined pair;
   - `skipped`: pairs searched with no edge in scope, pairs with claims never checked and pairs
     with anatomy names never grounded, abstracts without publication types, claims failing a
-    check;
+    check, `source abstracts screened out` and `pairs left without abstracts by the source
+    screen` (each counted only when there is one);
   - `refinements` (lines written to `refinements.jsonl`) and `edges_written`.
   - `invalid_edges`: edges that aren't valid `Edge` records, written as read and unchecked:
     `edges`, `by_reason` (count per reason), `examples` (the first 10, `line` and `reason`).
