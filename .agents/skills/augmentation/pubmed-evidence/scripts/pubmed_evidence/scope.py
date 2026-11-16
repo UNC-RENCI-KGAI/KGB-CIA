@@ -87,6 +87,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Iterable
+from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -579,6 +580,15 @@ def _read_categories(input_dir: Path) -> dict[str, tuple[str, ...]]:
     return out
 
 
+@cache
+def _shown(categories: tuple[str, ...]) -> str:
+    """The category the report's skipped breakdown names a node by: its most specific
+    (`biolink.shown_category`), as the label and review messages show it, not its first, which
+    in the cleaned graph's alphabetical lists is BiologicalEntity. Cached by the category list,
+    which `_read_categories` shares between nodes."""
+    return biolink.shown_category(categories) or ""
+
+
 def cap_rank(pair: str, best: float | None, sources: int) -> tuple:
     """A pair's sort key in a capped rule, first kept first: scored before unscored, the best
     score of the rule's statements in it highest first, then the most distinct
@@ -691,8 +701,7 @@ def select(
         rule, lowered_by = matches[key]
         if rule is None or (lowered_by or rule).tier == "skip":
             label = f"skip:{(lowered_by or rule).id}" if rule else "unmatched"
-            first = (s_cats[0] if s_cats else "", edge.predicate, o_cats[0] if o_cats else "")
-            skipped[(*first, label)] += 1
+            skipped[(_shown(s_cats), edge.predicate, _shown(o_cats), label)] += 1
             continue
         sid = edge_statement_id(edge)
         acc = statements.get(sid)

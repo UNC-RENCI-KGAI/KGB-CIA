@@ -248,7 +248,7 @@ Written next to the step's other files:
 | `invalid_edges` | Edges that aren't valid `Edge` records, skipped: `edges`, `by_reason` (count per reason, most common first), `examples` (the first 10, `line` and `reason`) |
 | `kept` | `edges`, `statements`, `pairs`, `entities` kept in all; `negated_edges` among the edges; `misdirected_edges` (below) |
 | `rules` | Per rule id, statement and provenance rules alike. Query and capped: `tier`, `matched_edges`, `matched_statements`, and the `edges`, `statements` and `pairs` kept; capped rules add `dropped_by_min_score` (`statements`, `edges`) and `dropped_by_cap` (`pairs`, `statements`, `edges`). Skip: `tier`, `skipped_edges`. A statement counts under its provenance rule if it has one, else under its statement rule, with all its edges: so a statement rule's counts leave out the statements a provenance rule took, and include the lowered edges of the statements it kept in its own tier |
-| `skipped` | One entry per (subject category, predicate, object category) not kept, using each node's first (most specific) category: `edges` and `rule` (`skip:<id>` or `unmatched`), most edges first |
+| `skipped` | One entry per (subject category, predicate, object category) not kept, naming each node by its most specific category (`biolink.shown_category`, as the label and review messages show it; the cleaned graph lists categories alphabetically): `edges` and `rule` (`skip:<id>` or `unmatched`), most edges first |
 
 Read the largest `unmatched` entries: one that states a claim a paper could contradict (a
 predicate or category no rule lists) may deserve a rule.

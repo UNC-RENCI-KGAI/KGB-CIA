@@ -301,6 +301,30 @@ def test_symmetric_predicate_matches_reversed_and_missing_nodes(tmp_path):
     ]
 
 
+def test_skipped_breakdown_names_each_node_by_its_most_specific_category(tmp_path):
+    """The cleaned graph lists a node's categories alphabetically, BiologicalEntity or
+    AnatomicalEntity first: the report names each node by its most specific one, as the label
+    and review messages show it (`biolink.shown_category`)."""
+    gene = ["biolink:BiologicalEntity", "biolink:Gene", "biolink:GeneOrGeneProduct"]
+    anatomy = ["biolink:AnatomicalEntity", "biolink:CellularComponent", "biolink:NamedThing"]
+    nodes = [
+        Node(id="NCBIGene:1", category=gene, name="g"),
+        Node(id="GO:0005634", category=anatomy, name="nucleus"),
+    ]
+    edges = [_edge("NCBIGene:1", "biolink:located_in", "GO:0005634", **CURATED)]
+    report, statements, _, _ = _run(_graph(tmp_path / "g", nodes, edges), tmp_path / "work")
+    assert statements == []
+    assert report["skipped"] == [
+        {
+            "subject_category": "biolink:Gene",
+            "predicate": "biolink:located_in",
+            "object_category": "biolink:CellularComponent",
+            "edges": 1,
+            "rule": "skip:pathway-go",
+        }
+    ]
+
+
 def test_text_mined_edges_are_capped_whatever_their_predicate(tmp_path):
     """eRAM writes a co-mention as `gene_associated_with_condition`, under the gene-disease
     rule's `associated_with`; its knowledge level and agent type say what it is. The default
