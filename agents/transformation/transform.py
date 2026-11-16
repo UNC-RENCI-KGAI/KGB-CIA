@@ -166,10 +166,13 @@ def run(input_dir: Path | None, output_dir: Path) -> int:
     report_path = output_dir / "transformation_report.json"
     report_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n")
 
-    runnable = sum(1 for o in outcomes if o["status"] in RUNNABLE_STATUSES)
+    # count the sources ORION actually built, not the ones it was started on
+    built = sum(1 for o in outcomes if o.get("orion_exit_code") == 0)
+    failed = [o["source_id"] for o in outcomes if o.get("orion_exit_code")]
     print(
-        f"Transformation agent: {runnable}/{len(outcomes)} sources compiled and run through "
-        f"ORION; {len(report['errors'])} generation errors. "
+        f"Transformation agent: {built}/{len(outcomes)} sources built by ORION"
+        + (f" ({len(failed)} failed: {', '.join(failed)})" if failed else "")
+        + f"; {len(report['errors'])} generation errors. "
         f"Merged graph: {merge['output'] if merge else 'none'}. "
         f"See {report_path} for the metadata-team handoff."
     )

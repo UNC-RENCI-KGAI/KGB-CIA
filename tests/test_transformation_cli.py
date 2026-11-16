@@ -116,7 +116,7 @@ def test_run_reports_without_failing_on_needs_infores(tmp_path, monkeypatch):
     assert "orion_exit_code" not in handoff["sources"][0]
 
 
-def test_run_fails_when_orion_run_fails(tmp_path, monkeypatch):
+def test_run_fails_when_orion_run_fails(tmp_path, monkeypatch, capsys):
     input_dir = tmp_path / "metadata" / "acme"
     input_dir.mkdir(parents=True)
     (input_dir / "croissant.semantic.json").write_text("{}")
@@ -144,6 +144,8 @@ def test_run_fails_when_orion_run_fails(tmp_path, monkeypatch):
     handoff = json.loads((output_dir / "transformation_report.json").read_text())
     assert handoff["sources"][0]["orion_exit_code"] == 1
     assert handoff["sources"][0]["error"] == "ORION blew up"
+    # the summary counts what ORION built, and names what it didn't
+    assert "0/1 sources built by ORION (1 failed: Kgbcia_acme)" in capsys.readouterr().out
 
 
 def test_run_succeeds_when_orion_run_succeeds(tmp_path, monkeypatch, capsys):
@@ -175,7 +177,9 @@ def test_run_succeeds_when_orion_run_succeeds(tmp_path, monkeypatch, capsys):
     assert handoff["sources"][0]["orion_exit_code"] == 0
     # a proposed infores id runs, and is reported for registering
     assert handoff["sources"][0]["infores_proposed"] is True
-    assert "proposed infores ids that need registering" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "proposed infores ids that need registering" in out
+    assert "1/1 sources built by ORION;" in out
 
 
 def test_run_merges_built_sources_and_reports_a_failed_merge(tmp_path, monkeypatch, capsys):
