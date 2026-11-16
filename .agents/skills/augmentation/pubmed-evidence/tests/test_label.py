@@ -436,9 +436,10 @@ def test_prompt_version_covers_rules_effort_and_the_included_rules(tmp_path, mon
     low = label.label_prompt(model=MODEL)[1]
     assert label.label_prompt(model=MODEL, reasoning_effort="low")[1] == low
     assert label.label_prompt(model=MODEL, reasoning_effort="medium")[1] != low
-    # A model that takes no effort sends none, as 'none' does.
-    none = label.label_prompt(model=MODEL, reasoning_effort="none")[1]
-    assert label.label_prompt(model="gpt-oss-120b")[1] == none
+    # A model that takes no effort sends none, as 'omit' does; the level 'none' is another.
+    omitted = label.label_prompt(model=MODEL, reasoning_effort="omit")[1]
+    assert label.label_prompt(model="gpt-oss-120b")[1] == omitted
+    assert label.label_prompt(model=MODEL, reasoning_effort="none")[1] not in (omitted, low)
     # Another set of scope rules means other schemas.
     fewer = tuple(r for r in scope.DEFAULT_RULES if r.id != "gene-gene")
     assert label.label_prompt(model=MODEL, rules=fewer)[1] != low

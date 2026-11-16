@@ -1457,8 +1457,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--reasoning-effort",
         default=None,
-        help="reasoning effort for reasoning models, or 'none' to omit (default: the model's in "
-        "config.MODELS); it is part of the prompt version, so another effort reads afresh",
+        help="reasoning effort for reasoning models ('none' is sent as such), or 'omit' to send "
+        "none (default: the model's in config.MODELS); it is part of the prompt version, so "
+        "another effort reads afresh",
     )
     parser.add_argument(
         "--dry-run",

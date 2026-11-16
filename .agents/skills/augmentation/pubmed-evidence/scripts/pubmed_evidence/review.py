@@ -495,9 +495,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--reasoning-effort",
         default=None,
-        help="reasoning effort sent to the model, or 'none' to leave it out (default: the "
-        "model's in config.MODELS); it is part of the review prompt version, so another effort "
-        "reviews afresh",
+        help="reasoning effort sent to the model ('none' is sent as such), or 'omit' to send "
+        "none (default: the model's in config.MODELS); it is part of the review prompt "
+        "version, so another effort reviews afresh",
     )
     parser.add_argument(
         "--max-output-tokens",
