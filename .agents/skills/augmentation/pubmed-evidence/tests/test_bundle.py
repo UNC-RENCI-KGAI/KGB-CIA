@@ -328,12 +328,13 @@ def test_a_sentence_counts_as_found_from_its_repair(world):
     claim = stored(TREATS, sentence="imatinib cured CML")
     [fixed] = world.answer(TREATS_PAIR, "1", claim, sentence_valid=False)
     world.answer(TREATS_PAIR, "2", claim, sentence_valid=False)
-    repairer, version = repair.current()
+    repairer, version = repair.model_current()
     with LabelCache(world.cache_dir / config.LABEL_CACHE) as cache:
         row = ClaimRepairRow(TREATS_PAIR, "1", PV, MODEL, fixed, repairer, version, "Imatinib")
         row.sentence_valid = True
         cache.put_claim_repairs([row])
-    # Repairs count once label_run.json names them.
+    # Repairs count once label_run.json names them, here as a file from before code repairs
+    # names its one repairer.
     before = world.load().pairs[0].evidence[0].claims[0]
     assert not before.evidence_sentence_valid and not before.evidence_sentence_repaired
     run = records.read_label_run(world.work)

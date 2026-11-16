@@ -90,8 +90,9 @@ NAMERES_URL = os.environ.get("NAMERES_URL", "https://name-resolution-sri.renci.o
 # be in MODELS, below.
 BULK_MODEL = os.environ.get("KGB_AUGMENT_MODEL", "gpt-6-luna")
 REVIEW_MODEL = os.environ.get("KGB_AUGMENT_REVIEW_MODEL", "gpt-5.6-terra")
-# The end of step 3 repairs quotes that weren't found with the review model. Its repairs are
-# the ones review, evaluate and step 6 read, so changing it starts the repairs afresh.
+# The end of step 3 repairs quotes that weren't found with code first (quote_align.py), and
+# with the review model those code can't place. Its repairs are the ones review, evaluate and
+# step 6 read after the code's, so changing it starts the model's repairs afresh.
 REPAIR_MODEL = REVIEW_MODEL
 # The most abstracts and review items one call sends; a pair with more is split across calls.
 ABSTRACTS_PER_CALL = 20

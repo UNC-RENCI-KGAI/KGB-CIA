@@ -190,7 +190,13 @@ def put_repair(w: World, pair: str, pmid: str, claim: dict) -> None:
     """The current repair pass found the claim's sentence."""
     with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
         row = ClaimRepairRow(
-            pair, pmid, PV, MODEL, claim_id(claim), *repair.current(), claim["evidence_sentence"]
+            pair,
+            pmid,
+            PV,
+            MODEL,
+            claim_id(claim),
+            *repair.model_current(),
+            claim["evidence_sentence"],
         )
         row.sentence_valid = True
         cache.put_claim_repairs([row])
@@ -324,7 +330,7 @@ def test_claims_by_hand(scored):
         ],
         "pairs": [],
     }
-    assert (r["repairer"], r["repair_prompt_version"]) == repair.current()
+    assert r["repairers"] == [list(x) for x in repair.current()]
 
 
 def test_support_pmids_and_proposals_by_hand(three_runs):
@@ -459,7 +465,7 @@ def test_repairs_count_as_label_run_json_names_them(scored):
     # doesn't count, so PMID 2's claim isn't checked either.
     run = LabelRun(model=MODEL, prompt_version=PV, repairer="r", repair_prompt_version="v")
     [r] = evaluate.evaluate(gold, w.cache_dir, [(MODEL, PV)], run, CATEGORIES)["runs"]
-    assert (r["repairer"], r["repair_prompt_version"]) == ("r", "v")
+    assert r["repairers"] == [["r", "v"]]
     assert r["claims"]["sentences_repaired"] == 0
     assert r["claims"]["sentences_not_found"] == 2
     assert r["as_checked"]["exact"]["matched"] == 1

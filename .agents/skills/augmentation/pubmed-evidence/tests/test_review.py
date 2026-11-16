@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClient, Sent
-from pubmed_evidence import config, llm, records, repair, review
+from pubmed_evidence import config, llm, quote_align, records, repair, review
 from pubmed_evidence.cache import ClaimRepairRow, Grounding, LabelCache, PubMedCache
 from test_bundle import (
     GENE_PAIR,
@@ -79,14 +79,14 @@ def scene(tmp_path: Path) -> World:
     misquoted = stored(INHIBITS, sentence="imatinib blocked ABL1")
     [fixed] = w.answer(GENE_PAIR, "206", misquoted, design="in_vitro", sentence_valid=False)
     w.answer(GENE_PAIR, "207", misquoted, design="in_vitro", sentence_valid=False)
-    repairer, version = repair.current()
+    repairer, version = repair.model_current()
     with LabelCache(w.cache_dir / config.LABEL_CACHE) as cache:
         cache.put_claim_repairs(
             [ClaimRepairRow(GENE_PAIR, "206", PV, MODEL, fixed, repairer, version, INHIBITED, True)]
         )
     run = records.read_label_run(w.work)
-    update = {"repairer": repairer, "repair_prompt_version": version}
-    records.write_label_run(w.work, run.model_copy(update=update))
+    run.set_repairs(repair.current())
+    records.write_label_run(w.work, run)
     return w
 
 
@@ -454,7 +454,8 @@ def test_the_repair_prompt_version_covers_the_repair_models_effort(monkeypatch):
     model = llm.model(config.REPAIR_MODEL)
     monkeypatch.setitem(config.MODELS, model.id, dataclasses.replace(model, effort="high"))
     assert repair.repair_prompt()[1] != version
-    assert repair.current() == (config.REPAIR_MODEL, repair.repair_prompt()[1])
+    assert repair.model_current() == (config.REPAIR_MODEL, repair.repair_prompt()[1])
+    assert repair.current() == [("code", quote_align.VERSION), repair.model_current()]
 
 
 # --- The CLI --------------------------------------------------------------------------------

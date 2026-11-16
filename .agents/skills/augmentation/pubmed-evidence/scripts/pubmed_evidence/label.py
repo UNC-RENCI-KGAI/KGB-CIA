@@ -24,8 +24,9 @@ direction, `negative_finding_type` on negative claims only, and `also_supports` 
 add something; and that the evidence sentence is in the abstract (`quotes.quote_found`). A claim
 failing a check is kept in the cache but counts for nothing: the checks go to the
 `claim_checks` table, recomputed on every run for the run's pairs, since nothing versions them.
-Last, the quote repair pass (`repair.py`) asks a stronger model for the evidence sentences of
-claims that pass every other check but whose sentence wasn't found.
+Last, the quote repair pass (`repair.py`) repairs the evidence sentences of claims that pass
+every other check but whose sentence wasn't found: code puts back the sentences a quote was
+taken from, and a stronger model is asked only for those code can't place.
 
 A rerun asks only for the abstracts with no answer yet, and a new prompt, model or effort starts
 fresh: the prompt version hashes the prompt file (with the claim rules it includes) together
@@ -370,6 +371,17 @@ def build_jobs(inputs: Inputs, pubmed: PubMedCache) -> tuple[list[PairJob], Coun
         predicates = predicates_of(inputs.rules, rules)
         jobs.append(PairJob(pair.pair_id, entities, synonyms, mesh, rules, predicates, pmids))
     return jobs, skipped
+
+
+def entity_synonyms(jobs: Iterable[PairJob]) -> dict[str, list[str]]:
+    """Node id -> what the label message calls it besides its name, from every job naming it:
+    its synonyms, then its MeSH headings, once each. The quote repair looks for them."""
+    out: dict[str, dict[str, None]] = {}
+    for job in jobs:
+        for e in job.entities:
+            terms = out.setdefault(e.id, {})
+            terms.update(dict.fromkeys([*job.synonyms.get(e.id, []), *job.mesh.get(e.id, [])]))
+    return {node: list(terms) for node, terms in out.items()}
 
 
 @dataclass
@@ -960,7 +972,8 @@ def write_sample(
     """`label_sample.md`, what the agent reads to tune the prompt, and `label_sample.jsonl`, one
     line per (pair, PMID) with the abstract and its claims as stored, each with its id, checks
     and repaired sentence, for a curator to correct. A sentence that wasn't found shows its
-    repair, if the repair pass made one. The pairs were chosen with `seed`, or are those the
+    repair and who made it, if the repair pass made one: the first found of the code's and the
+    repair model's, else the last made. The pairs were chosen with `seed`, or are those the
     pairs file `source` names."""
     chosen = f"from {source}" if source is not None else f"chosen with seed {seed}"
     md = [
@@ -978,10 +991,7 @@ def write_sample(
         (c.pair_id, c.pmid, c.claim_id): c
         for c in labels.claim_checks(prompt_version, model, pair_ids)
     }
-    repairs = {
-        (r.pair_id, r.pmid, r.claim_id): r
-        for r in labels.claim_repairs(prompt_version, model, *repair.current(), pair_ids)
-    }
+    repairs = repair.chosen_repairs(labels, prompt_version, model, repair.current(), pair_ids)
     rows: list[dict[str, Any]] = []
     for n, job in enumerate(jobs, 1):
         names = {e.id: e.name or e.id for e in job.entities}
@@ -1025,7 +1035,8 @@ def write_sample(
                 )
                 if fixed is not None:
                     text = f'"{fixed.evidence_sentence}"' if fixed.evidence_sentence else "none"
-                    md.append(f"  - repair: {text}{_found_note(fixed.sentence_valid)}")
+                    found = _found_note(fixed.sentence_valid)
+                    md.append(f"  - repair by {fixed.repairer}: {text}{found}")
                 for entry in claim["also_supports"]:
                     also = statement_of(entry)
                     md.append(f"  - also supports: {sentences.sentence(also, names)}")
@@ -1184,6 +1195,7 @@ def label_pairs(
                     model=model,
                     pair_ids=pair_ids,
                     names=names,
+                    synonyms=entity_synonyms(jobs),
                     client=repair_client,
                     workers=workers,
                 )
@@ -1197,9 +1209,7 @@ def label_pairs(
             )
             if written:
                 made = summary.get("repairs")
-                repairs = None
-                if made is not None and made["skipped"] is None:
-                    repairs = (made["repairer"], made["repair_prompt_version"])
+                repairs = None if made is None else [tuple(r) for r in made["repairers"]]
                 _write_run(work, model, version, prompt, effort, repairs)
             summary["label_run_written"] = written
             if sample is not None or pairs is not None:
@@ -1306,24 +1316,28 @@ def _write_run(
     version: str,
     prompt: Path,
     effort: str,
-    repairs: tuple[str, str] | None,
+    repairs: list[tuple[str, str]] | None,
 ) -> None:
-    """Name this run in `label_run.json`, with its effort and the (repairer, repair prompt
-    version) of its repair pass, if one ran. Its review, and the earlier repairs when no pass
-    ran, are kept only if they were of this run. The UBERON release is kept: no run changes
-    it."""
+    """Name this run in `label_run.json`, with its effort and the repairs of its repair pass,
+    if one ran: (repairer, repair prompt version) in priority order, the code's, then the
+    model's unless its pass was skipped. Its review, and the earlier repairs, are kept only if
+    they were of this run: all of them when no pass ran, and the model's after the code's when
+    the model's pass was skipped. The UBERON release is kept: no run changes it."""
     run = records.LabelRun(
         model=model, prompt_version=version, prompt=str(prompt), reasoning_effort=effort
     )
     old = records.read_label_run(work)
+    earlier: list[tuple[str, str]] = []
     if old is not None:
         run.uberon_version = old.uberon_version
     if old is not None and (old.model, old.prompt_version) == (model, version):
         run.reviewer, run.review_prompt_version = old.reviewer, old.review_prompt_version
         run.review_reasoning_effort = old.review_reasoning_effort
-        run.repairer, run.repair_prompt_version = old.repairer, old.repair_prompt_version
-    if repairs is not None:
-        run.repairer, run.repair_prompt_version = repairs
+        earlier = old.repair_order()
+    order = earlier if repairs is None else list(repairs)
+    if repairs is not None and all(r == repair.CODE_REPAIRER for r, _ in repairs):
+        order += [r for r in earlier if r[0] != repair.CODE_REPAIRER]
+    run.set_repairs(order)
     records.write_label_run(work, run)
 
 
