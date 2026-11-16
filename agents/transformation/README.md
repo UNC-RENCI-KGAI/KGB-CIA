@@ -1,67 +1,57 @@
 # Transformation agent
 
-**Team:** @UNC-RENCI-KGAI/transformation
+Stage 2. Turns each source into graph nodes and edges, then merges every source into one graph.
+For each source it generates an [ORION](https://github.com/RobokopU24/ORION) parser from the
+metadata stage's plan and runs it. ORION normalizes every identifier with NodeNorm and writes
+[KGX](https://github.com/biolink/kgx) files.
 
-Generate per-source ORION parsers from the metadata agent's semantic mappings and run them
-to construct graphs with provenance and source-record lineage. Report semantic metadata
-failures to the metadata team. ORION handles normalization; filtering, cleaning, and evaluation
-remain outside transformation.
+Transformation only does what the metadata says. It never guesses a value the metadata doesn't
+give, including the source's own identity (its `infores` id): that comes from the metadata, or
+from an explicit `--infores`. A source with no identity is reported as `needs_infores` and
+skipped, not run under an invented id. An id the metadata marks as proposed (not yet in the
+infores registry) is used, and listed so it can be registered.
 
-Transformation only uses what the supplied semantic metadata declares. It never infers,
-guesses, or pattern-matches a value the metadata doesn't contain — including a source's
-infores identity: that comes from the metadata's `rcv:infores` (bundles made before the
-metadata stage set it fall back to a single source constant), or an explicit `--infores`, never
-derived from a name, URL, or file path. An id the metadata marks `rcv:inforesProposed` (not yet
-in the infores catalog) is used, and listed for registering. A source with no identity at all is
-reported as `needs_infores`, not run with a fabricated one.
-
-## Run it alone
+## Run it
 
 ```bash
-uv run kgb-transform                                  # autodetects --input under data/
+uv run kgb-transform                                  # finds the metadata under data/
 uv run kgb-transform --input data/metadata --output data/transformation
 ```
 
-This generates a parser for every semantic Croissant bundle under `--input`, runs each
-compiled one natively through ORION, and writes `data/transformation/transformation_report.json`
-as the handoff to the metadata team for anything it could not convert. With no `--input`,
-it uses `data/metadata` if populated, otherwise the one directory under `data/` that actually
-contains semantic Croissant bundles; if more than one does, it fails with a message asking you
-to pass `--input` explicitly, rather than guessing. For first-pass
-onboarding of a new source, ambiguous `--infores` confirmation, or parsing-only tests, work
-through the standalone
-[generate-graph skill](../../.agents/skills/transformation/generate-graph/README.md) directly
-instead; its
-[workflow reference](../../.agents/skills/transformation/generate-graph/reference/orion_workflow.md)
-describes commands, local file bindings, and runtime requirements. `kgb-transform` replays
-that same generate-then-run workflow across every source, unattended, once a source's identity
-is confirmed.
+This generates a parser for every source under `--input`, runs each through ORION, merges the
+results, and writes `transformation_report.json`. With no `--input`, it uses `data/metadata` if
+that has anything in it, otherwise the one directory under `data/` that holds semantic
+Croissant files. If more than one does, it stops and asks for `--input` rather than guess.
+
+To add a single new source, or to test parsing on its own, use the
+[generate-graph skill](../../.agents/skills/transformation/generate-graph/README.md) directly.
+Its [workflow reference](../../.agents/skills/transformation/generate-graph/reference/orion_workflow.md)
+covers the commands, local file bindings and runtime requirements. `kgb-transform` runs the same
+workflow for every source, unattended.
 
 ## Input / output
 
-Inputs are semantic metadata bundles containing `croissant.semantic.json` or its gzip
-equivalent, with `semantics_plan.json` and supporting reports when available, under
-`--input` (default: autodetected under `data/`, preferring `data/metadata` — see above).
+**Input:** per source, `croissant.semantic.json` (or `.gz`) with `semantics_plan.json` and the
+metadata stage's reports.
 
-Outputs, under `--output` (default `data/transformation`), are generated ORION loader
-packages, KGX node and edge files following `shared/schema.py`, generation reports, per-source
-`TransformReport` files, diagnostics, `merged/` with the one graph built from every source, and
-`transformation_report.json` aggregating every source's status for the metadata team. Every emitted edge includes `kgbcia_source_records`,
-linking its source record to a mapping. Keep source data and generated outputs under
-gitignored `data/`.
+**Output**, under `--output` (default `data/transformation`):
 
-## Status
+- Per source: the generated ORION parser, its KGX `nodes.jsonl` and `edges.jsonl`, a
+  `transform_report.json` saying which file, record set and columns produced each node and edge,
+  and `diagnostics.jsonl` with the rows it couldn't use and why.
+- `merged/`: one graph built from every source, using ORION's merge rules.
+- `transformation_report.json`: every source's status, for whoever maintains the metadata.
 
-The metadata compiler, shared extraction runtime, and ORION runner are implemented and tested.
-`kgb-transform` now wires them together: it generates parsers for every bundle under
-`--input`, runs each `ready`/`partial` source through ORION in its own `uv run --script`
-process (ORION needs Python 3.12+), and reports `needs_infores`/`unsupported` sources and
-generation errors without treating them as pipeline failures. `kgb-transform`'s batch run never
-passes `--infores`, so a `needs_infores` source stays reported, not guessed, until the metadata
-names its identity. Sources citing proposed ids are run, and named at the end of the run and in
-`transformation_report.json` (`infores_proposed`) for registering. Reader coverage is
-partial and disclosed in generation reports. Metadata defects are handed over without changing
-the supplied semantics. Unresolved NodeNorm identifiers do not by themselves indicate parser
-failure.
-Re-running with changed local file bindings or a corrected `--infores` needs a fresh
-`--output` directory until ORION's stage cache fingerprints those inputs.
+Every edge carries Biolink provenance (`primary_knowledge_source`, `knowledge_level`,
+`agent_type`) and `kgbcia_source_records`, which points into the `transform_report.json`. That's
+how the MCP server traces an edge back to the row it came from.
+
+## Limitations
+
+- ORION needs Python 3.12+. Each source runs in its own `uv run --script` process.
+- Not every file format has a reader yet. Each source's report says which record sets it
+  couldn't read.
+- Merging every source needs about 100 GB of free disk.
+- Rerunning with changed local file bindings or a different `--infores` needs a fresh
+  `--output` directory, because ORION's cache doesn't track those inputs.
+- An identifier NodeNorm doesn't know isn't a parser failure. Cleaning reports those nodes.

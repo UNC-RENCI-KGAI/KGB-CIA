@@ -86,7 +86,7 @@ asked for. Cleaning then runs again at the end.
 git clone https://github.com/UNC-RENCI-KGAI/KGB-CIA.git
 cd KGB-CIA
 make setup        # creates .venv with uv and installs the package in editable mode
-make test         # lint + unit tests
+make test         # lint + tests (offline, about 15 s; see tests/README.md)
 make demo         # dry run: prints what each stage does, runs nothing
 ```
 
