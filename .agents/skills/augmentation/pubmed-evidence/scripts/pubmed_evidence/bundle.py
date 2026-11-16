@@ -41,8 +41,10 @@ Steps 5 and 6 read the bundles: the review step sends the claims that would coun
   `anatomy_name`, which goes to `lit_context_notes`. Each
   statement reads the way round Biolink's domain and range put it (`refine.directed`), so
   'gene condition_associated_with_gene disease' is 'gene gene_associated_with_condition
-  disease'; the stored claim, which `claim_id` hashes, stays as the model gave it. A claim
-  carries the verdict of the reviewer and review prompt version given, if any.
+  disease', and a claim that passed its check only through a post-label repair reads as
+  repaired (`label.read_claim`); the stored claim, which `claim_id` hashes, stays as the model
+  gave it. A claim carries the verdict of the reviewer and review prompt version given, if
+  any.
 
 `Bundle.keys` names each claim as the claim tables key it, (pair, PMID, `claim_id`), in the
 order of `Bundle.claims`, which is `refine.claims_of`'s, and so that of the claim indices
@@ -55,7 +57,7 @@ import hashlib
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cached_property
+from functools import cache, cached_property
 from pathlib import Path
 from typing import Any
 
@@ -134,6 +136,11 @@ class Bundles:
         return {e.id: list(e.category) for e in self.entities.values()}
 
 
+@cache
+def _qualifiers() -> label.Qualifiers:
+    return label.Qualifiers()
+
+
 def claim_record(
     stored: Mapping[str, Any],
     *,
@@ -147,21 +154,22 @@ def claim_record(
     """A claim as `abstract_claims` stores it, as the shared schema's record: its sentence the
     repair's (`repaired`) when its own wasn't found, its anatomy grounded (`grounding`, the
     cached grounding of the name it gives) and its review (`verdict`, a (verdict, reason)).
-    With the nodes' `categories`, each statement is the way round Biolink reads it
-    (`refine.directed`), as the label step checked it; one whose predicate fits neither way
-    raises ValueError."""
+    With the nodes' `categories`, the claim is read as the label step checked it
+    (`label.read_claim`): each statement the way round Biolink reads it (`refine.directed`),
+    with the repairs `label.SALVAGE` names where they make it pass; one whose predicate fits
+    neither way raises ValueError."""
     context = stored.get("context") or {}
     name = ground.claim_anatomy(stored)
     use_repair = not sentence_found and repaired is not None
     review, reason = verdict if verdict is not None else (None, None)
-    statements = []
-    for entry in [stored["statement"], *(stored.get("also_supports") or ())]:
-        statement = Statement.model_validate(entry)
-        if categories is not None:
-            statement = refine.directed(statement, categories)
-            if statement is None:
-                raise ValueError(label.misfit(entry, categories))
-        statements.append(statement)
+    if categories is None:
+        entries = [stored["statement"], *(stored.get("also_supports") or ())]
+        statements = [Statement.model_validate(entry) for entry in entries]
+    else:
+        read = label.read_claim(stored, categories, _qualifiers())
+        if None in read.statements:
+            raise ValueError("; ".join(read.errors))
+        statements = read.statements
     return ClaimRecord(
         polarity=stored["polarity"],
         statement=statements[0],
