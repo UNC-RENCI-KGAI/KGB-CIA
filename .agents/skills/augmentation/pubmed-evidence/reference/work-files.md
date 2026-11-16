@@ -53,7 +53,8 @@ Fields by file:
   without abstract text). Titles, abstracts and publication types are in the PubMed cache.
 - **`label_run.json`** (`LabelRun`): the run that ground, review, apply and the full run use.
   - `model`, `prompt_version`, `prompt` (path of the prompt file) and `reasoning_effort` (the
-    effort the run sent, `none` for none) of the label run;
+    effort the run sent: `omit` when it sent none, and `none` when it sent the level `none`) of
+    the label run;
   - `repairers`: the sentence repairs that count, as `[repairer, version]` pairs in priority
     order, `[["code", "align-2"], ["gpt-5.6-terra", "repair@..."]]`: a claim's sentence is the
     first of their repairs that was found. Those of the label run's repair pass: the code's,
@@ -228,9 +229,10 @@ cache's years, publication types and groundings, the UBERON file, the graph,
   `{{include NAME}}` line replaced by the file it names (`claim-rules.md`: beside the prompt,
   else the skill's `prompts/`). `extra` is the step's `FORMAT_VERSION`, its reply schema (for
   label, every scope rule's schema; skip and provenance rules have none) and the reasoning
-  effort sent, so answers made at one effort are never reused at another. `FORMAT_VERSION` is the version of the request layout
-  the code builds: `label-message-5` in `label.py`, `review-message-5` in `review.py` and
-  `repair-message-2` in `repair.py`. Any edit to a prompt file or a schema starts fresh
+  effort sent (`omit` when none is sent), so answers made at one effort are never reused at
+  another. `FORMAT_VERSION` is the version of the request layout the code builds:
+  `label-message-5` in `label.py`, `review-message-5` in `review.py` and `repair-message-2` in
+  `repair.py`. Any edit to a prompt file or a schema starts fresh
   answers (or reviews, or repairs); bump `FORMAT_VERSION` when the code that writes the request
   changes.
 - **Code repair version** (`quote_align.VERSION`, `align-2`): the version code's quote repairs

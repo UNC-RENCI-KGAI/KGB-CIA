@@ -60,8 +60,12 @@ failed calls (`llm.MAX_FAILED_SHARE`, 5%) still stops the run.
   and write, and any longer-prompt tier) with where and when they were copied from. It also has
   the output cap and reasoning effort a call sends unless `--max-output-tokens` or
   `--reasoning-effort` overrides them: `low` for the Azure bulk candidates, `medium` for the
-  rest, and Anthropic's own default for each Claude model until tuned. A model not in the table
-  is an error. The Azure prices are copied from `.pi/models.json`, which Pi reads for itself,
+  rest, and Anthropic's own default for each Claude model until tuned. `none` is an effort like
+  the others, sent as such; `omit` sends no effort setting, so the service's default applies,
+  which for gpt-6-luna is `medium` (probed Nov 16 2026: with no setting it reasons at medium,
+  and at `none` not at all). Where the efforts a model takes are known they are in the table
+  too (`efforts`: gpt-6-luna's, probed, and Claude's, which have no `none`), and another effort
+  is an error before any call. A model not in the table is an error. The Azure prices are copied from `.pi/models.json`, which Pi reads for itself,
   so a price change there has to be copied by hand. The Claude prices are Anthropic's list
   prices, from its pricing page.
 - **Claude models** go through Anthropic's Messages API and its SDK (`llm.AnthropicClient`),
@@ -797,8 +801,9 @@ across a team:
   rebuilt without calling a model.
 - **Prompt versions** hash the prompt file's text with the files it includes, the step's
   `FORMAT_VERSION` (the version of the request layout), its reply schema or schemas and the
-  reasoning effort sent. Any edit to a prompt or a schema, or another effort, starts fresh
-  answers; bump `FORMAT_VERSION` when the code that writes the request changes.
+  reasoning effort sent (`effort=omit` when none is sent, `effort=none` for the level `none`).
+  Any edit to a prompt or a schema, or another effort, starts fresh answers; bump
+  `FORMAT_VERSION` when the code that writes the request changes.
 - **Earlier tables:** a label cache from before the claims also has the statement labels'
   tables (`labels`, `proposals`, `reviews`, `repairs`). No code reads or writes them, and they
   stay as they are.

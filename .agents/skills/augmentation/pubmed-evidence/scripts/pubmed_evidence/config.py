@@ -114,6 +114,17 @@ class Price:
     cache_write: float
 
 
+# The reasoning effort that sends no effort setting at all, so the service's default applies
+# (`llm.sent_effort`). It isn't 'none', a level some models take and are sent as such:
+# gpt-6-luna at 'none' doesn't reason, and with no setting it reasons at medium.
+OMIT_EFFORT = "omit"
+
+# The efforts each API takes, where known. gpt-6-luna's were probed on the RENCI endpoint on
+# 2026-11-16 (it rejects 'minimal'). Claude's `output_config.effort` has no 'none'.
+GPT_6_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
 @dataclass(frozen=True)
 class Model:
     """A model the steps can call: how to reach it, what it costs, and the settings a call
@@ -127,11 +138,14 @@ class Model:
     price: Price
     price_source: str  # where and when the price was copied from
     reasoning: bool = True  # takes a reasoning effort
-    effort: str | None = None  # the effort sent by default
+    effort: str | None = None  # the effort sent by default; None sends none
     max_output_tokens: int = 16000  # per call, reasoning included
     # (prompt tokens, price): a call with a longer prompt is billed at this price instead.
     long_prompt: tuple[int, Price] | None = None
     fallbacks: bool = False  # the service may answer with another model when this one refuses
+    # The efforts its API takes, where known: any other is an error before a call is sent.
+    # None: not known, so an effort is sent as given and the service judges it.
+    efforts: tuple[str, ...] | None = None
 
 
 # Azure OpenAI deployments, under Pi's standard variable names. The ids and prices below are the
@@ -147,8 +161,16 @@ AZURE_URL = os.environ.get(AZURE_URL_VAR) or AZURE_DEFAULT_URL
 _PI = ".pi/models.json, 2026-11-03"
 
 
-def _azure(id: str, price: Price, effort: str | None = "medium", reasoning: bool = True) -> Model:
-    return Model(id, "openai", AZURE_URL, AZURE_KEY_VAR, price, _PI, reasoning, effort)
+def _azure(
+    id: str,
+    price: Price,
+    effort: str | None = "medium",
+    reasoning: bool = True,
+    efforts: tuple[str, ...] | None = None,
+) -> Model:
+    return Model(
+        id, "openai", AZURE_URL, AZURE_KEY_VAR, price, _PI, reasoning, effort, efforts=efforts
+    )
 
 
 # Claude models, on Anthropic's own API. The SDK reads the key, or an `ant auth login` profile.
@@ -173,6 +195,7 @@ def _claude(
         effort=effort,
         long_prompt=long_prompt,
         fallbacks=fallbacks,
+        efforts=CLAUDE_EFFORTS,
     )
 
 
@@ -180,7 +203,7 @@ MODELS: dict[str, Model] = {
     m.id: m
     for m in (
         # Bulk labeling candidates: a low effort, since step 3 sends many calls.
-        _azure("gpt-6-luna", Price(0.1, 0.5, 0.01, 0.125), "low"),
+        _azure("gpt-6-luna", Price(0.1, 0.5, 0.01, 0.125), "low", efforts=GPT_6_EFFORTS),
         _azure("gpt-5.6-luna", Price(0.2, 1.2, 0.02, 0.25), "low"),
         _azure("DeepSeek-V4-Flash", Price(0.19, 0.51, 0.028, 0), "low"),
         _azure("gpt-oss-120b", Price(0.15, 0.6, 0, 0), None, reasoning=False),

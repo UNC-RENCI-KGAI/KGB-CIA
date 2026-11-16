@@ -104,15 +104,15 @@ class LabelRun(BaseModel):
     prompt: str | None = Field(default=None, description="Path of the prompt file used")
     reasoning_effort: str | None = Field(
         default=None,
-        description="Effort the run sent ('none' for none); the full run continues with it. "
-        "None in a file written before it was recorded",
+        description="Effort the run sent ('omit' when it sent none; 'none' is a level); the "
+        "full run continues with it. None in a file written before it was recorded",
     )
     reviewer: str | None = None
     review_prompt_version: str | None = None
     review_reasoning_effort: str | None = Field(
         default=None,
-        description="Effort the review sent ('none' for none); the full run continues with it "
-        "while its reviewer reviews",
+        description="Effort the review sent ('omit' when it sent none; 'none' is a level); "
+        "the full run continues with it while its reviewer reviews",
     )
     repairer: str | None = Field(
         default=None,

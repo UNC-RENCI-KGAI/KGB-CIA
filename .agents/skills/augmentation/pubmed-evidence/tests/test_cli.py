@@ -432,6 +432,13 @@ def test_full_run_continues_a_tuned_run(tmp_path, fakes):
     assert len(fakes) == seen
 
 
+def test_full_run_stops_before_labeling_at_an_effort_the_model_doesnt_take(tmp_path, fakes, capsys):
+    common = common_args(tmp_path)
+    assert cli.main(["--model", "gpt-6-luna", "--reasoning-effort", "minimal", *common]) == 1
+    assert "label: error: gpt-6-luna takes the reasoning efforts" in capsys.readouterr().err
+    assert fakes.count("label") == 0
+
+
 def test_full_run_continues_the_runs_effort(tmp_path, fakes, monkeypatch):
     efforts: list[str | None] = []
 
