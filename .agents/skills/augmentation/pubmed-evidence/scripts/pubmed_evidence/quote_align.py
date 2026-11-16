@@ -38,7 +38,7 @@ from pubmed_evidence.quotes import _ELLIPSIS, MAX_PARTS, MIN_PART_CHARS, normali
 # The repair version code repairs are cached under (`claim_repairs.repair_prompt_version`, with
 # the repairer 'code'). Bump it on any change to what `repair` returns: repairs made under
 # another version are made again.
-VERSION = "align-1"
+VERSION = "align-2"
 # Least share of the quote's (weighted) words the passage must cover, else no repair.
 FLOOR = 0.5
 # Most sentences the cover takes, and the fewest new words a second one must add.
@@ -60,11 +60,14 @@ GENERIC = frozenset(
 )
 # A structured abstract's section label: 'RESULTS: ', 'MATERIALS AND METHODS: '.
 _LABEL = re.compile(r"^([A-Z][A-Za-z /&,'-]{1,60}?):\s+")
-# Words whose full stop doesn't end a sentence.
+# Words whose full stop doesn't end a sentence, in any case but all capitals: 'NO.', 'MS.' or
+# 'CF.' is an acronym, which can end one.
 _ABBREV = frozenset(
-    """e.g i.e al vs fig figs approx no nos dr sp spp ca cf resp incl var st inc ltd co ref
-    refs eq vol pp ed eds jr mr mrs ms prof subsp cv viz etc est""".split()
+    """e.g i.e al vs fig figs approx no nos sp spp ca cf resp incl var inc ltd co ref refs eq
+    vol pp ed eds subsp cv viz etc est""".split()
 )
+# Titles, abbreviations only as written here: 'ms' is milliseconds and 'DR' an acronym.
+_TITLES = frozenset("Dr Mr Mrs Ms Prof Jr St".split())
 # A sentence ends at '.', '!' or '?' (and a closing quote or bracket) before space and a
 # capital or a digit.
 _BOUNDARY = re.compile(r"[.!?]['\")\]]?\s+(?=[\"'(\[]?[A-Z0-9Α-Ω])")
@@ -85,21 +88,38 @@ class Sentence:
     text: str
 
 
+def _no_end(word: str, before: str, after: str) -> bool:
+    """Whether a full stop after `word` doesn't end the sentence, `before` being the sentence up
+    to the word and `after` the text from the next word on: the word is an abbreviation, a title
+    or an initial. A lowercase letter is taken for an initial. A capital is one after a
+    capitalized word or none ('John F. Kennedy', 'A. B. Jones'), or before another initial ('the
+    M. D. Anderson'); after a lowercase word or a number it ends a name ('vitamin D.',
+    'hepatitis B.', '37 C.')."""
+    low = word.lower()
+    if word in _TITLES or (low in _ABBREV and not (len(word) > 1 and word.isupper())):
+        return True
+    if re.fullmatch(r"[a-z]", word) or re.fullmatch(r"([a-z]\.)+[a-z]", low):
+        return True
+    if re.fullmatch(r"[A-Z]", word):
+        prev = re.search(r"(\S+)\s*$", before)
+        prev_word = prev.group(1).lstrip("([\"'") if prev else ""
+        return not prev_word or prev_word[0].isupper() or bool(re.match(r"[A-Z]\.(\s|$)", after))
+    return False
+
+
 def _split_line(line: str) -> list[tuple[int, int]]:
-    """(start, end) of each sentence of one line. A full stop after an abbreviation or an
-    initial doesn't end one, and a list number ('1.', 'ii)') stays with its item."""
+    """(start, end) of each sentence of one line. A full stop after an abbreviation, a title or
+    an initial doesn't end one (`_no_end`), and a list number ('1.', 'ii)') stays with its
+    item."""
     spans, start = [], 0
     for m in _BOUNDARY.finditer(line):
         cut = m.start() + 1
         while cut < len(line) and line[cut] in "'\")]":
             cut += 1
-        last = re.search(r"(\S+)$", line[start : m.start()])
-        word = last.group(1).lower().lstrip("([\"'") if last else ""
-        if (
-            word in _ABBREV
-            or re.fullmatch(r"[a-z]", word)
-            or re.fullmatch(r"([a-z]\.)+[a-z]", word)
-        ):
+        sentence = line[start : m.start()]
+        last = re.search(r"(\S+)$", sentence)
+        word = last.group(1).lstrip("([\"'") if last else ""
+        if _no_end(word, sentence[: last.start()] if last else "", line[m.end() :]):
             continue
         spans.append((start, cut))
         start = m.end()

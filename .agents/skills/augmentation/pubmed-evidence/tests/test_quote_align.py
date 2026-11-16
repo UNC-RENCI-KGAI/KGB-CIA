@@ -119,20 +119,45 @@ def test_entities_are_named_by_synonym_stem_or_defined_abbreviation():
 def test_structured_abstract_labels_and_lists_split_as_sentences():
     abstract = (
         "BACKGROUND: Two aims were set. 1. To measure the response rate.\n"
-        "RESULTS: Imatinib induced responses in J. Smith's cohort of 40 patients."
+        "RESULTS: Imatinib induced responses in Dr. J. Smith's cohort of 40 patients."
     )
     sents = quote_align.split_sentences("A title.", abstract)
     assert [(s.source, s.para, s.text) for s in sents] == [
         ("title", 0, "A title."),
         ("abstract", 0, "Two aims were set."),
         ("abstract", 0, "1. To measure the response rate."),
-        ("abstract", 1, "Imatinib induced responses in J. Smith's cohort of 40 patients."),
+        ("abstract", 1, "Imatinib induced responses in Dr. J. Smith's cohort of 40 patients."),
     ]
     assert all(abstract[s.start : s.end] == s.text for s in sents if s.source == "abstract")
     # A quote that kept the section label gets the sentence without it.
-    quote = "RESULTS: Imatinib induced responses in J. Smith's cohort of forty patients"
+    quote = "RESULTS: Imatinib induced responses in Dr. J. Smith's cohort of forty patients"
     fixed, _ = quote_align.repair(quote, "A title.", abstract)
-    assert fixed == "Imatinib induced responses in J. Smith's cohort of 40 patients."
+    assert fixed == "Imatinib induced responses in Dr. J. Smith's cohort of 40 patients."
+
+
+@pytest.mark.parametrize(
+    "sentences",
+    [
+        # A capital after a lowercase word or a number ends a name, not an initial.
+        ["Patients lacked vitamin D.", "Supplements reduced fractures."],
+        ["They had chronic hepatitis B.", "Tenofovir lowered the viral load."],
+        ["Cells were kept at 37 C.", "The response fell."],
+        # An all-capitals word is an acronym, not an abbreviation; 'ms' is milliseconds.
+        ["Macrophages produced NO.", "The effect was large."],
+        ["We enrolled patients with MS.", "Disability scores improved."],
+        ["The QTc was 486 ms.", "An echocardiogram was normal."],
+        # Initials, abbreviations and titles end none.
+        ["John F. Kennedy spoke.", "He left."],
+        ["It was shown by A. B. Jones.", "Later work agreed."],
+        ["They were treated at the M. D. Anderson Cancer Center.", "Most responded."],
+        ["Funded by Grant No. R01CA230031.", "See Fig. 2 for details."],
+        ["Devices came from St. Jude Medical.", "Ms. Erb is an employee."],
+    ],
+)
+def test_where_a_full_stop_ends_a_sentence(sentences):
+    # After a first sentence, so each is split where a line's sentences are.
+    abstract = " ".join(["Methods were set.", *sentences])
+    assert [s.text for s in quote_align.split_sentences("", abstract)][1:] == sentences
 
 
 @pytest.mark.parametrize(

@@ -170,7 +170,7 @@ def test_without_the_models_credentials_the_code_repairs_still_count(labels, cap
     assert set(repair.sentence_repairs(labels, PV, MODEL, s["repairers"])) == {key("1")}
     repair.print_summary(s)
     out, err = capsys.readouterr()
-    assert "code (align-1) placed 1 of 2; 1 left for" in out
+    assert f"code ({quote_align.VERSION}) placed 1 of 2; 1 left for" in out
     assert "quote repair skipped" in err and "1 evidence sentences code couldn't place" in err
 
 
@@ -201,7 +201,7 @@ def put(labels: LabelCache, claim: str, by: tuple[str, str], sentence: str | Non
 
 
 def test_the_first_found_in_priority_order_counts(labels):
-    code, model = ("code", "align-1"), ("terra", "repair@1")
+    code, model = repair.code_current(), ("terra", "repair@1")
     put(labels, "a" * 16, code, "code's sentence", True)
     put(labels, "a" * 16, model, "model's sentence", True)
     put(labels, "b" * 16, code, None, None)

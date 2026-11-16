@@ -55,7 +55,7 @@ Fields by file:
   - `model`, `prompt_version`, `prompt` (path of the prompt file) and `reasoning_effort` (the
     effort the run sent, `none` for none) of the label run;
   - `repairers`: the sentence repairs that count, as `[repairer, version]` pairs in priority
-    order, `[["code", "align-1"], ["gpt-5.6-terra", "repair@..."]]`: a claim's sentence is the
+    order, `[["code", "align-2"], ["gpt-5.6-terra", "repair@..."]]`: a claim's sentence is the
     first of their repairs that was found. Those of the label run's repair pass: the code's,
     then the model's, or an earlier pass's of the same run if the model's was skipped for lack
     of credentials; all of an earlier pass's if no pass ran (`--no-repair`);
@@ -192,7 +192,7 @@ publication types are cached. Ground's `--refresh` looks names up again.
 | `abstract_claims` | (pair_id, pmid, prompt_version, model) | `study_design` (the model's), `claims` (JSON list of stored claims), `created`, `answered_by` (the model that answered: a fallback's, if one did) |
 | `claim_checks` | … + claim_id | `valid` (every check but the sentence's passed), `errors` (JSON list), `sentence_valid` (the sentence was found as given) |
 | `claim_reviews` | … + claim_id, reviewer, review_prompt_version | `verdict` (`upheld` or `reject`), `reason`, `created`, `answered_by` |
-| `claim_repairs` | … + claim_id, repairer, repair_prompt_version | `evidence_sentence` (null when the repairer found none), `sentence_valid`, `created`, `answered_by`. `repairer` is `code` (with `quote_align.VERSION`, `align-1`, as its version, and `answered_by` `code`) or the repair model (with the repair prompt version) |
+| `claim_repairs` | … + claim_id, repairer, repair_prompt_version | `evidence_sentence` (null when the repairer found none), `sentence_valid`, `created`, `answered_by`. `repairer` is `code` (with `quote_align.VERSION`, `align-2`, as its version, and `answered_by` `code`) or the repair model (with the repair prompt version) |
 | `calls` | autoincrement id | `step` (`label`/`review`/`repair`), `pair_id`, `model`, `prompt_version`, `input_tokens` (every prompt token), `cache_read_tokens` and `cache_write_tokens` (those of them the service's prompt cache read and wrote), `output_tokens`, `cost` (USD, null if unknown), `seconds`, `error`, `created`, `answered_by` |
 
 `…` is `abstract_claims`' key. Columns added to `calls` since the first release (the cache
@@ -233,7 +233,7 @@ cache's years, publication types and groundings, the UBERON file, the graph,
   `repair-message-2` in `repair.py`. Any edit to a prompt file or a schema starts fresh
   answers (or reviews, or repairs); bump `FORMAT_VERSION` when the code that writes the request
   changes.
-- **Code repair version** (`quote_align.VERSION`, `align-1`): the version code's quote repairs
+- **Code repair version** (`quote_align.VERSION`, `align-2`): the version code's quote repairs
   are stored under, beside the repairer `code`. It names no prompt: bump it by hand on any
   change to what `quote_align.repair` returns, and the next label run repairs every claim
   again with code (no model call for a claim the model has answered).

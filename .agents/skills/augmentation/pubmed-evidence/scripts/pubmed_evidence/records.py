@@ -126,7 +126,7 @@ class LabelRun(BaseModel):
         default=None,
         description="(repairer, repair prompt version) of the quote repairs that count, in "
         "priority order: a claim's sentence is the first of their repairs that was found, "
-        "e.g. [('code', 'align-1'), ('gpt-5.6-terra', 'repair@...')]. None in a file written "
+        "e.g. [('code', 'align-2'), ('gpt-5.6-terra', 'repair@...')]. None in a file written "
         "before code repairs",
     )
     uberon_version: str | None = Field(
