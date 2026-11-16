@@ -15,7 +15,7 @@ the skill can be copied on its own and keep its tests.
 | --- | --- | --- |
 | Pipeline and schema | `test_smoke.py`, `test_paths.py`, `test_env_example.py` | 40 |
 | Transformation | `test_transformation_cli.py`; the generate-graph skill's `tests/` | 60 |
-| Cleaning | `test_cleaning.py`, `test_evidence_check.py` | 65 |
+| Cleaning | `test_cleaning.py`, `test_evidence_check.py` | 75 |
 | Filter | `test_filter.py`, `test_describe_graph.py` | 40 |
 | Augmentation | the pubmed-evidence skill's `tests/` | 510 |
 | PubMed client (`shared/pubmed`) | `test_pubmed.py` | 45 |

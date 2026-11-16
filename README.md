@@ -55,10 +55,13 @@ Pharos / TCRD files
 5. Augmentation agent    agents/augmentation/    PubMed evidence for edges, and more specific edges it supports
         |
         v
-6. Final cleaning        agents/cleaning/        the same kgb-clean, applying the evidence check's drop and flag lists
+6. Evidence check        agents/cleaning/        checks edges against the abstracts they cite; writes drop and flag lists
         |
         v
-7. MCP interface         agents/mcp_interface/   lets any local agent query the graph (OKN MCP pattern)
+7. Final cleaning        agents/cleaning/        the same kgb-clean, applying the evidence check's drop and flag lists
+        |
+        v
+8. MCP interface         agents/mcp_interface/   lets any local agent query the graph (OKN MCP pattern)
 
 Evaluation pipeline      evaluation/             GNN link prediction vs. Pharos baseline (not an agent)
 Shared code              shared/                 record schema, NodeNorm client, PubMed cache, pipeline runner
@@ -71,14 +74,16 @@ Shared code              shared/                 record schema, NodeNorm client,
 | 3. Cleaning | `kgb-clean` | Drops edges that can't be right, flags suspicious ones, and writes the reason onto each edge. |
 | 4. Filter | `kgb-filter` | Gives a plain-language overview of the graph, then cuts the subgraph the user asks for. With no request, it keeps the whole graph. |
 | 5. Augmentation | `kgb-augment` | Adds PubMed evidence to edges, and proposes more specific edges that the abstracts support. |
-| 6. Final cleaning | `kgb-clean` | Applies the evidence check's drop and flag lists. |
-| 7. MCP interface | `kgb-mcp` | A read-only [MCP](https://modelcontextprotocol.io/) server over a Neo4j copy of the graph, for any MCP client. |
+| 6. Evidence check | `kgb-evidence` | Asks a model (Jev) whether each edge's cited abstract supports it, and writes drop and flag lists. Skipped without a TypeSafe key. |
+| 7. Final cleaning | `kgb-clean` | Applies the evidence check's drop and flag lists. |
+| 8. MCP interface | `kgb-mcp` | A read-only [MCP](https://modelcontextprotocol.io/) server over a Neo4j copy of the graph, for any MCP client. |
 | Evaluation | not a stage | Link prediction against the Pharos baseline, run outside the agents. |
 
 Each stage's README, in its directory under `agents/`, says how to run the stage on its own.
 Cleaning runs before the filter and augmentation, so the paid steps never spend money on edges
 cleaning would drop. The filter runs before augmentation, so those steps only see what the user
-asked for. Cleaning then runs again at the end.
+asked for. The evidence check then judges those edges, and cleaning runs again to apply its
+lists.
 
 ## Quick start
 
