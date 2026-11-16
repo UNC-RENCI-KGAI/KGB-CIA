@@ -1,4 +1,4 @@
-.PHONY: setup lint format test demo clean
+.PHONY: setup lint format test test-metadata demo clean
 
 UV := $(shell command -v uv 2>/dev/null)
 
@@ -17,6 +17,11 @@ format:
 
 test: lint
 	uv run pytest -q
+
+test-metadata:  ## the croissant-semantics skill's tests, with that skill's own dependencies
+	cd .agents/skills/metadata/croissant-semantics && uv run --with pytest --with requests \
+		--with jsonpath-ng --with pyyaml --with bioregistry --with openpyxl --with truststore \
+		--with pypdf --with pyarrow --with xlrd pytest -q tests/
 
 demo:  ## dry run every stage on toy data; must always work on main
 	uv run python -m shared.pipeline --dry-run
