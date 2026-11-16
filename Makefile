@@ -1,4 +1,4 @@
-.PHONY: setup lint format test test-metadata demo clean
+.PHONY: setup lint format test test-metadata test-neo4j demo clean
 
 UV := $(shell command -v uv 2>/dev/null)
 
@@ -15,13 +15,17 @@ lint:
 format:
 	uv run ruff check --fix . && uv run ruff format .
 
-test: lint
+test: lint  ## lint, the project's tests, and the metadata skill's tests
 	uv run pytest -q
+	$(MAKE) --no-print-directory test-metadata
 
 test-metadata:  ## the croissant-semantics skill's tests, with that skill's own dependencies
 	cd .agents/skills/metadata/croissant-semantics && uv run --with pytest --with requests \
 		--with jsonpath-ng --with pyyaml --with bioregistry --with openpyxl --with truststore \
 		--with pypdf --with pyarrow --with xlrd pytest -q tests/
+
+test-neo4j:  ## the MCP server against a toy graph in a throwaway Neo4j container (needs Docker)
+	bash tests/neo4j_smoke.sh
 
 demo:  ## dry run every stage on toy data; must always work on main
 	uv run python -m shared.pipeline --dry-run

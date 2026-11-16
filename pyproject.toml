@@ -33,6 +33,7 @@ kgb-pipeline = "shared.pipeline:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "robokop-orion==2.0.13",
     "ruff>=0.6",
 ]
 

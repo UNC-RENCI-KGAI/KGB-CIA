@@ -16,8 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: azure/setup-helm@v4   # for the helm chart test
       - run: uv sync --dev --all-extras
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run pytest -q
+      - run: make test               # lint, every test (ORION and helm included), metadata skill's tests
+      - run: make test-neo4j         # the MCP server against a toy graph in Neo4j (Docker)
       - run: uv run python -m shared.pipeline --dry-run

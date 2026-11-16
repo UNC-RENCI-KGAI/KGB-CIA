@@ -23,7 +23,8 @@ reasoning behind each stage is in [`docs/agent_plan.md`](docs/agent_plan.md).
 make setup     # uv sync --dev (falls back to a pip venv if uv is missing)
 make lint      # ruff check + ruff format --check
 make format    # ruff --fix + ruff format
-make test      # lint, then pytest -q
+make test      # lint, pytest, then the metadata skill's tests
+make test-neo4j  # MCP server against a toy graph in a Neo4j container (needs Docker)
 make demo      # python -m shared.pipeline --dry-run; must always pass on main
 
 uv run pytest -q tests/test_smoke.py::test_schema_round_trip   # one test
@@ -31,7 +32,8 @@ uv run python -m shared.pipeline --dry-run --only filter       # describe one st
 uv run kgb-filter --input <in> --output <out>                  # run one stage alone
 ```
 
-CI (`.github/workflows/ci.yml`) runs exactly `make test` plus `make demo` on Python 3.12. Ruff
+CI (`.github/workflows/ci.yml`) runs `make test`, `make test-neo4j` and the dry run on Python
+3.12, with helm installed, so every test runs there. Ruff
 line length is 100; rules `E F I W UP B`. Add dependencies with `uv add <pkg>` so `uv.lock`
 stays in sync.
 
