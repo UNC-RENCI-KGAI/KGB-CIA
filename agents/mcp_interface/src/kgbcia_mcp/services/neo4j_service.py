@@ -14,6 +14,7 @@ from neo4j.graph import Node, Path, Relationship
 from neo4j.spatial import Point
 from neo4j.time import Date, DateTime, Duration, Time
 
+from ..biolink import most_specific
 from ..lineage import LineageIndex
 
 # Confirmed on the local-k8s Neo4j 5.26.31 load (November 2026).
@@ -276,27 +277,37 @@ class Neo4jService:
         resolved = self._resolve_node(node_id)
         if resolved["status"] != "found":
             return resolved
+        # Group by the neighbor's whole label set, so each edge is counted once; a neighbor
+        # carries every ancestor category as a label (Gene, BiologicalEntity, OntologyClass...).
         query = f"""
         MATCH (n:`{NAMED_THING_LABEL}` {{id: $id}})-[r]-(neighbor:`{NAMED_THING_LABEL}`)
-        UNWIND [x IN labels(neighbor) WHERE x <> $anchor] AS neighbor_category
         WITH CASE WHEN startNode(r) = n THEN 'outgoing' ELSE 'incoming' END AS direction,
-             type(r) AS predicate, neighbor_category, count(*) AS count
-        RETURN direction, predicate, neighbor_category, count
+             type(r) AS predicate, labels(neighbor) AS neighbor_labels, count(*) AS count
+        RETURN direction, predicate, neighbor_labels, count
         ORDER BY count DESC LIMIT $limit
         """
-        rows = self.execute_read(
+        result = self.execute_read(
             query,
-            {"id": resolved["node"]["id"], "anchor": NAMED_THING_LABEL, "limit": _MAX_LIMIT},
-        ).rows
+            {"id": resolved["node"]["id"], "limit": _MAX_FETCH},
+            row_limit=_MAX_FETCH,
+        )
+        counts: dict[tuple[str, str, tuple[str, ...]], int] = {}
+        for row in result.rows:
+            categories = most_specific(row["neighbor_labels"]) or (NAMED_THING_LABEL,)
+            key = (row["direction"], row["predicate"], categories)
+            counts[key] = counts.get(key, 0) + row["count"]
         anchor = _node_label(resolved["node"])
         rows = [
             {
-                **row,
-                "reads_as": _reads_as(
-                    anchor, row["predicate"], row["neighbor_category"], row["direction"]
-                ),
+                "direction": direction,
+                "predicate": predicate,
+                "neighbor_categories": list(categories),
+                "count": count,
+                "reads_as": _reads_as(anchor, predicate, " + ".join(categories), direction),
             }
-            for row in rows
+            for (direction, predicate, categories), count in sorted(
+                counts.items(), key=lambda item: -item[1]
+            )
         ]
         return _list_response(rows, _MAX_LIMIT)
 

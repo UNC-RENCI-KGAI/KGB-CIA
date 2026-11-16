@@ -447,7 +447,7 @@ and `truncated` (see "Implementation approach" for docstrings and hints).
 | `get_schema()` | precomputed one-category-per-node meta-graph `(subject_category, predicate, object_category, count)`, plus property names per category with truncated example values; lists `kgbcia_flags` and `kgbcia_flag_reasons` as edge properties, with the flag values present in the graph, for agents writing Cypher |
 | `search_nodes(query, category?, limit)` | by CURIE, equivalent identifier, name or synonym |
 | `get_node(node_id)` | full node record |
-| `summarize_node_edges(node_id)` | counts of edges by `(direction, predicate, neighbor_category)`: the cheap first look at an unfamiliar node, especially a hub |
+| `summarize_node_edges(node_id)` | counts of edges by `(direction, predicate, neighbor_categories)`, where `neighbor_categories` are the neighbor's most specific Biolink categories, so each edge counts once: the cheap first look at an unfamiliar node, especially a hub |
 | `get_node_edges(node_id, direction="both", predicate?, neighbor_category?, neighbor_where?, exclude_flags?, limit, offset)` | neighbors with edge summaries; `neighbor_where` is `{property: value}` equality on neighbor properties; `exclude_flags` skips edges carrying any of the listed flags |
 | `get_edges_between(source_id, target_id, include_lineage=false)` | every direct edge between the two nodes, both directions; with `include_lineage`, each edge carries its `explain_edge` result: the one-call answer to "why does A connect to B?" |
 | `find_paths(source_id, target_id, max_hops=3, predicates?, exclude_flags?, limit=10)` | bounded paths between two known nodes, shortest first; reject `max_hops > 4` |

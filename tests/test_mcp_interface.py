@@ -1658,3 +1658,59 @@ def test_reads_as_puts_the_anchor_on_the_correct_end():
         _reads_as(cdk2, "biolink:has_participant", "biolink:Pathway", "incoming")
         == "biolink:Pathway → biolink:has_participant → CDK2 (NCBIGene:1017)"
     )
+
+
+def test_summarize_node_edges_counts_each_edge_once_by_most_specific_categories(monkeypatch):
+    service = _service_with_cached_schema()
+    monkeypatch.setattr(
+        service, "_resolve_node", lambda node_id: _resolved_node(node_id, "biolink:Disease")
+    )
+    gene = ["biolink:NamedThing", "biolink:Gene", "biolink:BiologicalEntity"]
+    gene += ["biolink:OntologyClass", "biolink:GeneOrGeneProduct"]
+    drug = ["biolink:NamedThing", "biolink:Drug", "biolink:SmallMolecule"]
+    drug += ["biolink:ChemicalEntity", "biolink:MolecularEntity"]
+    predicate = "biolink:gene_associated_with_condition"
+
+    def execute(cypher, parameters=None, **kwargs):
+        return ReadResult(
+            (
+                {
+                    "direction": "incoming",
+                    "predicate": predicate,
+                    "neighbor_labels": gene,
+                    "count": 745,
+                },
+                # Neo4j doesn't promise label order: the same set must land in the same row
+                {
+                    "direction": "incoming",
+                    "predicate": predicate,
+                    "neighbor_labels": list(reversed(gene)),
+                    "count": 2,
+                },
+                {
+                    "direction": "incoming",
+                    "predicate": "biolink:treats",
+                    "neighbor_labels": drug,
+                    "count": 3,
+                },
+                {
+                    "direction": "incoming",
+                    "predicate": "biolink:related_to",
+                    "neighbor_labels": ["biolink:NamedThing"],
+                    "count": 1,
+                },
+            ),
+            False,
+        )
+
+    monkeypatch.setattr(service, "execute_read", execute)
+    rows = service.summarize_node_edges("MONDO:0004994")["results"]
+
+    assert [(row["predicate"], row["neighbor_categories"], row["count"]) for row in rows] == [
+        (predicate, ["biolink:Gene"], 747),
+        ("biolink:treats", ["biolink:Drug", "biolink:SmallMolecule"], 3),
+        ("biolink:related_to", ["biolink:NamedThing"], 1),
+    ]
+    assert rows[1]["reads_as"] == (
+        "biolink:Drug + biolink:SmallMolecule → biolink:treats → MONDO:0004994 (MONDO:0004994)"
+    )
