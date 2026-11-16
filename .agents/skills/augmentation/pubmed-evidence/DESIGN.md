@@ -251,6 +251,11 @@ alone, so every refinement can be reproduced and audited.
   abstracts in chunks of 20 (`--abstracts-per-call` can lower that). The nodes go as `X` and
   `Y`, with name, id, most specific category, synonyms and MeSH headings. The edges are never
   sent, so one pair's claims serve every edge between the pair, from any graph, now or later.
+- **The category shown** is the node's most specific whatever order the graph lists them in
+  (`biolink.shown_category`): the cleaned graph lists them alphabetically, so the first is
+  `BiologicalEntity` for every gene, protein, disease and phenotype. Of categories none of the
+  others is below, the narrowest is shown, and of equals the first listed. The review message
+  shows the same.
 - **Per abstract:** a study design (one of `StudyDesign`'s eleven values) and zero or more
   claims. No claims means the abstract states nothing about the pair.
 - **A claim** is one finding about X and Y: its `polarity` (`positive` or `negative`), its
