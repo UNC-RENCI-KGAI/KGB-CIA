@@ -10,6 +10,11 @@ the graph they want, and every question has a working default.
 This is a team entry for the **Bio-Agent Knowledge Graph Construction Challenge** (Structured
 Data Integration and Link Prediction track), submitted Nov 17, 2026.
 
+**[▶ Watch the demo](https://github.com/UNC-RENCI-KGAI/KGB-CIA/releases/download/demo-v2/kgb-cia-demo-v2.mp4)**
+(5 minutes): one complete run on a laptop, from three sources' metadata (ClinVar, Monarch
+and eRAM) to a cardiomyopathy subgraph, its PubMed evidence, the evidence check, and answers
+through the MCP server. That run is a smaller build than the submitted graph described below.
+
 ## What it produces
 
 The submitted graph comes from the Nov 9, 2026 build of 26 sources (45 primary knowledge
