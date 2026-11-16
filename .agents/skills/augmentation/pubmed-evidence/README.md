@@ -83,8 +83,9 @@ new default, it is used with a warning that says how to move it.
 Environment (the repository's `.env.example` lists every variable): `AZURE_OPENAI_API_KEY`
 for labeling and review with the Azure OpenAI models (not for `--dry-run`), and
 `AZURE_OPENAI_BASE_URL` to point them at your own endpoint; `ANTHROPIC_API_KEY` or an
-`ant auth login` profile with Claude models. Labeling also needs the review model's,
-`AZURE_OPENAI_API_KEY` by default, for the sentence repair pass. `NCBI_EMAIL`, and
+`ant auth login` profile with Claude models. Labeling also uses the review model's,
+`AZURE_OPENAI_API_KEY` by default, for the evidence sentences code can't repair (about 4% of
+those not found; code repairs the rest without a call). `NCBI_EMAIL`, and
 `NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search (without it the
 step says so, and stops above 500 uncached searches unless `--without-key`). `KGB_PUBMED_CACHE`
 is the PubMed cache file, `shared.pubmed`'s, which every agent that reads PubMed shares
@@ -106,8 +107,9 @@ reference/          rules.md (step 1's scope rules), work-files.md (every file a
                     formats.md (gold set, model replies)
 scripts/            augment.py, the one entry script
 scripts/pubmed_evidence/   the library: config, graphio, records, cache, quotes, biolink,
-                    sentences, llm, scope, pubmed, label, repair, uberon, ground, bundle,
-                    refine (step 6's rules, for one pair), review, apply, evaluate, cli
+                    sentences, llm, scope, pubmed, label, quote_align (the code quote repair),
+                    repair, uberon, ground, bundle, refine (step 6's rules, for one pair),
+                    review, apply, evaluate, cli
 tests/              no network: PubMed, NodeNorm, the Name Resolver, UBERON's release and the
                     models are faked, and each test has a PubMed cache of its own; Biolink is
                     real. The PubMed search itself is tested with shared.pubmed, in the
