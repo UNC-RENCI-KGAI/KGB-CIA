@@ -1,6 +1,6 @@
 # Cleaning agent
 
-Stages 3 and 6. Cleaning cuts the merged graph down to edges that can be trusted and explained,
+Stages 3, 6 and 7. Cleaning cuts the merged graph down to edges that can be trusted and explained,
 and reports what it removed and why. It drops edges that can't be right. It keeps edges that
 are only suspicious, but flags each one and writes the reason onto the edge, so anyone querying
 the graph can see it.
