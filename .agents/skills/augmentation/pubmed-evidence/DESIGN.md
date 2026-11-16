@@ -286,9 +286,10 @@ alone, so every refinement can be reproduced and audited.
 
 ### Checked in code
 
-A claim that fails any check is invalid as a whole: it stays in the cache and counts for
-nothing, and its errors go to the `claim_checks` table and the label summary. The checks are
-recomputed on every run for the run's pairs, since nothing versions them.
+A claim that fails any check, even after the repairs below, is invalid as a whole: it stays
+in the cache and counts for nothing, and its errors go to the `claim_checks` table and the label
+summary. The checks are recomputed on every run for the run's pairs, since nothing versions
+them.
 
 - The predicate fits the pair's nodes one way round or the other (above).
 - Each statement's qualifier slots and values are allowed for its predicate's association
@@ -310,6 +311,51 @@ gene–disease). It finds the classes from each class's inherited subject, predi
 ranges instead. Context qualifiers whose values are ontology terms (anatomical, species,
 population) are never in the reply's qualifiers: models make up CURIEs, so species and anatomy
 come in the claim's context instead.
+
+### Repaired after labeling
+
+Some claims fail a check only for how the model wrote them, not for what they say: 13.1% of the
+claims of a 200-pair sample of the Nov 16 kinase cut, and 7.6% of the Nov 6 Monarch run's. Read
+against their abstracts, 66 of the kinase sample's 71 were true. So the check, the review and
+step 6 read every claim through `label.read_claim`, which repairs a statement that fails as
+written (`label.SALVAGE`) rather than failing its claim:
+
+- **A bare `causes`:** `qualified_predicate: causes` with no aspect or direction to qualify is
+  dropped. It says nothing the predicate doesn't.
+- **A gene product as its gene:** a Protein, which NodeNorm keeps apart from its gene, also
+  fits a `gene` domain or range: `gene_associated_with_condition`, and `regulates`, whose range
+  Biolink 4.4.6 puts a Gene under but not a Protein. This applies only where the node's own
+  categories fail the statement. Step 6 still proposes an edge only if it is valid with the
+  node's own categories, so such a claim supports the Protein's edges and never adds an invalid
+  one.
+- **The gene's qualifier on the disease's side:** a subject or object qualifier on a disease or
+  phenotype, which takes none, moves to the gene, gene product or chemical on the other side. A
+  direction moves only with an aspect beside it, since alone it may describe the disease's own
+  course; otherwise it is dropped, as is a slot the other side sets already.
+- **A symmetric statement written from the disease,** with the gene's qualifiers on the
+  object, is read from the gene, as step 6 writes a proposal.
+- **A redundant `also_supports` entry,** one the claim's own statement already entails, is
+  dropped rather than failing the claim.
+
+A statement that passes as written is read as written, and each repair reads a statement as
+saying no more than the model wrote: no repair drops a slot from what a negative claim denies,
+which would deny more. A claim no repair saves keeps the errors of the claim as written. A slot
+an association doesn't take for other reasons still fails the claim.
+
+The repairs are post-label and change no version. The stored claim stays as the model gave it
+(`claim_id` hashes it), and nothing that feeds the label prompt version changes: the prompt,
+`FORMAT_VERSION`, the reply schemas and the effort. Since the checks are recomputed on every
+run, the next label run applies them to every cached label without a call, and its repair pass
+then sees the claims they recover whose sentence wasn't found. On the cached runs they recover
+all 71 failing claims of the kinase sample at effort low and all 49 at effort none, 147 of the
+Nov 6 Monarch run's 148, and all 271 of the Nov 6 DrugCentral run's, while every claim that
+passed reads exactly as before. Step 6 replayed on them gains, and loses nothing:
+
+| Run | Supported edges | Edge PMIDs | Proposals |
+|---|---|---|---|
+| Kinase sample (no review, every claim counts) | 29 → 34 | 68 → 100 | 17 → 19 |
+| Nov 6 Monarch (recovered claims counted as upheld) | 348 → 373 | 1,098 → 1,197 | 237 → 260 |
+| Nov 6 DrugCentral (the same) | 3,943 → 3,944 | 25,651 → 25,654 | 486 → 487 |
 
 ### Quotes and repair
 

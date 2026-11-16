@@ -321,6 +321,45 @@ def test_claims_read_the_way_round_biolink_puts_them(world):
     assert (reread.statement.subject, reread.statement.object) == (CML, IMATINIB)
 
 
+ABL1_PROTEIN = "UniProtKB:P00519"
+PROTEIN_CATEGORIES = {ABL1_PROTEIN: ["biolink:Protein"], CML: ["biolink:Disease"]}
+
+
+def test_a_claim_reads_as_the_post_label_salvage_repairs_it():
+    """Step 6 reads a claim as its check did (`label.read_claim`): `causes` with nothing to
+    qualify is dropped, and an `also_supports` entry the claim implies too."""
+    bare = statement(ABL1_PROTEIN, "biolink:causes", CML, "biolink:causes")
+    also = statement(ABL1_PROTEIN, "biolink:contributes_to", CML)
+    claim = stored(bare, sentence="x", also=(also,))
+    record = bundle.claim_record(claim, sentence_found=True, categories=PROTEIN_CATEGORIES)
+    assert record.statement.qualified_predicate is None and record.also_supports == []
+    # Read without the nodes' categories, as stored.
+    as_stored = bundle.claim_record(claim, sentence_found=True)
+    assert as_stored.statement.qualified_predicate == "biolink:causes"
+    assert len(as_stored.also_supports) == 1
+
+
+def test_a_proteins_gene_claim_supports_its_edge_but_proposes_no_invalid_edge():
+    """A Protein's claim with a gene's predicate counts, read as the gene's (`label.SALVAGE`'s
+    "gene_product"), and supports the Protein's broader edge; but no edge is proposed from it,
+    since a proposal must be valid with the node's own categories."""
+    claim = stored(
+        statement(ABL1_PROTEIN, "biolink:gene_associated_with_condition", CML), sentence="x"
+    )
+    record = bundle.claim_record(claim, sentence_found=True, categories=PROTEIN_CATEGORIES)
+    assert record.statement.predicate == "biolink:gene_associated_with_condition"
+    original = edge(ABL1_PROTEIN, "biolink:associated_with", CML, id="e1")
+    out = refine.refine_pair(
+        [original],
+        [refine.Claim("PMID:1", record, False)],
+        refine.Lattice(),
+        PROTEIN_CATEGORIES,
+        require_review=False,
+    )
+    [outcome] = out.edges
+    assert outcome.pmids == ("PMID:1",) and out.proposed == () and out.links == ()
+
+
 def test_a_sentence_counts_as_found_from_its_repair(world):
     world.edges(edge(IMATINIB, "biolink:treats", CML))
     world.abstract(TREATS_PAIR, "1", "Imatinib treats CML.")
