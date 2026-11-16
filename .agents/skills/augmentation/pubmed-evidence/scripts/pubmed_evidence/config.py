@@ -83,6 +83,15 @@ UBERON_URL = "http://purl.obolibrary.org/obo/uberon/releases/2026-11-05/uberon-b
 # text-mined, for edges mined from the literature), best-scored first.
 CAPPED_LIMIT = 10_000
 
+# Step 3's source screen: a PMID that a pair has only as a source citation (its edges cite it,
+# and the search didn't find it) isn't read when at least this many pairs of the selection cite
+# it, unless its title and abstract name both of the pair's nodes. Select records the count
+# (`Pair.source_pmid_pairs`). Such a paper is a high-throughput study, such as BioPlex 3.0
+# (167,351 pairs of the Nov 13 search) or a GWAS catalog paper (30,000-116,000), whose abstract
+# names few of the pairs that cite it. On the Nov 6 runs, 558 answers from such papers held no
+# claim. Steps 5 and 6 leave the same PMIDs out. None turns the screen off.
+SOURCE_SCREEN_MIN_PAIRS: int | None = 100
+
 # Step 4: the RENCI Name Resolver, which grounds the anatomy claims name.
 NAMERES_URL = os.environ.get("NAMERES_URL", "https://name-resolution-sri.renci.org")
 

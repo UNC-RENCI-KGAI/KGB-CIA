@@ -8,7 +8,9 @@ their numbers ("rule 4"). No model is called, so the graph can be rebuilt from t
 - Every input edge gets an `id`: its own, or a hash of the record (`graphio.edge_id`).
 - **Checked edges.** An edge is checked when select kept its statement and its pair is fully
   labeled (every abstract step 3 asks about has an answer of the run) and not held. A pair with
-  no abstracts is checked too, and its edges are unsupported. A checked edge comes out as an
+  no abstracts is checked too, and its edges are unsupported; so is a pair whose only abstracts
+  are mass-cited source papers the source screen left unread (`label.screened`), which
+  `refinements.jsonl` names (`abstracts_screened`). A checked edge comes out as an
   `AugmentedEdge`: the record as read, every slot keeping its exact value, with `augmentation:
   checked`. The counting claims with a statement narrower than or equal to its own support it
   (rules 1 to 3): their PMIDs are its `lit_supporting_publications`, and their number its
@@ -355,6 +357,7 @@ def pair_record(refined: Refined) -> dict[str, Any]:
     return {
         "pair_id": refined.bundle.pair_id,
         "abstracts_read": len(refined.bundle.evidence),
+        "abstracts_screened": [graphio.publication_of(p) for p in refined.bundle.screened],
         "edges": list(edges.values()),
         "proposed_edges": [{"id": p.id, **_proposal_record(p)} for p in r.proposed],
         "links": [{"linked_to": list(p.existing), **_proposal_record(p)} for p in r.links],
