@@ -34,8 +34,7 @@ that directory's team for review.
 ## Branches and pull requests
 
 **Nothing lands on `main` except through a pull request**, not even a typo fix. The pull
-request is what asks the right team for review and runs CI before the merge. An admin merge
-that skips a review is for emergencies only, and the pull request says why in a comment.
+request is what asks the right team for review and runs CI before the merge.
 
 ```bash
 git checkout -b <team>/<short-description>    # e.g. filter/affinity-defaults
