@@ -14,8 +14,8 @@ creates one, so delete it afterwards and move anything useful into an `AGENTS.md
 KGB-CIA, a team entry for the Bio-Agent Knowledge Graph Construction Challenge. A pipeline of
 agents builds a Biolink labeled property graph from Pharos / TCRD data and exposes it over MCP;
 a separate evaluation pipeline scores it by GNN link prediction against the Pharos baseline.
-Deadlines: progress report Oct 27, 2026; final submission Nov 17, 2026. The full plan and the
-reasoning behind each stage is in [`docs/agent_plan.md`](docs/agent_plan.md).
+The final submission (Nov 17, 2026) is the graph from the Nov 9, 2026 transformation run. The
+full plan and the reasoning behind each stage is in [`docs/agent_plan.md`](docs/agent_plan.md).
 
 ## Commands
 
@@ -59,7 +59,9 @@ stays in sync.
   answer "why does A connect to B?" from it. Which file and columns produced each node or edge
   is not Biolink, so it lives in the transformation agent's `TransformReport`, which points
   into the source's Croissant metadata.
-- **Every node ID goes through NodeNorm** via `shared/nodenorm.py`.
+- **Every node ID goes through NodeNorm.** In transformation, ORION normalizes them;
+  code outside ORION that needs NodeNorm (such as `shared/pubmed/pairs.py`) calls
+  `shared/nodenorm.py`.
 - **`evaluation/` is deliberately not a stage** and is not in `STAGES`.
 
 Every stage command is implemented on `main` except `kgb-metadata`, which is a stub that prints
@@ -71,46 +73,8 @@ final graph before it's loaded into Neo4j. Semantic metadata comes from the
 `croissant-semantics` skill in `.agents/skills/metadata/`, run per source rather than through `kgb-
 metadata`. `make demo` only prints stage descriptions.
 
-## Design rules agreed by the team
+## Design rules and how work lands
 
-- Agents decide, code transforms: an LLM may choose a mapping, but the transform itself is code
-  that can be re-run to reproduce the graph.
-- Biolink is fixed, not user-selectable.
-- Strong defaults everywhere; the filter stage is the only place that asks the user anything,
-  and "go with your default" must always work.
-- The graph's scope comes from what the user asks for (the filter stage), never from a choice
-  made in advance about which sources or edges matter.
-- Evaluation stays outside the agent.
-
-## Working in the repo
-
-- Never push to `main`; every change goes through a PR. Branch names are
-  `<team>/<short-description>`, e.g. `filter/affinity-defaults`.
-- Each directory is owned by one GitHub Team via `.github/CODEOWNERS` (team list in
-  `CONTRIBUTING.md`). Keep a change inside one team's directory
-  where you can; a PR that touches two needs the `integration` label and review from both.
-  `shared/`, `.github/` and root files belong to the leads.
-- The PR template's checklist: `make test` passes, new edges carry provenance, and the agent's
-  `README.md` is updated if its CLI changed.
-- Fixes are welcome on `main` at any stage, metadata and transformation included, but the
-  submission graph stays the Nov 9, 2026 transformation run. A fix that would change the graph
-  is still recorded in a report (what, which source, why) so the submission can say what it
-  does not contain.
-- Link every piece of work to its tracking issue. A tracking issue lists its children as a
-  task list, one per line (`- [ ] #123`), which gives the parent a progress bar and each child
-  a "Tracked by" link, and each child is also attached as a sub-issue so the tree shows in the
-  sidebar and on the Project board. From the CLI, with the child's id (not its number):
-
-  ```sh
-  id=$(gh api repos/UNC-RENCI-KGAI/KGB-CIA/issues/<child> --jq .id)
-  gh api -X POST repos/UNC-RENCI-KGAI/KGB-CIA/issues/<parent>/sub_issues -F sub_issue_id="$id"
-  ```
-
-  Every PR body carries `Closes #<child>` (the child closes on merge) and
-  `Part of #<tracking>` (the PR shows in the tracking issue's timeline). A finding with no code
-  change yet, such as a defect from a run, stays a row in the tracking issue until someone opens
-  a child for it.
-- No data in git. Source dumps and generated graphs go in `data/` (gitignored except its
-  README) or on a shared drive; record each source's version and download date in
-  `data/README.md`. `.gitignore` also blocks `*.jsonl`, `*.parquet`, `*.db`, `outputs/` and
-  `runs/` anywhere in the tree.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) is the one home for the team's design rules, branches and
+pull requests, issue and tracking conventions, and what may go in git. Read it before you
+branch, commit or open a PR; don't repeat its rules here.

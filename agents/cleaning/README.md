@@ -32,8 +32,10 @@ uv run kgb-evidence --question data/cleaning/evidence/my_question.json   # one q
 
 For each question (those the skill ships, plus any an agent wrote in
 `data/cleaning/evidence/`), it gathers the cited abstracts, asks Jev about each edge, and writes
-the lists. Without `TYPESAFE_API_KEY`, or if a step fails, it reports why, leaves the lists as
-they were, and the pipeline carries on; `--strict` makes a failure stop it instead.
+the lists. Without `TYPESAFE_API_KEY`, a question whose Jev answers are already cached from an
+earlier run with the key has its lists rebuilt from those answers; any other question's lists are
+left as they were. If a step fails, it reports why, leaves the lists as they were, and the
+pipeline carries on; `--strict` makes a failure stop it instead.
 
 ## Input / output
 
@@ -45,10 +47,10 @@ they were, and the pipeline carries on; `--strict` makes a failure stop it inste
 | File | What it holds |
 | --- | --- |
 | `nodes.jsonl`, `edges.jsonl` | The cleaned graph. Records pass through unchanged, except that a flagged edge gains two lists (see [Flags on the edges](#flags-on-the-edges)). |
-| `cleaning_report.json` | Counts in and out. `attention`: the sources that lost at least half their edges, with the prefixes that didn't resolve. Every dropped edge and node by reason and by source. Unresolved nodes by prefix, flags on kept edges, and a few examples of each. |
+| `cleaning_report.json` | Counts in and out. `attention`: the sources that lost at least half their edges, with the prefixes that didn't resolve. Dropped edges by reason and by source; dropped nodes by reason. Unresolved nodes by prefix, flags on kept edges, and a few examples of each. |
 | `flagged_edges.jsonl` | The kept edges worth a look, one per line, keyed like a drop list. |
-| `unresolved_nodes.tsv` | Every node NodeNorm couldn't resolve: its prefix and name, the edges it took down or that were kept with a flag, and their sources and predicates, most costly first. |
-| `pruned_edges.tsv` | Every dropped edge, one KGX TSV row each, with its `reason` and a plain-words `explanation` (and the evidence check's `confidence`, where it gave one). It records what was removed, not whether the claim is false: the scored gold set is the evidence check's `gold_set.tsv`. |
+| `unresolved_nodes.tsv` | Every node NodeNorm couldn't resolve: its prefix and name, how many edges it took down and how many were kept with a flag, and the sources and predicates of the edges it took down, most costly first. |
+| `pruned_edges.tsv` | Every dropped edge except `malformed` and `no_primary_knowledge_source` ones (counted in the report only, since their rows would have no predicate or source), one KGX TSV row each, with its `reason` and a plain-words `explanation` (and the evidence check's `confidence`, where it gave one). It records what was removed, not whether the claim is false: the scored gold set is the evidence check's `gold_set.tsv`. |
 
 ### Reading the result
 
@@ -66,18 +68,18 @@ An edge is dropped when:
 | `malformed` | It has no subject, predicate or object. |
 | `no_primary_knowledge_source` | It has no provenance, so it can't be explained. |
 | `dangling` | It names a node that isn't in `nodes.jsonl`. |
-| `broken_id` | It touches an ID that is wrong, not just unknown to NodeNorm (`BROKEN_ID_PREFIXES`). Examples: `OBA:VT...` trait IDs written with the wrong prefix (TIGA, GWAS Catalog), and `phenopacket.store:` patients from case reports. Dropped even when the other end resolves. |
+| `broken_id` | An end that didn't resolve has an ID that is wrong, not just unknown to NodeNorm (`BROKEN_ID_PREFIXES`). Examples: `OBA:VT...` trait IDs written with the wrong prefix (TIGA, GWAS Catalog), and `phenopacket.store:` patients from case reports. Dropped even when the other end resolves. |
 | `unresolved_both_ends` | Neither of its nodes resolved in NodeNorm, so it can't join the rest of the graph. |
 | `drop_list:<name>` | It's listed in `<output>/drop_lists/<name>.jsonl`. |
 | `type_violation:<predicate>-><category>` | A type violation serious enough to drop (`DROP_TYPE_VIOLATIONS`). Today that's `treats` whose object is a Procedure, ClinicalIntervention, BiologicalProcess, ChemicalEntity, OrganismTaxon, Protein or Drug. |
 
 Then any node no kept edge touches is dropped: as `unresolved` if NodeNorm couldn't resolve it,
-otherwise as `orphan`.
+otherwise as `orphan`. A node with no `id` is dropped as `malformed`.
 
 **Why an edge with one unresolved end is kept.** An edge between a resolved gene and a dbSNP
 variant, or a resolved protein and an obsolete GO term, is still a real fact about the resolved
-end. So it's kept, with an `unresolved_node` flag. In the submitted graph, 1.96M of the 2.21M
-edges with an unresolved end had their other end resolved.
+end. So it's kept, with an `unresolved_node` flag. In the submitted graph, 1.91M of the 2.21M
+edges with an unresolved end were kept, flagged `unresolved_node`.
 
 **Why only some type violations are drops.** The `treats` drops are ones a reviewer made by hand
 on real data, such as DrugCentral `treats` edges to "General Anesthesia" (Procedure) or
@@ -95,10 +97,14 @@ reason to lose a fact.
 | --- | --- |
 | `unresolved_node` | One end didn't resolve in NodeNorm; the other did. |
 | `self_loop` | The subject and object are the same node. |
-| `knowledge_level_not_provided`, `agent_type_not_provided` | A provenance field was left at `not_provided`. |
 | `type_violation` | The node categories don't fit the predicate's Biolink domain or range (`biolink_types.py`). The report breaks these down by predicate and category. |
 | `rare_category_combination` | A (subject categories, predicate, object categories) combination that makes up under 0.1% of a predicate's edges, for predicates with at least 1,000 kept edges. |
-| `opposing_predicate` | The same pair also carries the opposite predicate, such as `treats` and `contraindicated_in`. |
+| `opposing_predicate` | The same pair also carries the opposite predicate. Today the one pair is `treats` and `contraindicated_in` (each with the predicates under it). |
+
+The report also counts `knowledge_level_not_provided` and `agent_type_not_provided` (a
+provenance field left at `not_provided`), but these are report counts only: they aren't written
+on the edge or to `flagged_edges.jsonl`. Flags from a flag list (such as the evidence check's
+`wrong_mechanism`) are written on the edge like the ones above.
 
 Some violations are Biolink's quirks, not the graph's errors. The participation predicates
 (`has_participant`, `participates_in`, `catalyzes`, `has_catalyst`) would flag every gene in a

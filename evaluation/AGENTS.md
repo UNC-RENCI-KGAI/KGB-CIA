@@ -8,6 +8,5 @@ It compares GNN / GCN / graph-embedding link prediction on our final graph again
 baseline. The two runs must use an identical train/test edge split, or the comparison means
 nothing.
 
-Which Pharos artifact counts as the baseline is still an open question (see the open-question
-issue and `docs/agent_plan.md`). Don't pick one silently; record the choice and the baseline
-numbers in `README.md` once they exist.
+The baseline is Pharos v319, settled in #78, where the runs and their numbers are tracked.
+Record the baseline numbers in `README.md` once they're final.

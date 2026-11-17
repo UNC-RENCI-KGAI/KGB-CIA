@@ -5,6 +5,9 @@ description: Describe a built knowledge graph in plain terms (nodes, edges, sour
 
 # Describe graph
 
+In the KGB-CIA repository, read [`agents/AGENTS.md`](../../../../agents/AGENTS.md) first: the
+stage contract, the provenance every edge carries, and the non-Biolink keys each stage writes.
+
 Tell a scientist what is in their knowledge graph without making them read KGX files. The
 numbers come from ORION's own metadata (each source's `*.meta.json` and build QC file, the merge
 metadata, the cleaning report), so describing even a 100M-edge graph takes seconds.

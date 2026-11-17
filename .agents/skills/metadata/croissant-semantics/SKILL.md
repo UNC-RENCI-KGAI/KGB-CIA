@@ -5,6 +5,9 @@ description: Add semantics (what the data means) to an existing Croissant metada
 
 # Adding semantics to a croissant
 
+In the KGB-CIA repository, read [`agents/AGENTS.md`](../../../../agents/AGENTS.md) first: the
+stage contract, the provenance every edge carries, and the non-Biolink keys each stage writes.
+
 A RoboCroissant file says which files a knowledge base has and what columns they contain. This
 skill adds what the data **means**: which columns together describe a gene or a disease, what a
 row asserts, which identifier prefix a column's ids use, what codes stand for. It writes that

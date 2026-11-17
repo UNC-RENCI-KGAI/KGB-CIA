@@ -1,6 +1,6 @@
 # AGENTS.md: shared/
 
-Code every stage depends on, owned by the leads. A change here can break all six stages at
+Code every stage depends on, owned by the leads. A change here can break all eight stages at
 once, so it needs the `integration` label and review from the teams on each side of any handoff
 it touches.
 

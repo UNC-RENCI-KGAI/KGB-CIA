@@ -5,6 +5,9 @@ description: Check graph edges against the literature they cite. Write one multi
 
 # Evidence check
 
+In the KGB-CIA repository, read [`agents/AGENTS.md`](../../../../agents/AGENTS.md) first: the
+stage contract, the provenance every edge carries, and the non-Biolink keys each stage writes.
+
 An edge that cites a paper is only as good as that paper. This skill asks, for each edge and
 each abstract it cites, whether the abstract supports, contradicts or says nothing about the
 edge. Edges the literature rejects go on a drop list that `kgb-clean` removes on every later run;

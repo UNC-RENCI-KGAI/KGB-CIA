@@ -21,6 +21,9 @@ skill. Its steps:
 7. **evaluate:** score a run's claims and refinements against a curator's gold set, to compare
    models and prompts. It calls no model.
 
+A full run (`kgb-augment` with no step, as the pipeline calls it) takes steps 1-6. `evaluate`
+runs only on its own, when you name it.
+
 The LLM only extracts and reviews claims; code makes every change to the graph. Claims are
 cached, so the graph can be rebuilt without calling a model again.
 
@@ -37,7 +40,7 @@ This package holds only `cli.py`, the entry point that `kgb-augment` and the pip
 ## Run it
 
 ```bash
-uv run kgb-augment --input <filter output dir> --output <path>   # every step, with defaults
+uv run kgb-augment --input <filter output dir> --output <path>   # steps 1-6, with defaults
 uv run kgb-augment STEP --help    # STEP: select, pubmed, label, ground, review, apply, evaluate
 ```
 
@@ -57,7 +60,10 @@ Options you're most likely to need:
   written unchanged.
 - `--reasoning-effort`: label at a different effort than the model's default.
 - `--review-model` (or `KGB_AUGMENT_REVIEW_MODEL`): the model that reviews claims, by default
-  gpt-6-luna at medium effort.
+  gpt-6-luna at medium effort. On 6,953 claims it caught about half of what gpt-5.6-terra
+  rejects, so a run that needs a stricter check passes `--review-model gpt-5.6-terra`. Terra
+  costs 18-24x more, and in a blind read of 33 records a human agreed with luna more often
+  (27 to 19).
 
 If the work directory has a `label_run.json`, a full run continues that run with the same model
 and settings, and reuses its cached claims and verdicts.

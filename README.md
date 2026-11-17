@@ -85,7 +85,7 @@ Some steps need more, and only those steps:
 | --- | --- |
 | [Docker](https://docs.docker.com/get-docker/) | Building the Neo4j copy of the graph for the MCP server (`agents/mcp_interface/deploy/`), and `make test-neo4j` |
 | [Helm](https://helm.sh/docs/intro/install/) and a Kubernetes cluster | Deploying the MCP server with its chart. Not needed to run it locally. |
-| About 100 GB of free disk | Merging every source in `kgb-transform` |
+| Disk for the merge: about 500 bytes per merged edge, twice (about 12 GB for the submitted graph), plus the per-source graphs | Merging every source in `kgb-transform` |
 | API keys | The paid model steps; see below |
 
 ## API keys
