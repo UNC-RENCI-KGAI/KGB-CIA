@@ -500,10 +500,9 @@ fixture first and then promoted to deployed graphs.
    service. AWS uses auth-disabled Neo4j (`NEO4J_AUTH=none`) with network exposure controlled by
    the maintainer, graph read-only mode, a 30-second transaction timeout, and a 2 GiB
    transaction memory cap.
-5. **Publish to PyPI: open.** The maintainer still needs to publish `kgbcia-mcp` if judges or
-   teammates should install it outside this repository. Until then, local clients use
-   `uv run kgbcia-mcp serve --enable-cypher` from a checkout; after publication, switch examples
-   to `uvx kgbcia-mcp serve --enable-cypher`.
+5. **Publish to PyPI: complete.** `kgbcia-mcp` 0.1.0 was published on Nov 16, 2026. Clients
+   outside the repository run `uvx kgbcia-mcp serve --enable-cypher`; `uv run kgbcia-mcp serve`
+   runs a checkout's code, for development.
 
 The former build-description and quality-flag follow-ups are now part of the main contract:
 `prepare_dump.sh` packages sanitized `description.json`; `get_graph_info()` exposes it as
@@ -549,8 +548,8 @@ path is verified instead with `WIKIPATHWAYS:WP4580` → `CHEBI:10034`, which ret
 - Keep changes inside `agents/mcp_interface/` and `tests/test_mcp_interface.py`, plus
   `pyproject.toml` / `uv.lock` and `.pi/mcp.json`.
 - **Register the server in `.pi/mcp.json`** under `mcpServers` as `kgbcia-mcp`, a stdio entry.
-  Until the package is on PyPI, run `uv run kgbcia-mcp serve`; after that, run
-  `uvx kgbcia-mcp serve`. Neo4j settings come from the environment; put no hosts or passwords in
+  Use `uvx kgbcia-mcp serve` for the published package, or `uv run kgbcia-mcp serve` to run
+  the checkout's code. Neo4j settings come from the environment; put no hosts or passwords in
   the file.
 
 ## Out of scope
