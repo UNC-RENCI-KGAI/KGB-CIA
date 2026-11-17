@@ -24,6 +24,8 @@ test: lint  ## lint, the project's tests, and the metadata skill's tests
 	$(MAKE) --no-print-directory test-metadata
 
 test-metadata:  ## the croissant-semantics skill's tests, with that skill's own dependencies
+# The --with list repeats the dependencies in the skill scripts' `# /// script` headers: add a
+# package here when a script adds one there.
 	cd .agents/skills/metadata/croissant-semantics && uv run --with pytest --with requests \
 		--with jsonpath-ng --with pyyaml --with bioregistry --with openpyxl --with truststore \
 		--with pypdf --with pyarrow --with xlrd pytest -q tests/

@@ -1,6 +1,6 @@
 # Tests
 
-`make test` runs lint, then about 960 tests in roughly 15 seconds, then the metadata skill's
+`make test` runs lint, then about 960 tests in under half a minute, then the metadata skill's
 136 tests. No test touches the network. Every outside service (PubMed, NodeNorm, the Name
 Resolver, the language models) is faked, so the tests pass offline and cost nothing.
 `make test-neo4j` runs the MCP server against a toy graph in a real Neo4j. CI runs both on every
@@ -21,7 +21,7 @@ the skill can be copied on its own and keep its tests.
 | PubMed client (`shared/pubmed`) | `test_pubmed.py` | 45 |
 | MCP interface | `test_mcp_interface.py`; `make test-neo4j` | 60 |
 | Skill conventions | `test_skill_sync.py`, `test_skill_flags.py` | 20 |
-| Metadata | the croissant-semantics skill's `tests/` (`make test-metadata`) | 135 |
+| Metadata | the croissant-semantics skill's `tests/` (`make test-metadata`) | 136 |
 
 Most of the augmentation tests check one rule of the refinement or labeling step at a time on
 toy pairs (`tests/toy.py` in that skill). That's why there are so many of them, and why each

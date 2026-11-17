@@ -107,7 +107,9 @@ too. To use the models from the Pi agent harness, see [`.pi/README.md`](.pi/READ
 ## Querying the graph
 
 The MCP server is on PyPI as [`kgbcia-mcp`](https://pypi.org/project/kgbcia-mcp/), so any MCP
-client (Claude Code, Pi, or another) can run it with `uvx kgbcia-mcp serve`, no checkout needed.
+client (Claude Code, Pi, or another) can run it with `uvx kgbcia-mcp serve`, no checkout needed;
+it also needs the graph's Neo4j address and its artifacts URL and checksum, which the MCP README
+shows how to set.
 It searches nodes, explores neighbors and paths, explains an edge down to the source record it
 came from, and says when cleaning flagged an edge, and why.
 [`agents/mcp_interface/README.md`](agents/mcp_interface/README.md) has the client configuration,

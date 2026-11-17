@@ -48,7 +48,7 @@ uv run kgb-augment STEP --help    # STEP: select, pubmed, label, ground, review,
 | `AZURE_OPENAI_API_KEY` (and `AZURE_OPENAI_BASE_URL`) | Labeling and review with Azure OpenAI models |
 | `ANTHROPIC_API_KEY`, or an `ant auth login` profile | Labeling and review with Claude models |
 | `NCBI_EMAIL` | The PubMed search. NCBI asks for one. |
-| `NCBI_API_KEY` | Optional: 10 PubMed requests a second instead of 3. Without it, a large job is slow, and the run says so at the start. |
+| `NCBI_API_KEY` | 10 PubMed requests a second instead of 3. Needed for more than 500 uncached searches: without it, a full run stops at the PubMed step. A small job runs without it, slowly. |
 
 Options you're most likely to need:
 - `--max-label-cost`: a full run only labels as many pairs as its estimated cost allows
@@ -56,6 +56,8 @@ Options you're most likely to need:
 - `--skip-review`: leaves out the review step. Edges whose claims weren't reviewed are then
   written unchanged.
 - `--reasoning-effort`: label at a different effort than the model's default.
+- `--review-model` (or `KGB_AUGMENT_REVIEW_MODEL`): the model that reviews claims, by default
+  gpt-6-luna at medium effort.
 
 If the work directory has a `label_run.json`, a full run continues that run with the same model
 and settings, and reuses its cached claims and verdicts.
