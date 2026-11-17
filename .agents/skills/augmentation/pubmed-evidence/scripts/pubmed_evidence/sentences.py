@@ -32,9 +32,10 @@ from typing import Any
 from pubmed_evidence import biolink, records
 from shared import schema
 
-# One phrase per in-scope predicate (step 1's table) and the descendants the transform may
-# pick, plus the predicates a `qualified_predicate` usually names. The subject comes before
-# the phrase and the object after it.
+# Phrases for the predicates of the built-in scope rules (reference/rules.md) and the
+# descendants the transform may pick, plus the predicates a `qualified_predicate` usually
+# names; any other predicate reads by its Biolink name (`predicate_phrase`). The subject comes
+# before the phrase and the object after it.
 PREDICATE_PHRASES: dict[str, str] = {
     # Chemical or drug -> disease. The first groups the treats, applied and studied senses.
     "biolink:treats_or_applied_or_studied_to_treat": "is used or studied to treat",

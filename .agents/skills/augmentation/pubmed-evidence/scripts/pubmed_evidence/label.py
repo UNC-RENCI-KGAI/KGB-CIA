@@ -1,46 +1,15 @@
 """Step 3: an LLM reads each pair's abstracts and writes down the claims they make about it.
 
-One request per unordered node pair, with its abstracts in chunks of `--abstracts-per-call` (at
-most config.ABSTRACTS_PER_CALL): the pair's nodes go as X and Y, with names, synonyms and
-categories, and the graph's edges are never sent. So a pair's claims serve every edge between
-the pair, from any graph, now or later; step 6 refines each edge from them (`refine.py`).
+DESIGN.md, "Step 3: Claims", has the design and its reasons, and reference/formats.md, "Label
+reply (step 3)", the reply and how it is stored. In this module:
 
-A pair's abstracts are those step 2 fetched with text (`pair_pmids`), less those the source
-screen leaves unread (`screened`): a PMID the pair has only as a source citation, that at least
-config.SOURCE_SCREEN_MIN_PAIRS pairs of the selection cite (select's count), and whose title
-and abstract don't name both nodes, is a high-throughput paper that states nothing about the
-pair. Steps 5 and 6 ask `pair_pmids` too, so a PMID screened out never holds a pair.
-
-For each abstract the model gives a study design and zero or more claims: an abstract with no
-claims states nothing about the pair. A claim's statement names X or Y as its subject, a
-predicate and its qualifiers, and code stores it with the pair's CURIEs in their place and its
-object made explicit (`claim_id` hashes the claim exactly as stored, so a stored claim is never
-rewritten). Species come from an enum and are stored as NCBITaxon terms (config.SPECIES_TAXA);
-anatomy is stored as the abstract names it, for the ground step to resolve.
-
-The model replies in strict structured output. Each pair's schema allows the predicates of the
-scope rules it matches (`predicates_of`): theirs, the ones Biolink puts below them, and their
-`opposite_of` partners, each the way round its domain and range read from the rule's subject to
-its object: one that fits only the other way round is offered as its inverse, and one that fits
-neither way is left out, so none is offered the wrong way round. Code then checks what a schema
-can't say (`check_claim`), on each statement turned the way round Biolink
-reads it (`refine.directed`; a claim whose predicate fits neither way fails): the qualifier
-slots and values the predicate's association allows, `causes` only with an aspect or a
-direction, `negative_finding_type` on negative claims only, and `also_supports` entries that
-add something; and that the evidence sentence is in the abstract (`quotes.quote_found`). A
-statement that fails as written is read with the post-label repairs SALVAGE names
-(`read_claim`), which change no prompt version. A claim still failing a check is kept in the
-cache but counts for nothing: the checks go to the `claim_checks` table, recomputed on every
-run for the run's pairs, since nothing versions them.
-Last, the quote repair pass (`repair.py`) repairs the evidence sentences of claims that pass
-every other check but whose sentence wasn't found: code puts back the sentences a quote was
-taken from, and a stronger model is asked only for those code can't place.
-
-A rerun asks only for the abstracts with no answer yet, and a new prompt, model or effort starts
-fresh: the prompt version hashes the prompt file (with the claim rules it includes) together
-with FORMAT_VERSION, the version of the code that writes the user message, every scope rule's
-reply schema and the reasoning effort. A pair with a failed call keeps the answers of its other
-calls; its edges stay unchanged until a run has answered all of its abstracts.
+- `pair_pmids` gives the abstracts step 3 asks about for a pair: those step 2 fetched with
+  text, less those the source screen leaves unread (`screened`). Steps 5 and 6 ask it too.
+- `predicates_of` gives the predicates a pair's claims may use, `reply_schema` the pair's
+  schema, and `label_prompt` the run's prompt version.
+- `read_claim` reads a stored claim, with the post-label repairs SALVAGE names, as the check
+  (`check_claim`), the review and step 6 all read it.
+- `label_pairs` is the step: the calls, the checks, then the quote repair pass (`repair.py`).
 
 The calls run in a thread pool; everything else, including every cache write and every
 Biolink lookup, stays on the main thread, since neither SQLite connections nor the toolkit are
@@ -83,8 +52,8 @@ from shared.schema import ClaimRole, NegativeFindingType, Polarity, StudyDesign
 FORMAT_VERSION = "label-message-5"
 
 MAX_SYNONYMS_SHOWN = 12
-# The dry run's cost estimate assumes this many output tokens per call, reasoning included. A
-# first guess for a chunk of abstracts with a few claims; the tuning sample measures it.
+# The dry run's cost estimate assumes this many output tokens per call, reasoning included: a
+# guess, which the tuning sample measures.
 ESTIMATED_OUTPUT_TOKENS = 2000
 # Azure OpenAI caches a prompt prefix of at least this many tokens.
 CACHED_PREFIX_TOKENS = 1024
@@ -105,8 +74,8 @@ SPECIES: tuple[str, ...] = tuple(config.SPECIES_TAXA)
 SIDES = ("X", "Y")
 # The one qualified predicate a claim may give: `causes`, under `affects`.
 CAUSES = "causes"
-# A qualifier slot the statement doesn't set. The slots take it rather than null: each nullable
-# slot would be a union, and Anthropic's strict output allows only llm.MAX_UNION_PARAMETERS.
+# A qualifier slot the statement doesn't set. The slots take it rather than null, to stay
+# within llm.MAX_UNION_PARAMETERS (DESIGN.md, "Structured replies").
 UNSET = "none"
 
 # The step that writes each input file, for the error when one is missing.
@@ -147,10 +116,8 @@ def predicates_of(rules: Sequence[Rule], ids: Iterable[str]) -> tuple[str, ...]:
     """The predicates a claim may use for a pair the rules `ids` matched, as CURIEs, sorted:
     each rule's predicates, every predicate Biolink puts below them (mixins included), and their
     `opposite_of` partners, each as Biolink reads it from the rule's subject to its object
-    (`rule_predicate`). Predicates a skip rule drops whatever the categories and the edge's
-    provenance (literature co-occurrence, which is under `associated_with`) are left out: they
-    never make a claim. A provenance rule names no predicates, so it adds none and drops none:
-    a pair's `rules` are its statement rules."""
+    (`rule_predicate`), less those a category-free skip rule covers. See DESIGN.md, "Which
+    predicates, and which way round". A provenance rule adds none and drops none."""
     wanted = set(ids)
     found: set[str] = set()
     for rule in rules:
@@ -170,11 +137,11 @@ def predicates_of(rules: Sequence[Rule], ids: Iterable[str]) -> tuple[str, ...]:
 
 def rule_predicate(rule: Rule, predicate: str) -> str | None:
     """The predicate a claim uses for `predicate` between the rule's subject and object
-    categories (`biolink.oriented`), so that a reply schema never offers one the wrong way
-    round: one defined the other way round becomes its inverse (`condition_associated_with_gene`
-    is `gene_associated_with_condition` for gene-disease), one Biolink doesn't take as
-    canonical becomes its canonical inverse, and one that fits neither way (`has_adverse_event`
-    or `enables` for chemical-gene) is None. A symmetric rule reads either way round."""
+    categories (`biolink.oriented`): one defined the other way round becomes its inverse
+    (`condition_associated_with_gene` is `gene_associated_with_condition` for gene-disease),
+    one Biolink doesn't take as canonical becomes its canonical inverse, and one that fits
+    neither way (`has_adverse_event` or `enables` for chemical-gene) is None. A symmetric rule
+    reads either way round."""
     sides = [(rule.subject, rule.object)]
     if rule.symmetric:
         sides.append((rule.object, rule.subject))
@@ -194,9 +161,9 @@ def reply_schema(predicates: tuple[str, ...]) -> llm.Schema:
     """The label reply's schema for a pair whose claims may use `predicates` (CURIEs; the
     schema names them without 'biolink:'). Abstracts are named by position, up to the most a
     call sends. A statement's qualifiers are one object with every enum-valued qualifier slot
-    Biolink has, each its values or UNSET (not nullable, which would make 13 unions, and
-    twice that with `also_supports`), built once from the pinned Biolink; which apply is checked
-    in code. Statements are defined once (`$defs`), for a claim's own and its `also_supports`."""
+    Biolink has, each its values or UNSET, built once from the pinned Biolink; which apply is
+    checked in code. Statements are defined once (`$defs`), for a claim's own and its
+    `also_supports`."""
     qualifiers = llm.strict_object(
         {
             slot: _enum([*values, UNSET])
@@ -268,9 +235,8 @@ def label_prompt(
     """(system prompt, prompt version) of a label run with this prompt file, model and scope
     rules. The version covers the prompt with its includes, FORMAT_VERSION, every rule's reply
     schema (`rule_schemas`: skip and provenance rules have none, so adding or changing one
-    leaves the version alone) and the run's effort (`llm.run_effort`), so claims made at one
-    effort are never reused at another. Anything that needs the version of a label run can
-    call this."""
+    leaves the version alone) and the run's effort (`llm.run_effort`). Anything that needs the
+    version of a label run can call this."""
     effort = llm.run_effort(model, reasoning_effort)
     schemas = "\0".join(s.text() for _, s in sorted(rule_schemas(rules).items()))
     extra = f"{FORMAT_VERSION}\0{schemas}\0effort={effort}"
@@ -321,7 +287,7 @@ def read_pairs(path: Path) -> list[str]:
 def mass_cited(pair: Pair) -> frozenset[str]:
     """The pair's source PMIDs that at least config.SOURCE_SCREEN_MIN_PAIRS pairs of the
     selection cite, by the counts select recorded on it (`Pair.source_pmid_pairs`): none
-    without counts (a pairs.jsonl from before them) or with the screen off (None)."""
+    without counts or with the screen off (None)."""
     least = config.SOURCE_SCREEN_MIN_PAIRS
     if least is None:
         return frozenset()
@@ -367,10 +333,9 @@ def names_both(record: PubmedRecord, abstract: Abstract) -> bool:
 def screened(
     record: PubmedRecord, texts: Mapping[str, Abstract], cited: Collection[str]
 ) -> list[str]:
-    """The pair's PMIDs the source screen leaves unread, once each, in order: each it has only
-    as a source citation (origin `source`: the search didn't find it), that at least
-    config.SOURCE_SCREEN_MIN_PAIRS pairs cite (`cited`, from `mass_cited`), and whose title and
-    abstract don't name both nodes (`names_both`; one missing from the cache names neither)."""
+    """The pair's PMIDs the source screen leaves unread, once each, in order: each of origin
+    `source` that is among `cited` (the pair's `mass_cited` PMIDs) and whose title and abstract
+    don't name both nodes (`names_both`; one missing from the cache names neither)."""
     out: dict[str, None] = {}
     for p in record.pmids:
         if p.origin == "source" and p.pmid in cited:
@@ -523,11 +488,8 @@ class Qualifiers:
     many share an association, and bmt lookups are slow.
 
     A statement takes the enum-valued slots its association allows, minus those that don't fit
-    its entities. Open-ranged ones (an anatomical, species or disease context) aren't in the
-    reply: species and anatomy come in a claim's context. A `subject_*` or `object_*` slot needs
-    a gene, gene product or chemical on that side; a chemical and a disease or phenotype
-    (treats, contraindicated_in, ...) take none; and `qualified_predicate` comes only with a
-    subject or object slot, as Biolink reads it.
+    its entities (DESIGN.md, "Checked in code"). Open-ranged ones (an anatomical, species or
+    disease context) aren't in the reply: species and anatomy come in a claim's context.
     """
 
     def __init__(self) -> None:
@@ -669,9 +631,8 @@ def build_message(
     for side, e in zip(SIDES, job.entities, strict=True):
         name = e.name or e.id
         lines.append(f"{side}: {name} ({e.id})")
-        # The node's most specific category, not its first: the cleaned graph lists them
-        # alphabetically. FORMAT_VERSION stays: the Nov 16 run's entities were reordered to
-        # list this one first, so its messages are the same.
+        # The node's most specific category, not its first. FORMAT_VERSION wasn't bumped for
+        # it: the Nov 16 run's entities list this one first, so its messages are the same.
         lines.append(f"  category: {_category(e.category)}")
         synonyms = [
             s
@@ -775,9 +736,8 @@ def parse_reply(
     """Each abstract's answer from the model's reply, which fits the pair's `reply_schema`.
 
     Abstracts are named by position (`A1`); one beyond the request's, or one answered twice,
-    raises ValueError, so the call counts as failed, nothing of it is cached, and the next run
-    asks again. An abstract the reply leaves out gets no answer, and the next run asks for it
-    again; that is counted. A claim given twice in one answer is kept once. `answered_by` is
+    raises ValueError, so the call counts as failed. An abstract the reply leaves out gets no
+    answer, and is counted. A claim given twice in one answer is kept once. `answered_by` is
     the model that answered, on every row.
     """
     pmids = {f"A{i}": p for i, p in enumerate(request.pmids, 1)}
@@ -832,30 +792,22 @@ def statement_of(stored: Mapping[str, Any]) -> schema.Statement:
     return schema.Statement.model_validate(stored)
 
 
-# What `read_claim` repairs in a stored claim instead of failing it. It runs after labeling, on
-# claims as cached: the stored claim stays as the model gave it (`claim_id` hashes it), and the
-# check, the review and step 6 read it through `read_claim`, so a change here reaches every
-# cached label at the next check, with no new call and no new prompt version. A statement that
-# passes the checks as written is read as written, and each repair reads a statement as saying
-# no more than the model wrote:
-# - "bare_qualified_predicate": `qualified_predicate: causes` with no aspect or direction to
-#   qualify says nothing the predicate doesn't, and is dropped.
-# - "gene_product": a gene product that isn't a gene (a Protein, which NodeNorm doesn't conflate
-#   into its gene) also fits a `gene` domain or range, as the claim rules count a gene's
-#   products as the gene: `gene_associated_with_condition`, and `regulates`, whose
-#   PhysicalEssenceOrOccurrent range Biolink 4.4.6 puts a Gene under but not a Protein. Only
-#   when the node's own categories fail the statement. Step 6 still writes a proposal only if
-#   it is valid with the node's own categories (`refine._written`), so no invalid edge results.
-# - "wrong_side": a subject or object qualifier on a disease or phenotype, which takes none,
-#   describes the gene, gene product or chemical on the other side, and moves there. A
-#   direction moves only with an aspect beside it (alone it might mean the disease's course),
-#   and is dropped otherwise, as is a slot the other side sets already.
-# - "symmetric_turn": a symmetric statement whose qualifiers fit only read from its object
-#   (written from the disease, with the gene's qualifiers on the object) is read that way
-#   round, as step 6 writes a proposal (`refine._written`).
+# What `read_claim` repairs in a stored claim instead of failing it, by the name a reading
+# reports it under. DESIGN.md, "Repaired after labeling", has each repair's rule and reason, in
+# this order. A change here reaches every cached claim at the next check, with no new call and
+# no new prompt version.
+# - "bare_qualified_predicate": `causes` with no aspect or direction is dropped.
+# - "gene_product": a gene product that isn't a gene (a Protein) also fits a `gene` domain or
+#   range, only when the node's own categories fail the statement. `regulates` needs it because
+#   Biolink 4.4.6 puts a Gene under its PhysicalEssenceOrOccurrent range but not a Protein.
+#   Step 6 still writes a proposal only if it is valid with the node's own categories
+#   (`refine._written`).
+# - "wrong_side": a subject or object qualifier on a disease or phenotype moves to the other
+#   side.
+# - "symmetric_turn": a symmetric statement whose qualifiers fit only read from its object is
+#   read that way round, as step 6 writes a proposal (`refine._written`).
 # - "redundant_also_supports": an `also_supports` entry that a positive claim's own statement
-#   already entails is dropped, rather than failing the claim.
-# No repair drops a slot from what a negative claim denies, which would deny more.
+#   already entails is dropped.
 SALVAGE: frozenset[str] = frozenset(
     {
         "bare_qualified_predicate",
@@ -1077,12 +1029,9 @@ def check_claim(
     qualifiers: Qualifiers,
     lattice: refine.Lattice | None = None,
 ) -> list[str]:
-    """What fails a stored claim, in words; [] if nothing does. The sentence check is apart
-    (`sentence_found`). The claim is checked as step 6 will read it (`read_claim`): each
-    statement the way round Biolink reads it (`refine.directed`), its predicate fitting the
-    pair's nodes by its domain and range one way round or the other, and its qualifier slots
-    and values allowed (`Qualifiers`), with the repairs SALVAGE names; `negative_finding_type`
-    only on a negative claim; and each `also_supports` entry adding something."""
+    """What fails a stored claim, in words; [] if nothing does. The claim is checked as step 6
+    will read it (`read_claim`, with the repairs SALVAGE names); DESIGN.md, "Checked in code",
+    lists the checks. The sentence check is apart (`sentence_found`)."""
     return read_claim(claim, categories, qualifiers, lattice).errors
 
 
@@ -1272,12 +1221,10 @@ def write_sample(
     seed: int,
     source: Path | None = None,
 ) -> tuple[Path, Path]:
-    """`label_sample.md`, what the agent reads to tune the prompt, and `label_sample.jsonl`, one
-    line per (pair, PMID) with the abstract and its claims as stored, each with its id, checks
-    and repaired sentence, for a curator to correct. A sentence that wasn't found shows its
-    repair and who made it, if the repair pass made one: the first found of the code's and the
-    repair model's, else the last made. The pairs were chosen with `seed`, or are those the
-    pairs file `source` names."""
+    """Write `label_sample.md`, what the agent reads to tune the prompt, and
+    `label_sample.jsonl`, for a curator to correct (reference/work-files.md has both), and
+    return their paths. The pairs were chosen with `seed`, or are those the pairs file `source`
+    names."""
     chosen = f"from {source}" if source is not None else f"chosen with seed {seed}"
     md = [
         "# Label sample",
@@ -1621,11 +1568,11 @@ def _write_run(
     effort: str,
     repairs: list[tuple[str, str]] | None,
 ) -> None:
-    """Name this run in `label_run.json`, with its effort and the repairs of its repair pass,
-    if one ran: (repairer, repair prompt version) in priority order, the code's, then the
-    model's unless its pass was skipped. Its review, and the earlier repairs, are kept only if
-    they were of this run: all of them when no pass ran, and the model's after the code's when
-    the model's pass was skipped. The UBERON release is kept: no run changes it."""
+    """Name this run in `label_run.json`, with its effort and `repairs`, those of its repair
+    pass ((repairer, repair prompt version) in priority order; None if no pass ran). The file's
+    review and earlier repairs are kept only if they were of this run: all the repairs when no
+    pass ran, and the model's after the code's when the model's pass was skipped. The UBERON
+    release is kept: no run changes it."""
     run = records.LabelRun(
         model=model, prompt_version=version, prompt=str(prompt), reasoning_effort=effort
     )
@@ -1779,8 +1726,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-repair",
         action="store_true",
-        help="skip the quote repair pass, which asks the review model for the evidence "
-        "sentences that weren't found",
+        help="skip the quote repair pass, which asks the repair model for the evidence "
+        "sentences that weren't found and code can't place",
     )
 
 

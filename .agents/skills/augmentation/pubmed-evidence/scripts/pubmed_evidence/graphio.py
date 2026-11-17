@@ -1,13 +1,9 @@
-"""Reading and writing the KGX graph, and the identity of an edge's statement.
+"""Reading and writing the KGX graph, and the ids of statements, edges and pairs.
 
-A *statement* is what an edge claims, without its provenance: subject, predicate, object,
-qualifiers and `negated`. Sources often give the same statement (DisGeNET and JensenLab both
-give `gene_associated_with_condition`), so select lists each statement once, and a statement
-step 6 proposes is one edge, however many originals it refines. Select, review and step 6 key
-on `statement_id`, so it must depend only on the statement.
-
-A *pair* is the unordered pair of nodes an edge joins. One PubMed search and one label request
-serve every edge between them, in both directions.
+Sources often give the same statement, so select, review and step 6 key on `statement_id`,
+which must depend only on the statement and never on its provenance. DESIGN.md defines
+"statement" and "pair" at its top; reference/work-files.md, "Ids and versions", specifies the
+ids.
 """
 
 from __future__ import annotations
@@ -93,12 +89,8 @@ INVALID_EXAMPLES = 10
 
 
 class InvalidEdges:
-    """Edges that aren't valid `Edge` records, counted by reason, with the first few lines.
-
-    Decision (review of #22, Nov 2026): one bad edge never stops the stage, or the pipeline.
-    Select and bundle skip it, apply writes it out exactly as read, and each step's report
-    counts it and the run prints a warning. Dropping bad edges is the final cleaning pass's job,
-    not augmentation's."""
+    """Edges that aren't valid `Edge` records, counted by reason, with the first few lines. One
+    bad edge never stops a step (DESIGN.md, "What step 6 writes")."""
 
     def __init__(self) -> None:
         self.by_reason: Counter[str] = Counter()
@@ -173,9 +165,8 @@ def statement_id(
 
 
 def edge_id(record: dict[str, Any]) -> str:
-    """The `id` an input edge goes by: its own, or for an edge without one `kgbcia-edge:` plus
-    the first 16 hex digits of the SHA-256 of its canonical JSON (sorted keys, the record as
-    read). The hash changes if the transformation's output for the edge does."""
+    """The `id` an input edge goes by: its own, or for an edge without one `kgbcia-edge:` plus a
+    hash of the record as read (reference/work-files.md, "Ids and versions")."""
     if record.get("id"):
         return record["id"]
     canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -195,10 +186,9 @@ def as_cited(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def proposed_edge_id(statement_id: str) -> str:
-    """The `id` of an edge step 6 proposes: `kgbcia-augmentation:` plus the first 16 hex digits
-    of the SHA-256 of `statement_id`, the proposal's key (`refine.statement_key`, one for a
-    symmetric statement either way round). So a statement has one id whichever originals it
-    refines, in any graph."""
+    """The `id` of an edge step 6 proposes, from `statement_id`, the proposal's key
+    (`refine.statement_key`): one id for a statement whichever originals it refines, in any
+    graph (reference/work-files.md, "Ids and versions")."""
     return ID_PREFIX + hashlib.sha256(statement_id.encode("utf-8")).hexdigest()[:16]
 
 

@@ -1,33 +1,12 @@
 """Step 5: a second pass reviews the claims that would count.
 
-Step 6 refines each checked edge from its pair's claims (`refine.py`): an upheld claim adds its
-PMID as support to each in-scope edge whose statement it states or narrows, and one more
-specific than such an edge proposes its statement as a new edge. Each of those claims is one the
-bulk model extracted at a low effort, so the reviewer (config.REVIEW_MODEL at
-config.REVIEW_EFFORT: the bulk model again, at medium) reads it again against its abstract and
-upholds or rejects it (`upheld`, `reject`), with a reason. A rejected claim counts for nothing.
-Against gpt-5.6-terra on 6,953 claims (2026-11-16), gpt-6-luna at medium caught about half of
-terra's rejects, for 18-24x less, and in a blind read of 33 records agreed with the human reader
-on 27, terra on 19; `--model gpt-5.6-terra` still reviews with terra.
+The reviewer reads each claim that would count if upheld (`refine.would_count`, over the pairs
+`bundle.py` bundles, as step 6 does) against its abstract, and upholds or rejects it with a
+reason. Verdicts go to the label cache's `claim_reviews` table under (reviewer, review prompt
+version), and `label_run.json` then names the review step 6 applies.
 
-The claims sent are those of each bundled pair (`bundle.py`) that would count if upheld
-(`refine.would_count`): quote-checked, from a paper not retracted, not a hypothesis, and with a
-statement narrower than or equal to an in-scope edge's. A positive claim's statements are its
-own and those it also supports (`also_supports`); a negative claim's are only the latter.
-Claims that only add a PMID to an edge are among them, but not those that add it only through a
-statement config.SUPPORT_ONLY exempts (`ameliorates` under a `treats` edge), which step 6
-counts unreviewed, unless config.REVIEW_SUPPORT_ONLY or `--review-support-only` sends them.
-Each claim's effect is independent of the others', so one pass sends every such claim with no
-verdict yet. One whose call fails, or
-that a reply leaves out, stays unreviewed: step 6 holds its pair, and the next run sends it
-again.
-
-Calls are per pair: its claims in batches split by abstract chunk (config.ABSTRACTS_PER_CALL),
-then at config.REVIEW_ITEMS_PER_CALL claims, each abstract sent once per call. Verdicts go to
-the label cache's `claim_reviews` table under (reviewer, review prompt version), so a rerun
-reviews only what is new, and a new prompt, model or effort starts afresh: the review prompt
-version hashes the prompt with the claim rules it includes, FORMAT_VERSION, the reply schema
-and the reasoning effort. `label_run.json` then names the review step 6 applies.
+See DESIGN.md, "Step 5: Review", for which claims are sent, the batching and the versions, and
+reference/formats.md, "Review reply (step 5)", for the reply.
 """
 
 from __future__ import annotations
@@ -84,10 +63,8 @@ def review_prompt(
     reasoning_effort: str | None = config.REVIEW_EFFORT,
 ) -> tuple[str, str]:
     """(system prompt, review prompt version) of a review with this prompt file, model and
-    effort override (default config.REVIEW_EFFORT; None for the model's own): the version covers
-    the prompt with the files it includes, FORMAT_VERSION, the reply schema and the effort sent
-    (`llm.run_effort`). Raises LLMError for a model not in config.MODELS, or an effort it
-    doesn't take."""
+    effort override (default config.REVIEW_EFFORT; None for the model's own). Raises LLMError
+    for a model not in config.MODELS, or an effort it doesn't take."""
     effort = llm.run_effort(model, reasoning_effort)
     extra = f"{FORMAT_VERSION}\0{REPLY_SCHEMA.text()}\0effort={effort}"
     return llm.load_prompt(prompt, extra=extra)

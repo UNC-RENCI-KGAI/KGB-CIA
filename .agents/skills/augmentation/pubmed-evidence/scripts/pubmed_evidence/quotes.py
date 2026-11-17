@@ -1,9 +1,8 @@
 """Checking that an LLM's quote really is in the abstract.
 
-Every claim comes with a verbatim evidence sentence, a quote, as does every repair of one. Code
-checks the quote against that PMID's title and abstract, which catches made-up evidence cheaply.
-The comparison ignores case, whitespace, Unicode compatibility forms (curly quotes, ligatures,
-non-breaking spaces) and dash variants, which models often change when copying, but not wording.
+`quote_found` checks a claim's evidence sentence, or a repair of one, against its PMID's title
+and abstract, which catches made-up evidence cheaply. reference/formats.md, "Quotes", says what
+the comparison ignores.
 """
 
 from __future__ import annotations
@@ -11,9 +10,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
-# Each part of a quote must be at least this long once normalized (about four words), so a
-# quote can't pass on two entity names joined by an ellipsis; and a quote has at most this many
-# parts.
+# Each part of a quote must be at least this long once normalized (about four words), and a
+# quote has at most this many parts.
 MIN_PART_CHARS = 20
 MAX_PARTS = 3
 # "[...]" first: it contains "...".

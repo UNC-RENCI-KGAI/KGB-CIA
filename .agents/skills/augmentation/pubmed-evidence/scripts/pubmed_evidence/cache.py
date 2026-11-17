@@ -1,25 +1,15 @@
 """The augmentation agent's SQLite caches: the PubMed cache with a table of its own, and the
 label cache.
 
-- `PubMedCache` is `shared.pubmed`'s cache (ESearch results by query string, abstracts by PMID,
-  NodeNorm entries by CURIE), with the groundings of the anatomy names claims give, by name. It
-  is the file `shared.pubmed.default_cache_path()` names: KGB_PUBMED_CACHE, or
-  data/cache/pubmed/pubmed.sqlite. A rerun makes no requests for anything already there.
-- `LabelCache` keeps each abstract's answer for a pair by (pair, PMID, prompt version, model):
-  the study design and the claims. Code's checks of a claim, the review's verdicts and the
-  sentence repairs are keyed by that and the claim's `claim_id`, and a verdict or repair by its
-  own model and prompt version too. Each prompt version (label, review and repair) covers its
-  prompt, message format, reply schema and reasoning effort, so a change to any of them asks
-  again. It also logs each call's token use. Step 6 reads it, with the article types in the
-  PubMed cache and the work files, so the graph can be rebuilt without calling a model. It lives
-  in the cache directory (`config.default_cache_dir()`: KGB_AUGMENT_CACHE_DIR, or
-  data/cache/augmentation); point it at a shared directory to share it.
-- An older label cache also has the tables of the statement labels that came before the claims
-  (`labels`, `proposals`, `reviews`, `repairs`). No code reads or writes them any more, and they
-  stay as they are.
+- `PubMedCache` is `shared.pubmed`'s cache, with the groundings of the anatomy names claims
+  give. It is the file `shared.pubmed.default_cache_path()` names.
+- `LabelCache` keeps each abstract's claims for a pair, code's checks of them, the review's
+  verdicts, the sentence repairs and a log of every call. It is `labels.sqlite` in the cache
+  directory (`config.default_cache_dir()`).
 
-Both use SQLite's default rollback journal rather than WAL, which is unsafe on network
-filesystems. Write from one process at a time.
+reference/work-files.md, "Caches", has their locations, tables and keys, and DESIGN.md,
+"Caching", what invalidates an answer. Both use SQLite's rollback journal, not WAL: write from
+one process at a time.
 """
 
 from __future__ import annotations
@@ -52,9 +42,8 @@ def claim_id(claim: dict[str, Any]) -> str:
     """Stable id of a claim in an abstract's answer: the first 16 hex digits of the SHA-256 of
     its canonical JSON, the claim as `abstract_claims` stores it. Each statement in it (the
     claim's own and its `also_supports`) names its subject and object by the pair's CURIEs,
-    never the prompt's X and Y, which raises ValueError. Two identical claims in one answer are
-    one claim. Its check, review and repair hang on this id, so code never rewrites a stored
-    claim: grounding and repair are kept beside it."""
+    never the prompt's X and Y, which raises ValueError. Its check, review and repair hang on
+    this id, so code never rewrites a stored claim."""
     for s in (claim.get("statement") or {}, *(claim.get("also_supports") or ())):
         if not all(":" in str(s.get(end) or "") for end in ("subject", "object")):
             raise ValueError(f"a claim's statements need CURIEs as subject and object: {s!r}")
@@ -133,7 +122,7 @@ class PubMedCache(shared.pubmed.PubMedCache):
 @dataclass
 class CallRow:
     """One call's token use and cost. `input_tokens` counts every prompt token, the cache's
-    reads and writes among them (None when unknown, as in calls logged before they were)."""
+    reads and writes among them (those are None when unknown, as in an older cache's rows)."""
 
     step: Literal["label", "review", "repair"]
     pair_id: str
