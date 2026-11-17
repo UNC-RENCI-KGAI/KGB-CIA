@@ -1,11 +1,14 @@
-"""Step 5: a stronger model reviews the claims that would count.
+"""Step 5: a second pass reviews the claims that would count.
 
 Step 6 refines each checked edge from its pair's claims (`refine.py`): an upheld claim adds its
 PMID as support to each in-scope edge whose statement it states or narrows, and one more
 specific than such an edge proposes its statement as a new edge. Each of those claims is one the
-bulk model extracted, so a stronger, dearer model (config.REVIEW_MODEL) reads it again against
-its abstract and upholds or rejects it (`upheld`, `reject`), with a reason. A rejected claim
-counts for nothing.
+bulk model extracted at a low effort, so the reviewer (config.REVIEW_MODEL at
+config.REVIEW_EFFORT: the bulk model again, at medium) reads it again against its abstract and
+upholds or rejects it (`upheld`, `reject`), with a reason. A rejected claim counts for nothing.
+Against gpt-5.6-terra on 6,953 claims (2026-11-16), gpt-6-luna at medium caught about half of
+terra's rejects, for 18-24x less, and in a blind read of 33 records agreed with the human reader
+on 27, terra on 19; `--model gpt-5.6-terra` still reviews with terra.
 
 The claims sent are those of each bundled pair (`bundle.py`) that would count if upheld
 (`refine.would_count`): quote-checked, from a paper not retracted, not a hypothesis, and with a
@@ -78,12 +81,13 @@ class ReviewError(RuntimeError):
 def review_prompt(
     prompt: Path = config.REVIEW_PROMPT,
     model: str = config.REVIEW_MODEL,
-    reasoning_effort: str | None = None,
+    reasoning_effort: str | None = config.REVIEW_EFFORT,
 ) -> tuple[str, str]:
     """(system prompt, review prompt version) of a review with this prompt file, model and
-    effort override: the version covers the prompt with the files it includes, FORMAT_VERSION,
-    the reply schema and the effort sent (`llm.run_effort`). Raises LLMError for a model not in
-    config.MODELS."""
+    effort override (default config.REVIEW_EFFORT; None for the model's own): the version covers
+    the prompt with the files it includes, FORMAT_VERSION, the reply schema and the effort sent
+    (`llm.run_effort`). Raises LLMError for a model not in config.MODELS, or an effort it
+    doesn't take."""
     effort = llm.run_effort(model, reasoning_effort)
     extra = f"{FORMAT_VERSION}\0{REPLY_SCHEMA.text()}\0effort={effort}"
     return llm.load_prompt(prompt, extra=extra)
@@ -361,7 +365,7 @@ def review_claims(
     model: str = config.REVIEW_MODEL,
     prompt: Path = config.REVIEW_PROMPT,
     workers: int = config.WORKERS,
-    reasoning_effort: str | None = None,
+    reasoning_effort: str | None = config.REVIEW_EFFORT,
     max_output_tokens: int | None = None,
     limit: int | None = None,
     review_support_only: bool | None = None,
@@ -372,10 +376,11 @@ def review_claims(
     before included), name the review in `label_run.json`. `input_dir` holds the graph whose
     edges the claims would count for. `client` (anything with a client's `call`) is built from
     `model` if not given and there is something to send, with `max_output_tokens` and
-    `reasoning_effort` overriding the model's own settings. `limit` reviews only the first
-    pairs by id. `review_support_only` (default config.REVIEW_SUPPORT_ONLY) sends the claims
-    that would count only through a statement config.SUPPORT_ONLY exempts too. Raises
-    ReviewError for a missing input or an unusable model."""
+    `reasoning_effort` (default config.REVIEW_EFFORT; None for the model's own) overriding the
+    model's own settings. `limit` reviews only the first pairs by id. `review_support_only`
+    (default config.REVIEW_SUPPORT_ONLY) sends the claims that would count only through a
+    statement config.SUPPORT_ONLY exempts too. Raises ReviewError for a missing input or an
+    unusable model."""
     work, cache_dir, prompt = Path(work), Path(cache_dir), Path(prompt)
     if review_support_only is None:
         review_support_only = config.REVIEW_SUPPORT_ONLY
@@ -496,10 +501,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workers", type=int, default=config.WORKERS, help="parallel calls")
     parser.add_argument(
         "--reasoning-effort",
-        default=None,
+        default=config.REVIEW_EFFORT,
         help="reasoning effort sent to the model ('none' is sent as such), or 'omit' to send "
-        "none (default: the model's in config.MODELS); it is part of the review prompt "
-        "version, so another effort reviews afresh",
+        "none (default: %(default)s, config.REVIEW_EFFORT, for any model that takes one); it is "
+        "part of the review prompt version, so another effort reviews afresh",
     )
     parser.add_argument(
         "--max-output-tokens",

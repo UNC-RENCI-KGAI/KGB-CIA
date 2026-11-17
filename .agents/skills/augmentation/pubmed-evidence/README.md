@@ -9,8 +9,8 @@ Checks a knowledge graph's edges against PubMed, the augmentation stage of KGB-C
   design, role, hedging, context and a verbatim evidence sentence, and checks every claim in
   code against Biolink and the abstract;
 - grounds the anatomy the claims name to UBERON;
-- has a stronger model find the evidence sentences code couldn't find, and review every claim
-  that would count;
+- has gpt-5.6-terra find the evidence sentences code couldn't find, and a second pass
+  (gpt-6-luna at medium effort) review every claim that would count;
 - refines every checked edge from its pair's claims, as DESIGN.md's step 6 says: an edge
   the abstracts support gains their PMIDs in its `publications`, with its support score and
   evidence, and each more specific statement they make is proposed as a new edge beside the
@@ -75,7 +75,7 @@ new default, it is used with a warning that says how to move it.
 | `pubmed` | `--max-abstracts` (20), `--limit N`, `--refresh`, `--no-nodenorm`, `--without-key` (search more than 500 uncached pairs without `NCBI_API_KEY`; the step stops otherwise) |
 | `label` | `--model` (gpt-6-luna), `--reasoning-effort E` (the model's: low for gpt-6-luna; `none` is sent as such, `omit` sends none), `--prompt FILE`, `--sample N --seed S` or `--pairs FILE`, `--dry-run` (with `--budget USD`: exit 1 over it), `--no-repair`, `--abstracts-per-call` (20), `--workers` (32), `--limit N` |
 | `ground` | `--refresh` |
-| `review` | `--model` (gpt-5.6-terra), `--reasoning-effort E`, `--prompt FILE`, `--workers` (32), `--limit N`, `--review-support-only` (off: `config.REVIEW_SUPPORT_ONLY`) |
+| `review` | `--model` (gpt-6-luna; `gpt-5.6-terra` still reviews), `--reasoning-effort E` (medium: `config.REVIEW_EFFORT`, for any model that takes one), `--prompt FILE`, `--workers` (32), `--limit N`, `--review-support-only` (off: `config.REVIEW_SUPPORT_ONLY`) |
 | `apply` | `--no-review` (for testing only), `--species-in-proposals` (off: `config.SPECIES_IN_PROPOSALS`), `--review-support-only` (off, as review), `--model`, `--prompt-version`, `--reviewer`, `--review-prompt-version` (default: from `label_run.json`) |
 | `evaluate` | `--gold FILE` (`<work>/gold.jsonl`), `--run MODEL[@PROMPT_VERSION]` (repeatable; default the run in `label_run.json`), `--species-in-proposals` (off, as apply); or `--draw N --seed S` (0) to draw the pairs to curate |
 | (none: every step) | `--model`, `--reasoning-effort`, `--review-model`, `--limit`, `--max-label-cost` (label only the first pairs that fit), `--budget USD` (stop before labeling when the estimate is over it), `--skip-review` |
@@ -83,9 +83,11 @@ new default, it is used with a warning that says how to move it.
 Environment (the repository's `.env.example` lists every variable): `AZURE_OPENAI_API_KEY`
 for labeling and review with the Azure OpenAI models (not for `--dry-run`), and
 `AZURE_OPENAI_BASE_URL` to point them at your own endpoint; `ANTHROPIC_API_KEY` or an
-`ant auth login` profile with Claude models. Labeling also uses the review model's,
-`AZURE_OPENAI_API_KEY` by default, for the evidence sentences code can't repair (about 4% of
-those not found; code repairs the rest without a call). `NCBI_EMAIL`, and
+`ant auth login` profile with Claude models. Labeling also uses the repair model's
+(gpt-5.6-terra, `config.REPAIR_MODEL`), `AZURE_OPENAI_API_KEY` by default, for the evidence
+sentences code can't repair (about 4% of those not found; code repairs the rest without a
+call). `KGB_AUGMENT_MODEL`, `KGB_AUGMENT_REVIEW_MODEL` and `KGB_AUGMENT_REPAIR_MODEL` change
+the label, review and repair models' defaults, each on its own. `NCBI_EMAIL`, and
 `NCBI_API_KEY` for 10 requests a second instead of 3, for the PubMed search (without it the
 step says so, and stops above 500 uncached searches unless `--without-key`). `KGB_PUBMED_CACHE`
 is the PubMed cache file, `shared.pubmed`'s, which every agent that reads PubMed shares

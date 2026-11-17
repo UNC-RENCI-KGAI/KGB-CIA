@@ -1,6 +1,6 @@
 ---
 name: pubmed-evidence
-description: "Check a Biolink knowledge graph's edges against PubMed — choose the edges worth checking, search PubMed for each node pair, have an LLM extract the claims each abstract makes about the pair, ground their anatomy to UBERON, have a stronger model review every claim that would count, then refine every checked edge in code: add the PMIDs of the abstracts that support it to its publications, and propose the more specific edges the abstracts state beside the originals. Use when asked to run, tune or rerun the augmentation agent, or to add literature evidence to the KGB-CIA graph."
+description: "Check a Biolink knowledge graph's edges against PubMed — choose the edges worth checking, search PubMed for each node pair, have an LLM extract the claims each abstract makes about the pair, ground their anatomy to UBERON, have a second pass review every claim that would count, then refine every checked edge in code: add the PMIDs of the abstracts that support it to its publications, and propose the more specific edges the abstracts state beside the originals. Use when asked to run, tune or rerun the augmentation agent, or to add literature evidence to the KGB-CIA graph."
 ---
 
 # PubMed evidence for the graph's edges
@@ -52,9 +52,9 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 |---|---|
 | `augment.py select [--rules FILE] [--capped-limit N] [--min-score X]` | Step 1: keep the edges worth checking, by scope rule (`reference/rules.md`), grouped by node pair; `scope_report.json` counts what each rule kept and every edge type skipped |
 | `augment.py pubmed [--limit N] [--max-abstracts N] [--refresh] [--without-key]` | Step 2: one PubMed search per pair (names, synonyms, MeSH), the abstracts it finds and those the edges already cite |
-| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run [--budget USD]] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and repairs evidence sentences that weren't found: code first, the review model only for those code can't place |
+| `augment.py label [--model M] [--prompt FILE] [--sample N --seed S \| --pairs FILE] [--dry-run [--budget USD]] [--no-repair]` | Step 3: one request per pair; the model gives each abstract's study design and its claims about the pair. Code checks every claim against Biolink and the abstract, and repairs evidence sentences that weren't found: code first, the repair model (gpt-5.6-terra) only for those code can't place |
 | `augment.py ground [--refresh]` | Step 4: the anatomy the claims name, to UBERON terms; pins the UBERON release. No model calls |
-| `augment.py review [--model M] [--review-support-only]` | Step 5: a stronger model upholds or rejects, in one pass, each claim that would count: one that would add a PMID to an edge or propose a more specific edge. A support-only statement (`ameliorates_condition` under `treats`, `config.SUPPORT_ONLY`) isn't sent unless `--review-support-only` |
+| `augment.py review [--model M] [--review-support-only]` | Step 5: a second pass (gpt-6-luna at medium effort, by default) upholds or rejects, in one pass, each claim that would count: one that would add a PMID to an edge or propose a more specific edge. A support-only statement (`ameliorates_condition` under `treats`, `config.SUPPORT_ONLY`) isn't sent unless `--review-support-only` |
 | `augment.py apply [--no-review] [--species-in-proposals] [--review-support-only]` | Step 6: refine each checked edge from its pair's claims (its supporting PMIDs, and the more specific edges they propose) and write the graph, `refinements.jsonl` and `apply_report.json` |
 | `augment.py evaluate [--gold FILE] [--run MODEL[@PROMPT_VERSION] ...] [--species-in-proposals]` | Score a run's claims, and the support, PMIDs and proposals they lead to, against a curator's gold set |
 | `augment.py evaluate --draw N [--seed S]` | Draw N pairs for a gold set from `refinements.jsonl`, stratified by outcome (unsupported, supported, refined) and predicate family, into `work/gold_pairs.jsonl` |
@@ -68,9 +68,9 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
   for the Azure OpenAI models (`AZURE_OPENAI_BASE_URL` for your own endpoint), and for Claude
   models (`claude-...`) `ANTHROPIC_API_KEY` or an
   `ant auth login` profile. If they're missing, the step stops and says so; stop too, and
-  don't look for a key. Labeling also uses the review model's, for the few evidence sentences
-  code can't repair (about 4% of those not found); without them code's repairs still count,
-  and the label summary says the model's pass was skipped.
+  don't look for a key. Labeling also uses the repair model's (gpt-5.6-terra), for the few
+  evidence sentences code can't repair (about 4% of those not found); without them code's
+  repairs still count, and the label summary says the model's pass was skipped.
 - `NCBI_EMAIL` should be set (NCBI asks for a contact address); `NCBI_API_KEY` raises the rate
   from 3 to 10 requests a second. Never fill either in yourself with an address or key you
   found. If they're unset the script says so at the start of the pubmed step and runs at the
@@ -133,7 +133,7 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    a copy reads `claim-rules.md` from beside it if there is one, else the skill's. Read
    `work/label_sample.md` and judge every claim against its abstract yourself. Look for:
    - evidence sentences `NOT FOUND`: paraphrased or stitched ones, and each one's repair beside
-     it with who made it (`code`, or the review model for a quote code couldn't place), which
+     it with who made it (`code`, or the repair model for a quote code couldn't place), which
      should be the sentence the claim rests on or `none`, never a loosely related one;
    - `INVALID` claims and their errors (the summary lists the most common): qualifiers the
      predicate doesn't take, a predicate that "fits neither way" between the nodes. Some slips
@@ -186,7 +186,7 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
 6. **Label everything.** `augment.py label --prompt work/prompts/label.md --model MODEL`, as a
    background task (stderr to `work/label.log`). When it succeeds it writes
    `work/label_run.json`, which names the model, prompt version, effort and sentence repairs
-   (the code's, then the review model's) that ground, review, step 6 and the pipeline's full
+   (the code's, then the repair model's) that ground, review, step 6 and the pipeline's full
    run use (`--sample`, `--pairs` and `--dry-run` runs never change it). If more than 5% of the
    calls its pairs need fail (those answered by earlier runs count too, so a few calls that
    keep failing don't stop later runs) it returns 1; rerun the same command to retry, since
@@ -200,11 +200,17 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
    returns 1 if UBERON can't be fetched or more than 5% of lookups fail; rerun it. Until a
    rerun looks up a name whose lookup failed, apply holds its pair.
 
-8. **Review the claims that would count.** `augment.py review` (default model
-   `gpt-5.6-terra`; the other candidates are `gpt-6.1-sol`, `claude-sonnet-5-5` and
-   `claude-opus-5-5`). In one pass it sends every claim that would count and has no verdict of
-   this reviewer and prompt yet: each one that would add a PMID to an edge or propose a more
-   specific edge. Read a few rejections: a reviewer that rejects most claims means the
+8. **Review the claims that would count.** `augment.py review` (default `gpt-6-luna` at
+   `--reasoning-effort medium`, `config.REVIEW_EFFORT`; `--model gpt-5.6-terra` reviews with
+   terra, and the other candidates are `gpt-6.1-sol`, `claude-sonnet-5-5` and
+   `claude-opus-5-5`). luna at medium catches about half of terra's rejects for 18-24x less,
+   and agreed with a human reader more often in a blind read (DESIGN.md, "Second pass"). Step 6
+   and the full run use the review `label_run.json` names, so a work dir terra reviewed keeps
+   applying terra's verdicts; but `augment.py review` with no `--model` reviews it with luna and
+   names luna's review there, so pass `--model gpt-5.6-terra` to stay with terra. In one pass
+   it sends every claim that would count and has no verdict of this reviewer and prompt yet:
+   each one that would add a PMID to an edge or propose a more specific edge. Read a few
+   rejections: a reviewer that rejects most claims means the
    extraction is too loose, so go back to workflow step 4. Claims whose call failed, or that a
    reply left out, are sent again on the next run; until then step 6 holds their pairs. It
    returns 1 if more than 5% of the calls the claims that would count need fail, those

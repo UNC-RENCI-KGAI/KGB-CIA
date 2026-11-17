@@ -22,10 +22,11 @@ This package keeps only `cli.py`, the stage's entry point: `kgb-augment` and
 
 In short: choose the edges whose relationships papers state as claims, search PubMed for each
 node pair, have an LLM write down the claims each abstract makes about the pair (each with a
-checked verbatim sentence), ground their anatomy to UBERON, and have a stronger model review
-every claim that would count. Then code refines every checked edge from its pair's claims, as
-step 6 of the skill's `DESIGN.md` says: an edge an abstract supports gains that abstract's PMID,
-and a more specific statement an abstract makes is proposed as a new edge beside the originals.
+checked verbatim sentence), ground their anatomy to UBERON, and have a second pass (gpt-6-luna
+at medium effort) review every claim that would count. Then code refines every checked edge
+from its pair's claims, as step 6 of the skill's `DESIGN.md` says: an edge an abstract supports
+gains that abstract's PMID, and a more specific statement an abstract makes is proposed as a new
+edge beside the originals.
 The LLM only extracts and reviews claims; code refines, and the claims are cached, so the graph
 can be rebuilt without calling a model.
 
