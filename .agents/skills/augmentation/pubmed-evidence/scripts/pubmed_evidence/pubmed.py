@@ -1,21 +1,13 @@
 """Step 2: search PubMed for each pair and fetch the abstracts, with `shared.pubmed`.
 
-`shared.pubmed.search_pairs` does the work: one ESearch per pair, by the nodes' names, synonyms,
-MeSH headings and NodeNorm's labels, then EFetch for the abstracts of its hits and of the PMIDs
-the pair's edges already cite, which are labeled even when the search misses them. Everything it
-fetches goes in the PubMed cache (`shared.pubmed.default_cache_path()`: KGB_PUBMED_CACHE, or
-data/cache/pubmed/pubmed.sqlite), so a rerun makes no requests and `pubmed.jsonl` is cheap to
-rewrite in full. This module reads the pairs and entities step 1 wrote and writes what the search
-found to `pubmed.jsonl`.
-
-Without `NCBI_API_KEY` NCBI allows 3 requests a second, not 10, and a big job drags: the Nov 12
-2026 run took 42 minutes for 2,957 pairs without a key and 75 seconds for 500 pairs with one,
-because the shell that ran it lacked the key. So the step says at its start when the key is
-missing, and a job of more than KEYLESS_SEARCHES uncached searches without one stops before
-sending anything, unless `--without-key` says to go on.
+`shared.pubmed.search_pairs` does the work and caches everything it fetches. This module reads
+the pairs and entities step 1 wrote, stops a large search that has no `NCBI_API_KEY`
+(`KEYLESS_SEARCHES`), and writes what the search found to `pubmed.jsonl`. See DESIGN.md, "Step
+2: PubMed query".
 
 What a paper's publication types make it is here too: its article type, whether it's retracted,
-and the study design they name (`article_type`, `study_design`).
+and the study design they name (`article_type`, `study_design`; DESIGN.md, "Study design and
+publication data").
 """
 
 from __future__ import annotations
@@ -271,6 +263,5 @@ def run(args: argparse.Namespace) -> int:
             "cached results are kept",
             file=sys.stderr,
         )
-    # As in step 3: a few transient failures leave those pairs unlabeled until a rerun, but
-    # many mean NCBI is unreachable, and later steps shouldn't run on that.
+    # The 5% rule (DESIGN.md, "How the agent runs").
     return 1 if result.too_many_failed else 0

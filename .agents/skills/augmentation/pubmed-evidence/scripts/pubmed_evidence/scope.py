@@ -1,80 +1,13 @@
 """Step 1 (`kgb-augment select`): choose the edges worth checking in the literature, and group
 them by node pair.
 
-An edge is checked when abstracts state its relationship as a claim that a paper could
-contradict (DESIGN.md, "Step 1: Which edges to query"). There are two kinds of rule.
+Scope rules (`Rule`: `DEFAULT_RULES`, or a `--rules` file) decide each edge (`decide`). Kept
+edges become one `SelectedStatement` per distinct statement, one `Pair` per unordered node pair
+and one `Entity` per node in a kept pair, written to the work directory with the scope report.
 
-A *statement rule* names predicates. It picks edges by (subject category, predicate, object
-category), matching on Biolink ancestry so the child predicates and categories the transform
-picks are covered, and, if it lists them, by how the edge was made (its `knowledge_level` and
-`agent_type`). The first statement rule that matches an edge decides its tier:
-
-- `query` rules keep every matching edge.
-- `capped` rules (gene-gene, gene-phenotype, gene-trait, text-mined-location) keep only their
-  best-scored `--capped-limit` pairs, after dropping statements below `--min-score` if given;
-  ties, unscored pairs included, go to the pair with the most sources, then by a hash of the
-  pair id (`cap_rank`).
-- `skip` rules keep nothing. They exist so the report can say which skip rule covered an
-  edge type, and so an edge type no rule covers shows up as `unmatched`.
-
-A statement rule matches an edge in its own direction, and also reversed when the rule is
-`symmetric` or Biolink marks the edge's predicate symmetric (`interacts_with`, `binds`, ...),
-since a source may write either "A binds B" or "B binds A". One that lists knowledge levels or
-agent types matches only an edge whose own is among them.
-
-A *provenance rule* names knowledge levels or agent types and no predicates (nor a subject, an
-object or `symmetric`). It picks no edges by itself: it lowers the tier of the edges a
-statement rule picked (`decide`). When the statement rule isn't a skip, and the first
-provenance rule that the edge's knowledge level and agent type match has a tier no higher than
-the statement rule's (skip < capped < query), the edge takes the provenance rule's tier: a skip
-is reported as `skip:<provenance rule>`, and a capped edge goes into the provenance rule's own
-cap. Its statement still names its statement rule (`SelectedStatement.rule`), which sets the
-predicates the pair's claims may use, and names the provenance rule beside it
-(`SelectedStatement.provenance_rule`). A statement made of edges in the statement rule's own
-tier and edges a provenance rule lowered takes the higher tier, and no provenance rule; one
-whose kept edges were all lowered takes the highest tier among them, then the provenance rule
-first in rule order. Every kept edge counts in the statement's edges, sources, PMIDs and score.
-So order matters among statement rules, and among provenance rules, but not between the two.
-
-The default provenance rules cap edges mined from the literature (`text-co-occurrence` on
-`knowledge_level: text_co_occurrence`, `text-mined` on `agent_type: text_mining_agent`),
-whatever their predicate: eRAM writes a co-mention as `gene_associated_with_condition`. They
-carry no publications or supporting sentence, so this step is the only one that can check
-them, and it isn't circular: label asks whether an abstract states the relationship, not
-whether it mentions both entities. The cap bounds the cost. A rules file can still skip them.
-
-A negated source edge (`negated: true`) is kept like any other, as its own statement apart from
-the positive one. Nothing is narrower than a negated statement (`refine.Lattice.entails`), so
-step 6 never supports it. The edges step 6 added on an earlier run (their `id` starts with
-`kgbcia-augmentation:`) are skipped: step 6 proposes them again from the edges they refine,
-which are checked instead. Edges whose subject or object is not in `nodes.jsonl` are skipped
-too. Both are counted in the report, as are the negated edges kept, and the kept edges whose
-predicate doesn't read from their subject to their object the way Biolink's domain, range and
-canonical direction put it (`misdirected_edges`, by `biolink.oriented`): 'gene
-condition_associated_with_gene disease'. They're kept and checked as written, but the label
-step reads claims Biolink's way round, so claims rarely reach them.
-
-Kept edges become one `SelectedStatement` per distinct statement (`graphio.edge_statement_id`),
-one `Pair` per unordered node pair and one `Entity` per node in a kept pair, in the work directory:
-`statements.jsonl`, `pairs.jsonl`, `entities.jsonl`, and `scope_report.json` with the counts.
-Each pair also carries, for each of its source PMIDs, the number of kept pairs that cite it
-(`citing_pairs`), which step 3's source screen reads.
-
-`--rules FILE` replaces the built-in rules with a JSON list of objects (or `{"rules": [...]}`)
-with the same fields as `Rule`, in order of precedence:
-
-    [{"id": "text-mined", "tier": "capped", "agent_type": ["text_mining_agent"]},
-     {"id": "gene-disease", "tier": "query",
-      "subject": ["biolink:GeneOrGeneProduct"],
-      "predicates": ["biolink:gene_associated_with_condition", "biolink:causes"],
-      "object": ["biolink:Disease"],
-      "symmetric": false}]
-
-`subject` and `object` list Biolink categories (empty or left out: any node); `tier` is
-`query`, `capped` or `skip`; `symmetric` defaults to false; `knowledge_level` and `agent_type`
-list the Biolink values the edge's may take (empty or left out: any). A rule that leaves
-`predicates` out is a provenance rule: it must list a knowledge level or an agent type, and
-can't set `subject`, `object` or `symmetric`.
+The rules, how they match, the caps, the rules file and the report are in reference/rules.md;
+the reasons are in DESIGN.md, "Step 1: Which edges to query"; the work files are in
+reference/work-files.md.
 """
 
 from __future__ import annotations
@@ -123,10 +56,8 @@ GENE = "biolink:GeneOrGeneProduct"
 # Drug is below ChemicalEntity.
 CHEMICAL = "biolink:ChemicalEntity"
 
-# Edge slots read as a confidence score for capped rules, best (highest) value wins. Scales
-# differ between sources, so `--min-score` compares against the raw value. Not
-# `lit_support_score`: step 6 writes that, from the literature, and a source's confidence is
-# wanted.
+# Edge slots read as a source's confidence score for capped rules; the highest value wins
+# (reference/rules.md, "Capped rules").
 SCORE_SLOTS = (
     "score",
     "confidence_score",
@@ -145,10 +76,8 @@ TIER_RANK = {"skip": 0, "capped": 1, "query": 2}
 
 
 class Rule(BaseModel):
-    """A scope rule (module docstring). A statement rule names predicates, and keeps edges (or
-    names them skipped) by category and predicate ancestry, and by the edge's knowledge level
-    and agent type if it lists them. A provenance rule names only knowledge levels or agent
-    types, and lowers the tier of the edges a statement rule keeps."""
+    """A scope rule: a statement rule names predicates; a provenance rule names only knowledge
+    levels or agent types (reference/rules.md, "Two kinds of rule")."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -190,19 +119,12 @@ class Rule(BaseModel):
 
 
 DEFAULT_RULES: tuple[Rule, ...] = (
-    # Provenance rules: an edge mined from the literature (a co-mention, or a text-mining
-    # pipeline's reading of one) is capped, whatever statement rule keeps it. Such edges are the
-    # least trustworthy, and carry no publications or supporting sentence, so the cleaning
-    # stage's evidence check can't judge them: this step is the only one that can. Checking
-    # them isn't circular, since label asks whether an abstract states the relationship, not
-    # whether it mentions both entities. The cap bounds the cost: eRAM writes its co-mentions
-    # as `gene_associated_with_condition`, and in gene-disease's query tier they made 127,774
-    # of the Nov 12 2026 run's 131,195 pairs. Their place in this list doesn't matter, only
-    # their order between themselves.
+    # In order of precedence; reference/rules.md, "Built-in rules, in order", describes each.
+    # The comments here say only why a rule sits where it does. A provenance rule's place
+    # doesn't matter, only its order among the provenance rules.
     Rule(id="text-co-occurrence", tier="capped", knowledge_level=("text_co_occurrence",)),
     Rule(id="text-mined", tier="capped", agent_type=("text_mining_agent",)),
-    # Two entities mentioned together isn't a claim, and checking co-mention against PubMed
-    # would be circular. It is under `associated_with`, so it is skipped before the rules below.
+    # Its predicate is under `associated_with`, so it is skipped before the rules below.
     Rule(
         id="literature-co-occurrence",
         tier="skip",
@@ -220,9 +142,6 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         ),
         object=("biolink:Disease",),
     ),
-    # DrugCentral writes some indications to a phenotype (an HP term) rather than a disease:
-    # 920 `treats` pairs in the Nov 9 2026 graph. Disease and PhenotypicFeature are siblings, so
-    # this takes nothing from chemical-treats-disease.
     Rule(
         id="chemical-treats-phenotype",
         tier="query",
@@ -245,10 +164,9 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         ),
         object=(GENE,),
     ),
-    # Drug-target activity: ChEMBL, WOMBAT-PK, DrugMatrix, DrugCentral, GtoPdb, PDSP and others
-    # write it as `interacts_with`, a quarter with a `causal_mechanism_qualifier` (25,148 pairs
-    # in the Nov 9 2026 graph). After chemical-affects-gene, which keeps `binds` and
-    # `directly_physically_interacts_with`: both are below `interacts_with`.
+    # Drug-target activity, a quarter of it with a `causal_mechanism_qualifier`. After
+    # chemical-affects-gene, which keeps `binds` and `directly_physically_interacts_with`: both
+    # are below `interacts_with`.
     Rule(
         id="drug-target",
         tier="query",
@@ -256,9 +174,6 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         predicates=("biolink:interacts_with",),
         object=(GENE,),
     ),
-    # `associated_with` covers gene_associated_with_condition, genetically_associated_with,
-    # the likelihood predicates (ClinGen's "Likely Pathogenic" in Monarch), correlated_with and
-    # biomarker_for; `contributes_to` covers causes.
     Rule(
         id="gene-disease",
         tier="query",
@@ -281,10 +196,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         predicates=("biolink:has_phenotype",),
         object=("biolink:PhenotypicFeature",),
     ),
-    # TIGA's GWAS gene-trait associations, to EFO traits (564,098 pairs in the Nov 9 2026
-    # graph), which NodeNorm types PhenotypicFeature or only DiseaseOrPhenotypicFeature. Capped
-    # like gene-phenotype: numerous, and trait names are long. After gene-disease, since
-    # Disease is below DiseaseOrPhenotypicFeature.
+    # After gene-disease, since Disease is below DiseaseOrPhenotypicFeature.
     Rule(
         id="gene-trait",
         tier="capped",
@@ -292,12 +204,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         predicates=("biolink:associated_with", "biolink:contributes_to"),
         object=("biolink:PhenotypicFeature", "biolink:DiseaseOrPhenotypicFeature"),
     ),
-    # COMPARTMENTS' text mining: a protein `located_in` a cellular component that abstracts
-    # mention together (4,782,056 pairs in the Nov 9 2026 graph, scored, with no publications),
-    # so only this step can check it. Its edges are all text co-occurrence, so they go into the
-    # text-co-occurrence provenance rule's cap and the report counts them there; this rule sets
-    # the predicates their pairs' claims may use. Before pathway-go, whose skip covers
-    # `located_in` CellularComponent: curated GO locations stay skipped.
+    # Before pathway-go, whose skip covers `located_in` CellularComponent.
     Rule(
         id="text-mined-location",
         tier="capped",
@@ -306,8 +213,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         object=("biolink:CellularComponent",),
         knowledge_level=("text_co_occurrence",),
     ),
-    # Pathway and GO names rarely appear verbatim in abstracts, and GO annotations carry their
-    # own references and evidence codes. Pathway is below BiologicalProcessOrActivity.
+    # Pathway is below BiologicalProcessOrActivity.
     Rule(
         id="pathway-go",
         tier="skip",
@@ -315,7 +221,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         predicates=("biolink:participates_in", "biolink:enables", "biolink:located_in"),
         object=("biolink:BiologicalProcessOrActivity", "biolink:CellularComponent"),
     ),
-    # Measurements rather than claims, and very numerous. Cell is below AnatomicalEntity.
+    # Cell is below AnatomicalEntity.
     Rule(
         id="expression",
         tier="skip",
@@ -323,8 +229,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         predicates=("biolink:expressed_in",),
         object=("biolink:AnatomicalEntity",),
     ),
-    # True by construction. DESIGN.md names the first of each pair; the inverses are the same
-    # relationships written the other way round.
+    # Each relationship is listed with its inverse, the same relationship the other way round.
     Rule(
         id="by-construction",
         tier="skip",
@@ -347,7 +252,7 @@ class RulesError(ValueError):
 
 
 def load_rules(path: Path) -> tuple[Rule, ...]:
-    """Rules from a JSON file (format in the module docstring)."""
+    """Rules from a JSON file (reference/rules.md, "`--rules FILE`"). Raises `RulesError`."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
@@ -432,9 +337,9 @@ def decide(
 ) -> tuple[Rule | None, Rule | None]:
     """(statement rule, provenance rule) for an edge. The statement rule is the first that
     matches it (`match_rule`), None if none does: the edge is unmatched. The provenance rule,
-    if any, sets the edge's tier instead of the statement rule: the first provenance rule the
-    edge's knowledge level and agent type match (`provenance_rule`), when the statement rule
-    isn't a skip and the provenance rule's tier is no higher than its (`TIER_RANK`)."""
+    if not None, sets the edge's tier instead: the first the edge's knowledge level and agent
+    type match (`provenance_rule`), when the statement rule isn't a skip and the provenance
+    rule's tier is no higher than its (`TIER_RANK`)."""
     rules = tuple(rules)
     statement = match_rule(
         rules, subject_categories, predicate, object_categories, knowledge_level, agent_type
@@ -583,29 +488,24 @@ def _read_categories(input_dir: Path) -> dict[str, tuple[str, ...]]:
 @cache
 def _shown(categories: tuple[str, ...]) -> str:
     """The category the report's skipped breakdown names a node by: its most specific
-    (`biolink.shown_category`), as the label and review messages show it, not its first, which
-    in the cleaned graph's alphabetical lists is BiologicalEntity. Cached by the category list,
-    which `_read_categories` shares between nodes."""
+    (`biolink.shown_category`). Cached by the category list, which `_read_categories` shares
+    between nodes."""
     return biolink.shown_category(categories) or ""
 
 
 def cap_rank(pair: str, best: float | None, sources: int) -> tuple:
     """A pair's sort key in a capped rule, first kept first: scored before unscored, the best
-    score of the rule's statements in it highest first, then the most distinct
-    `primary_knowledge_source`s among those statements, then the SHA-256 of the pair id, and
-    last the pair id. The hash, stable across runs and machines unlike `hash()`, spreads an
-    unscored cap over the graph: by pair id alone it would keep the pairs whose CURIEs sort
-    first, one prefix's."""
+    score highest first, then the most distinct sources, then the SHA-256 of the pair id, and
+    last the pair id (reference/rules.md, "Capped rules"). The SHA-256 is stable across runs
+    and machines, unlike `hash()`."""
     digest = hashlib.sha256(pair.encode("utf-8")).hexdigest()
     return (best is None, -(best or 0.0), -sources, digest, pair)
 
 
 def citing_pairs(pair_pmids: Iterable[Iterable[str]]) -> Counter[str]:
-    """PMID -> the number of pairs citing it, from each kept pair's source PMIDs. Select
-    counts over every pair it keeps and writes each pair's counts on it
-    (`Pair.source_pmid_pairs`), so the label step's source screen (config.SOURCE_SCREEN_MIN_PAIRS)
-    doesn't depend on how pairs.jsonl is later split into parts or how many pairs step 2
-    searches."""
+    """PMID -> the number of pairs citing it, from each kept pair's source PMIDs. Written on
+    each pair as `Pair.source_pmid_pairs` for the label step's source screen (DESIGN.md,
+    "Source papers many pairs cite")."""
     return Counter(p for pmids in pair_pmids for p in set(pmids))
 
 
@@ -616,10 +516,8 @@ def _apply_caps(
     min_score: float | None,
 ) -> dict[str, dict[str, int]]:
     """Drop capped-rule statements below `min_score`, then all but the top `capped_limit`
-    pairs of each capped rule. A statement is in the cap of its provenance rule if it has one,
-    else of its statement rule (`_Accumulator.owner`). Every pair in the rule's statements
-    counts against its cap, a pair another rule keeps too: the statements kept widen what
-    review sends. Returns what was dropped, per rule."""
+    pairs of each capped rule (reference/rules.md, "Capped rules"). A statement is in the cap
+    of its `_Accumulator.owner`. Returns what was dropped, per rule."""
     by_rule: dict[str, list[str]] = defaultdict(list)
     for sid, acc in statements.items():
         by_rule[acc.owner].append(sid)

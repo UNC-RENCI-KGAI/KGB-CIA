@@ -13,16 +13,15 @@
 """The augmentation agent's steps, as `kgb-augment` and the pipeline run them.
 
     augment.py [--input GRAPH] [--output OUT] [--work DIR] [--cache-dir DIR] STEP [OPTIONS]
-    augment.py [--input GRAPH] [--output OUT] [--model M] [--review-model M] [--limit N]
-               [--skip-review]
+    augment.py [--input GRAPH] [--output OUT] [--work DIR] [--cache-dir DIR] [--model M]
+               [--reasoning-effort E] [--review-model M] [--limit N] [--max-label-cost USD]
+               [--budget USD] [--skip-review]
 
 STEP is one of select, pubmed, label, ground, review, apply and evaluate; `augment.py STEP --help`
-lists its options. With no STEP it runs every step but evaluate, in order: select, pubmed,
-label, ground, review, apply. With a label_run.json in the work directory, that full run
-continues the run it names (its model, prompt and reviewer), reusing every cached claim and
-verdict.
+lists its options. With no STEP it runs every step but evaluate, in that order (DESIGN.md, "How
+the agent runs").
 
-Run from the repository root; `--help` lists every option.
+Run from the repository root; `--help` lists every option, and README.md describes them.
 """
 
 from pathlib import Path

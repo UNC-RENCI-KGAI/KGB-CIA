@@ -1,9 +1,9 @@
 """Defaults for every step, in one place.
 
 `kgb-augment` must run with no arguments (the pipeline calls `main([])`), so every path, model
-and cap has a default here. The CLI overrides any of them; a few also read an environment
-variable so a shared setup (a shared cache directory, another model endpoint) needs no flags.
-PubMed's settings (the cache file, the NCBI key and email) are `shared.pubmed`'s.
+and cap has a default here. README.md, "Options" and "Environment", lists the flags and
+variables that override them. PubMed's settings (the cache file, the NCBI key and email) are
+`shared.pubmed`'s.
 """
 
 from __future__ import annotations
@@ -17,40 +17,34 @@ from typing import Literal
 
 from shared.paths import DEFAULT_CACHE_ROOT, REPO_ROOT, cache_dir
 
-# The augmentation agent's infores ID. Every edge it proposes gets it as
-# `primary_knowledge_source`, with PubMed, where its claims come from, as the one
-# `supporting_data_source` (a list: the Biolink slot is multivalued); and is a knowledge
-# assertion that text mining made.
+# The provenance of every edge the agent proposes (DESIGN.md, "What step 6 writes").
+# `supporting_data_source` is written as a one-item list: the Biolink slot is multivalued.
 INFORES = "infores:kgbcia-augmentor"
 SUPPORTING_DATA_SOURCE = "infores:pubmed"
 NEW_EDGE_KNOWLEDGE_LEVEL = "knowledge_assertion"
 NEW_EDGE_AGENT_TYPE = "text_mining_agent"
 
-# The filter stage's output and this stage's output. Paths are relative to where the command
-# runs; the pipeline runs from the repository root.
+# The filter stage's output and this stage's, relative to where the command runs (the pipeline
+# runs from the repository root).
 DEFAULT_INPUT = Path(os.environ.get("KGB_AUGMENT_INPUT", "data/filter"))
 DEFAULT_OUTPUT = Path(os.environ.get("KGB_AUGMENT_OUTPUT", "data/augmentation"))
 # Intermediate files of each step: `<output>/work` unless given.
 WORK_SUBDIR = "work"
-# The label cache and the UBERON release: KGB_AUGMENT_CACHE_DIR, else augmentation/ under the
-# cache root (`shared.paths`: KGB_CACHE_DIR, else the repository's data/cache), whatever
-# directory a command runs from (`default_cache_dir`). Point it at a shared directory to share
-# them across a team. The PubMed cache is shared.pubmed's: KGB_PUBMED_CACHE, else
-# pubmed/pubmed.sqlite under the same root.
+# The variable naming the directory of the label cache and the UBERON release
+# (`default_cache_dir`; reference/work-files.md, "Caches").
 CACHE_DIR_ENV = "KGB_AUGMENT_CACHE_DIR"
 # The default with KGB_CACHE_DIR unset.
 DEFAULT_CACHE_DIR = DEFAULT_CACHE_ROOT / "augmentation"
-# The default before Nov 13 2026: data/augmentation/cache, relative to where the command ran,
-# which for the pipeline is the repository root. While one of these holds a label cache and the
-# new default doesn't, it is used still, so its claims aren't paid for again.
+# The old default, relative to the working directory and to the repository root. One that holds
+# a label cache is used while the default holds none, so its claims aren't paid for again.
 LEGACY_CACHE_DIRS = (Path("data/augmentation/cache"), REPO_ROOT / "data" / "augmentation" / "cache")
 LABEL_CACHE = "labels.sqlite"
 
 
 def default_cache_dir() -> Path:
     """KGB_AUGMENT_CACHE_DIR if set (`~` expanded), else augmentation/ under the cache root
-    (`shared.paths.cache_dir`). But while only the old default, data/augmentation/cache, holds a
-    label cache, that one, with a warning to move it."""
+    (`shared.paths.cache_dir`); but one of LEGACY_CACHE_DIRS, with a warning to move it, while
+    it holds a label cache and the default doesn't."""
     if value := os.environ.get(CACHE_DIR_ENV):
         return Path(value).expanduser()
     path = cache_dir("augmentation")
@@ -73,23 +67,19 @@ def _warn_legacy(old: Path, new: Path) -> None:
     )
 
 
-# UBERON's release, whose is_a/part_of closure decides whether one anatomical context is at or
-# below another. The ground step fetches the release UBERON_URL pins into the cache directory
-# once; delete the file there to fetch it again after changing the pin.
+# The UBERON release the ground step pins, and its file name in the cache directory (DESIGN.md,
+# "Step 4: Grounding anatomy").
 UBERON_FILE = "uberon-basic.obo"
 UBERON_URL = "http://purl.obolibrary.org/obo/uberon/releases/2026-11-05/uberon-basic.obo"
 
-# Step 1: pairs kept per capped rule (gene-gene, gene-phenotype, gene-trait; text-co-occurrence
-# and text-mined, for edges mined from the literature), best-scored first.
+# Step 1: pairs kept per capped rule, best-scored first (DESIGN.md, "Step 1: Which edges to
+# query").
 CAPPED_LIMIT = 10_000
 
-# Step 3's source screen: a PMID that a pair has only as a source citation (its edges cite it,
-# and the search didn't find it) isn't read when at least this many pairs of the selection cite
-# it, unless its title and abstract name both of the pair's nodes. Select records the count
-# (`Pair.source_pmid_pairs`). Such a paper is a high-throughput study, such as BioPlex 3.0
-# (167,351 pairs of the Nov 13 search) or a GWAS catalog paper (30,000-116,000), whose abstract
-# names few of the pairs that cite it. On the Nov 6 runs, 558 answers from such papers held no
-# claim. Steps 5 and 6 leave the same PMIDs out. None turns the screen off.
+# Step 3's source screen: a PMID a pair has only as a source citation isn't read when at least
+# this many pairs of the selection cite it (`Pair.source_pmid_pairs`), unless its title and
+# abstract name both nodes. None turns the screen off. See DESIGN.md, "Source papers many pairs
+# cite". A GWAS catalog paper is cited by 30,000-116,000 pairs of the Nov 13 2026 search.
 SOURCE_SCREEN_MIN_PAIRS: int | None = 100
 
 # Step 4: the RENCI Name Resolver, which grounds the anatomy claims name.
@@ -97,31 +87,26 @@ NAMERES_URL = os.environ.get("NAMERES_URL", "https://name-resolution-sri.renci.o
 
 # Steps 3 and 5: models. Each must be in MODELS, below.
 BULK_MODEL = os.environ.get("KGB_AUGMENT_MODEL", "gpt-6-luna")
-# Step 5's reviewer: gpt-6-luna, at REVIEW_EFFORT. Against gpt-5.6-terra on 6,953 claims
-# (2026-11-16), gpt-6-luna at medium agreed at Cohen's kappa 0.47-0.51 and caught about half of
-# terra's rejects, for 18-24x less; in a blind read of 33 records it agreed with the human
-# reader on 27, terra on 19. terra is still there: `review --model gpt-5.6-terra`.
+# Step 5's reviewer, at REVIEW_EFFORT (DESIGN.md, "How the agent runs", "Second pass").
 REVIEW_MODEL = os.environ.get("KGB_AUGMENT_REVIEW_MODEL", "gpt-6-luna")
 # The effort review sends when no --reasoning-effort is given, whatever the model (None: each
 # model's own in MODELS). As an override it follows `llm.run_effort`: a model that takes no
 # effort is sent none, and one whose `efforts` don't list it is an error before any call.
-# medium is gpt-5.6-terra's own, so terra's reviews keep their version (review@72d23654).
+# medium is gpt-5.6-terra's own in MODELS, so terra's reviews have the same prompt version
+# with or without it.
 REVIEW_EFFORT: str | None = "medium"
-# The end of step 3 repairs quotes that weren't found with code first (quote_align.py), and
-# with this model those code can't place. It is its own setting, not the reviewer: its repairs
-# are the ones review, evaluate and step 6 read after the code's, so changing it starts the
-# model's repairs afresh.
+# The model that repairs the quotes code can't place (DESIGN.md, "Quotes and repair"). Repairs
+# are cached under their repairer, so changing it starts the model's repairs afresh.
 REPAIR_MODEL = os.environ.get("KGB_AUGMENT_REPAIR_MODEL", "gpt-5.6-terra")
 # The most abstracts and review items one call sends; a pair with more is split across calls.
 ABSTRACTS_PER_CALL = 20
 REVIEW_ITEMS_PER_CALL = 40
-# Parallel calls for label (its quote repair too) and review. On Azure gpt-6-luna, 32 gave 1.84x
-# the throughput of 16 (2026-11-16), near the resource's 7.5M tokens a minute: Azure counts each
-# call's prompt plus its output reservation, about 27k tokens a label call. gpt-5.6-terra's
-# limits weren't measured.
+# Parallel calls for label (its quote repair too) and review (DESIGN.md, "How the agent runs",
+# "Parallel calls"). Azure counts each call's prompt plus its output reservation against the
+# tokens-a-minute limit, about 27k tokens a label call. gpt-5.6-terra's limits weren't measured.
 WORKERS = 32
-# The full run (`kgb-augment` with no step, as the pipeline runs it) labels only as many pairs
-# as step 3's estimated cost, in US dollars, allows. Pairs already labeled cost nothing.
+# The full run labels only as many pairs as this cap on step 3's estimated cost, in US dollars,
+# allows. Pairs already labeled cost nothing.
 FULL_RUN_LABEL_BUDGET = 20.0
 
 
@@ -137,8 +122,8 @@ class Price:
 
 
 # The reasoning effort that sends no effort setting at all, so the service's default applies
-# (`llm.sent_effort`). It isn't 'none', a level some models take and are sent as such:
-# gpt-6-luna at 'none' doesn't reason, and with no setting it reasons at medium.
+# (`llm.sent_effort`). It isn't 'none', a level some models take and are sent as such
+# (DESIGN.md, "How the agent runs", "Reasoning effort").
 OMIT_EFFORT = "omit"
 
 # The efforts each API takes, where known. gpt-6-luna's were probed on the RENCI endpoint on
@@ -170,11 +155,10 @@ class Model:
     efforts: tuple[str, ...] | None = None
 
 
-# Azure OpenAI deployments, under Pi's standard variable names. The ids and prices below are the
-# deployments `.pi/models.json` lists for Pi (the project's own endpoint, the default URL). Pi
-# reads that file itself, so a price change there has to be copied here by hand. To use your
-# own Azure OpenAI resource, set AZURE_OPENAI_BASE_URL and deploy models under these ids, or
-# use a Claude model instead.
+# Azure OpenAI deployments, under Pi's standard variable names. The ids and prices are those
+# `.pi/models.json` lists for the project's own endpoint, the default URL; a price change there
+# has to be copied here by hand. AZURE_OPENAI_BASE_URL names another resource, with models
+# deployed under these ids.
 AZURE_KEY_VAR = "AZURE_OPENAI_API_KEY"
 AZURE_URL_VAR = "AZURE_OPENAI_BASE_URL"
 AZURE_DEFAULT_URL = "https://renci-analytics.openai.azure.com/openai/v1"
@@ -245,8 +229,7 @@ MODELS: dict[str, Model] = {
         _azure("Kimi-K2.6", Price(0.95, 4, 0.16, 0)),
         # Claude candidates, bulk then review; each effort is Anthropic's default for the model,
         # until tuned. Haiku's price rises for a prompt over 100,000 tokens (reads and writes
-        # count). Sonnet and Opus fall back server-side when a safety classifier declines;
-        # Haiku has no fallback, so its refusals are failed calls.
+        # count). Sonnet and Opus ask for the server-side fallback; Haiku has none.
         _claude(
             "claude-haiku-5-5",
             Price(0.1, 0.5, 0.01, 0.125),
@@ -262,11 +245,8 @@ MODELS: dict[str, Model] = {
     )
 }
 
-# The study design PubMed's publication types name. Where an abstract's types name one, it
-# overrides the extractor's answer; where they name several, the one StudyDesign lists first
-# wins. The types not here name none, so the extractor's answer stands: among them the
-# veterinary trials and observational studies (animal studies), trial protocols, and scoping
-# reviews.
+# The study design each PubMed publication type names; a type not listed names none, so the
+# extractor's answer stands (DESIGN.md, "Study design and publication data").
 PUBMED_DESIGNS = {
     "Meta-Analysis": "meta_analysis",
     "Network Meta-Analysis": "meta_analysis",
@@ -289,9 +269,9 @@ PUBMED_DESIGNS = {
 }
 
 # Step 3: the species a claim may name (the reply schema's enum, in this order) and the NCBITaxon
-# term each stands for: a claim's organism and its species_context_qualifier. `other` has no
-# term: its claim names no species, and its notes name the organism. "macaque" is the genus,
-# since abstracts often don't say which; "yeast" is baker's yeast.
+# term each stands for. `other` has no term: its claim names no species, and its notes name the
+# organism. "macaque" is the genus, since abstracts often don't say which; "yeast" is baker's
+# yeast.
 HUMAN = "NCBITaxon:9606"
 SPECIES_TAXA: dict[str, str | None] = {
     "human": HUMAN,
@@ -308,21 +288,16 @@ SPECIES_TAXA: dict[str, str | None] = {
     "other": None,
 }
 
-# Step 6 (rule 7 in DESIGN.md): whether proposed edges keep the species their claims name, such
-# as "E in human". Off, step 6 takes species_context_qualifier out of every proposal, except one
-# that refines an original with that same species, and merges those that become the same
-# statement; the originals' support and PMIDs are the same either way.
+# Step 6, rule 7: whether proposed edges keep the species their claims name, such as "E in
+# human" (DESIGN.md, "Refinement (`refine.py`)", "Species in proposals").
 # `apply --species-in-proposals` turns it on.
 SPECIES_IN_PROPOSALS = False
 
-# Steps 5 and 6: narrower predicates that only support an edge of the key's predicate. A claim
-# statement whose predicate is one listed here, or below one, adds its PMID to such an edge
-# like any narrower statement, but is never proposed as a more specific edge than that edge:
-# label may say "ameliorates", but a `treats` edge isn't refined to it. Unless
-# REVIEW_SUPPORT_ONLY, step 5 doesn't review a claim for such a statement, and step 6 counts it
-# without a verdict; a rejected claim counts for nothing either way. With REVIEW_SUPPORT_ONLY,
-# review judges such a claim and only an upheld one counts, as for any other statement.
-# `review --review-support-only` and `apply --review-support-only` turn it on for a run.
+# Steps 5 and 6, rule 11: for each predicate, the narrower predicates that only support its
+# edges. A statement with one of them, or one below it, adds its PMID to such an edge but is
+# never proposed under it. REVIEW_SUPPORT_ONLY is whether review judges such claims
+# (`--review-support-only` on review and apply). See DESIGN.md, "Refinement (`refine.py`)",
+# "Support only".
 SUPPORT_ONLY: dict[str, tuple[str, ...]] = {
     "biolink:treats": ("biolink:ameliorates_condition",),
 }

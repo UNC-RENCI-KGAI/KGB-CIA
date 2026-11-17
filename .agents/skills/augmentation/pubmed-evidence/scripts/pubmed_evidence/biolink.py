@@ -5,27 +5,18 @@ the Biolink 4.4.6 YAML bundled in the `biolink-model` package instead (the versi
 `shared/schema.py` uses) with an empty predicate map, so it needs no network and tests can use
 it. The Toolkit is built once and shared, and every lookup is cached: steps call them per edge.
 
-Used by step 1 (category and predicate ancestry), `sentences.py` (predicate names), step 3
-(the predicates a reply schema offers, with their `opposite_of` partners; which qualifiers a
-pair's association class allows; and checking the LLM's claims) and `refine.py` (the predicate
-and qualifier hierarchies, and whether a statement fits its domain and range). `oriented` reads
-a statement the way round a predicate's domain, range, inverse and canonical direction put it:
-the domain and range enforce the subject and object order, a predicate that fits only the other
-way round becomes its inverse, and one that fits neither way can't be read at all. The label
-step's predicate lists and checks, the claims refinement compares, and select's count of edges
-written otherwise all read statements this way.
+`oriented` reads a statement the way round Biolink puts it (DESIGN.md, "Which predicates, and
+which way round"); select, label and refine all read statements through it.
 
-`bmt.get_associations` is not used to find an edge's association class, because it matches far
-too loosely for these edges. It accepts any class that leaves the predicate unconstrained, so
-classes whose ranges are broad mixins fit everything: `FunctionalAssociation` and
-`GeneToGoTermAssociation` take any object that is an `OntologyClass` (Disease is one), and
-`ReactionToCatalystAssociation` any `MolecularEntity` subject. It also reads `slot_usage` only
-from the class, its parent and its mixins, and checks only `subproperty_of` on the predicate, so
-it misses classes such as `GeneToDiseaseAssociation` whose predicate range is an enum. Here
-`associations` reads the induced (fully inherited) subject, predicate and object slots of every
-association class, keeps the classes whose ranges hold the edge's categories and whose predicate
-constraint holds its predicate, prefers classes that constrain the predicate, and drops any
-class another fitting class beats on all three.
+`bmt.get_associations` is not used to find an edge's association class: it matches too loosely
+for these edges. It accepts any class that leaves the predicate unconstrained, so classes whose
+ranges are broad mixins fit everything (`GeneToGoTermAssociation` takes any `OntologyClass`
+object, and Disease is one). It also checks only `subproperty_of` on the predicate, so it
+misses classes whose predicate range is an enum (`GeneToDiseaseAssociation`). `associations`
+reads the induced subject, predicate and object slots of every association class instead,
+keeps the classes whose ranges hold the edge's categories and whose predicate constraint holds
+its predicate, prefers classes that constrain the predicate, and drops any class another
+fitting class beats on all three.
 """
 
 from __future__ import annotations
@@ -258,8 +249,7 @@ def most_specific(categories: list[str] | tuple[str, ...]) -> tuple[str, ...]:
 
 def shown_category(categories: list[str] | tuple[str, ...]) -> str | None:
     """The one category a message shows for a node, as a CURIE, whatever order the node lists
-    them in (the cleaned graph lists them alphabetically, BiologicalEntity first): of its
-    `most_specific`, the narrowest, the one with the fewest classes at or below it (mixins
+    them in: of its `most_specific`, the one with the fewest classes at or below it (mixins
     included), and of equals the first the node lists. So a node that is a NamedThing and a
     GeneOrGeneProduct, and no class below either, shows GeneOrGeneProduct. A node with no
     category Biolink knows shows its first; one with none, None."""
@@ -305,13 +295,13 @@ def oriented(
     (predicate, turned): the statement uses that predicate, from its subject to its object, or,
     if `turned`, from its object to its subject. None if the predicate fits neither way.
 
-    A predicate that fits the subject and object (`fits`) stays. One defined the other way
-    round is replaced by its inverse ('gene condition_associated_with_gene disease' reads 'gene
-    gene_associated_with_condition disease'); a symmetric one fits either way. Then a predicate
-    Biolink doesn't take as canonical is turned round to its canonical inverse where that fits
-    ('disease condition_associated_with_gene gene' is 'gene gene_associated_with_condition
-    disease'), so the same statement always reads the same way. A predicate with no inverse
-    that fits only the other way round can't be put this way round, so it fits neither way.
+    A predicate that fits the subject and object (`fits`) stays, and so does a symmetric one
+    that fits the other way round. One defined the other way round is replaced by its inverse
+    ('gene condition_associated_with_gene disease' reads 'gene gene_associated_with_condition
+    disease'). Then a predicate Biolink doesn't take as canonical is turned round to its
+    canonical inverse where that fits ('disease condition_associated_with_gene gene' is 'gene
+    gene_associated_with_condition disease'), so the same statement always reads the same way.
+    A predicate with no inverse that fits only the other way round fits neither way.
     """
     return _oriented(tuple(subject_categories), predicate, tuple(object_categories))
 

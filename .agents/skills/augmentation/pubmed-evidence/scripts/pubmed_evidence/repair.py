@@ -1,37 +1,15 @@
 """The end of step 3: repair the evidence sentences the label model misquoted, with code first
 and the repair model only for what code can't place.
 
-About 1% of the bulk model's quotes aren't in their abstract (`quotes.quote_found`), and a claim
-whose evidence sentence isn't found counts for nothing (rule 1 in DESIGN.md's step 6). Nearly
-all of them are the abstract's own words, slightly off: sentences stitched together without
-'...', words dropped or changed, punctuation, a 'Title:' prefix. So once the claims are in and
-checked, each claim that passes every check but the sentence's, and whose sentence wasn't
-found, is repaired in two passes:
+Once the claims are in and checked, each claim that passes every check but the sentence's, and
+whose sentence wasn't found, is repaired by code (`quote_align.repair`), and by the repair
+model (config.REPAIR_MODEL) if code can't place its quote. A claim code placed is never sent to
+the model, even when the passage doesn't name both entities. `sentence_repairs` gives the
+repaired sentences that count.
 
-1. Code (`quote_align.repair`) finds the sentences of the title or abstract the quote was taken
-   from and quotes them whole, joining a sentence that names an entity the passage doesn't. It
-   makes no call, and its quote is verbatim by construction (`quote_found` checks it anyway).
-   Its repairs are stored under the repairer 'code' and `quote_align.VERSION`, even when it
-   returns none, so a claim is placed by code once.
-2. A claim code can't place (under half the quote's words are in the abstract: a made-up or
-   rewritten quote) gets one small call to the repair model (config.REPAIR_MODEL,
-   gpt-5.6-terra, whichever model reviews): the claim, the sentence that wasn't found, and the
-   abstract. The reply is a verbatim quote or null, and code checks it as it checks the first
-   pass's. A claim code placed is never sent, even when the passage doesn't name both entities.
-
-On the 409 such claims of the 2026-11-16 test, code placed 393 (every one verbatim) and left 16
-for the model, which found 9: 402 sentences found with 16 calls, against 347 with the model
-alone on all 409. A repair supplies a sentence and never changes the claim, which stays as
-stored.
-
-Repairs go to the label cache's `claim_repairs` table by claim (`cache.claim_id`) under
-(repairer, repair prompt version), one answered attempt per claim and repairer: code's none,
-the model's null, or a sentence that still isn't found, is kept and not tried again. A failed
-model call stores nothing, so the next run asks again; until then the sentence counts as not
-found. Step 6 takes a claim's sentence from the repairs `label_run.json` names (`repairers`, in
-priority order: the code's, then the model's), as it names the review: the first of them whose
-sentence was found (`sentence_repairs`). So where a claim has both, as one an earlier run sent
-to the model has, the code's counts and the model's is the fallback.
+DESIGN.md, "Quotes and repair", has the two passes, which repairs count and the measurements;
+reference/formats.md, "Repair reply", the model's reply; and reference/work-files.md the
+`claim_repairs` table.
 """
 
 from __future__ import annotations
@@ -92,8 +70,8 @@ def _describe(order: Sequence[tuple[str, str]]) -> str:
 
 def stale(run: records.LabelRun) -> str | None:
     """A warning when the repairs the run names aren't the ones a label run would make now (the
-    aligner, the repair prompt or the model changed since, or the run is from before code
-    repairs); None if they are, or the run names none."""
+    aligner, the repair prompt or the model changed since, or the run names no code repair);
+    None if they are, or the run names none."""
     order = run.repair_order()
     if not order or order == current():
         return None

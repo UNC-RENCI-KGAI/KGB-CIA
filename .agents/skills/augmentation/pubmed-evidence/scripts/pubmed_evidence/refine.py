@@ -1,37 +1,10 @@
 """Edge refinement: which of a pair's edges its claims support, with which PMIDs, and the more
 specific edges they propose.
 
-Implements step 6's rules for one pair of nodes, cited by the numbers DESIGN.md's step 6 gives
-them ("rule 2"). Pure: no I/O and no model calls. Biolink's hierarchies come from `biolink`
-(offline, from the bundled model) and UBERON's from the closure the caller passes in.
-
-- **Narrower.** S1 ⊑ S2 (S1 is narrower than or equal to S2) when they join the same subject
-  and object, S1's predicate is S2's or below it (mixins included), and every qualifier S2
-  sets, S1 sets to the same value or one below it: by the enum's `is_a` (upregulated below
-  increased, expression below abundance), by predicate for `qualified_predicate`, by UBERON
-  is_a/part_of for anatomy, and by equality for any other slot, species among them. S1 may set
-  more. A negated statement is narrower than nothing, and nothing is narrower than one. A
-  symmetric statement compares either way round (`narrower`).
-- **A claim's statements** (`statements_of`): a positive claim's statement and its
-  `also_supports` entries, and a negative claim's `also_supports` entries alone. Each gains the
-  claim's grounded species and anatomy where its association allows the slot.
-- **Counting.** A claim counts when its quote passed the check, its paper isn't retracted, it
-  isn't a hypothesis, and review upheld it. Nothing weighs a claim.
-- **Refinement** (`refine_pair`). Each in-scope edge is supported by the counting claims with a
-  statement narrower than or equal to its own, and gains their PMIDs. Each of those statements
-  strictly narrower than the edge is proposed, once per pair however many claims make it or
-  edges it refines. A proposal an edge of the pair already makes is a link to that edge, not a
-  new edge. A pair is held while a claim that would count has no review.
-- **Support only** (rule 11). A statement narrower than an edge only by a predicate
-  config.SUPPORT_ONLY lists under the edge's ("ameliorates" under "treats") supports the edge
-  and is never proposed under it. Unless `review_support_only` (config.REVIEW_SUPPORT_ONLY), it
-  needs no review: it counts without a verdict, unless the claim was rejected, and alone it
-  neither sends a claim to review nor holds a pair.
-- **Species in proposals** (rule 7). `without_species` takes the species out of a pair's
-  proposals, as step 6 does unless config.SPECIES_IN_PROPOSALS keeps it: those that become the
-  same statement merge, one that becomes an edge it refines no longer refines that edge, and
-  one that becomes an edge of the pair is a link to it. A proposal keeps the species an
-  original it refines has, so that it stays narrower than that original.
+Implements step 6's rules for one pair of nodes: DESIGN.md, "Refinement (`refine.py`)", states
+them, and the code cites them by its numbers ("rule 2"). Pure: no I/O and no model calls.
+Biolink's hierarchies come from `biolink` (offline, from the bundled model) and UBERON's from
+the closure the caller passes in.
 """
 
 from __future__ import annotations
@@ -181,12 +154,9 @@ def statement_key(statement: Statement) -> str:
 
 
 def directed(statement: Statement, categories: Mapping[str, Sequence[str]]) -> Statement | None:
-    """The statement the way round Biolink reads it between its nodes, whose categories are in
-    `categories`: its predicate fits the subject and the object by its domain and range, with a
-    predicate defined the other way round replaced by its inverse, and a non-canonical one
-    turned round to its canonical inverse (`biolink.oriented`). The same statement if it
-    already reads so; None if its predicate fits neither way. A node without categories
-    constrains nothing."""
+    """The statement the way round Biolink reads it between its nodes (`biolink.oriented`),
+    whose categories are in `categories`. The same statement if it already reads so; None if
+    its predicate fits neither way. A node without categories constrains nothing."""
     read = biolink.oriented(
         tuple(categories.get(statement.subject) or ()),
         statement.predicate,
@@ -277,11 +247,10 @@ def statements_of(
     claim: Claim, categories: Mapping[str, Sequence[str]] | None = None
 ) -> tuple[Statement, ...]:
     """What the claim states, as rule 2 compares it: a positive claim's statement and its
-    `also_supports` entries; a negative claim's `also_supports` entries alone, since what it
-    denies supports nothing (rule 8). Each gains the claim's grounded species and anatomy
-    as `species_context_qualifier` and `anatomical_context_qualifier` where its association
-    allows the slot (`categories`; a node without them allows every slot) and it doesn't set
-    the slot itself. An anatomy name that didn't ground adds nothing."""
+    `also_supports` entries; a negative claim's `also_supports` entries alone (rule 8). Each
+    gains the claim's grounded species and anatomy where its association allows the slot
+    (`categories`; a node without them allows every slot) and it doesn't set the slot itself.
+    An anatomy name that didn't ground adds nothing."""
     record = claim.record
     own = (record.statement,) if record.polarity == "positive" else ()
     context = {
@@ -363,12 +332,11 @@ def would_count(
     *,
     review_support_only: bool | None = None,
 ) -> tuple[int, ...]:
-    """The indices of the claims that would count if upheld (DESIGN.md's step 5), whatever their
-    review: those that could count (`_could_count`) with a statement narrower than or equal to
-    some edge's in `edges`, the pair's in-scope edges. A statement that only supports the edge
-    (`support_only`) needs no review, so it doesn't make a claim one of these, unless
-    `review_support_only` (default config.REVIEW_SUPPORT_ONLY). Step 5 reviews those without a
-    verdict, and step 6 holds the pair while one has none."""
+    """The indices of the claims that would count if upheld, whatever their review (DESIGN.md,
+    "Step 5: Review"): those that could count (`_could_count`) with a statement narrower than
+    or equal to some edge's in `edges`, the pair's in-scope edges. A statement that only
+    supports the edge (`support_only`) doesn't make a claim one of these, unless
+    `review_support_only` (default config.REVIEW_SUPPORT_ONLY)."""
     stated = [statements_of(c, categories) if _could_count(c) else () for c in claims]
     targets = [statement_of(e) for e in edges]
     return tuple(_would_count(lattice, stated, targets, _review_support_only(review_support_only)))
@@ -496,16 +464,11 @@ def refine_pair(
     upheld claims count, and the pair is `held` while a claim that would count has no review;
     without it, which is for testing only, unreviewed claims count too.
 
-    Each edge is supported by the counting claims with a statement narrower than or equal to
-    its own, and each of those statements strictly narrower than the edge is proposed, but one
-    that only supports it (`support_only`). Unless `review_support_only` (default
-    config.REVIEW_SUPPORT_ONLY), such a statement counts without review too: a claim not
-    rejected supports the edge through it whatever its verdict. A statement is one proposal
-    however many claims make it or edges it refines. A proposal that isn't `valid` either way
-    round is dropped, and its claims still support the edge. One whose
-    statement an edge of the pair already makes is a link to that edge. A species narrows like
-    any other qualifier; `without_species` takes it out (rule 7). The output depends on the
-    claims' order only through the index tuples.
+    Unless `review_support_only` (default config.REVIEW_SUPPORT_ONLY), a claim not rejected
+    supports an edge through a `support_only` statement whatever its verdict. A proposal that
+    isn't `valid` either way round is dropped, and its claims still support the edge. A species
+    narrows like any other qualifier; `without_species` takes it out (rule 7). The output
+    depends on the claims' order only through the index tuples.
     """
     for edge in (*edges, *others):
         if edge.id is None:
@@ -607,18 +570,15 @@ def _no_species(statement: Statement) -> Statement:
 
 def without_species(refinement: PairRefinement, others: Sequence[Edge] = ()) -> PairRefinement:
     """The refinement with `species_context_qualifier` taken out of its proposals and links
-    (rule 7, with the flag off), except where an original it refines has that same
-    species: such a proposal keeps it, so that it stays narrower than that original, and still
-    refines all its originals, those without a species too. Those that become the same
-    statement are one, with the union of their claims, PMIDs, notes and `original_edge_ids`. An
-    original the statement has become ("E in human" becomes E) is no longer one it refines, and
-    a proposal left refining none is dropped: it is that original, which its claims support
-    already. One an edge of the pair makes, in scope or among `others` (the edges select left
-    out, as given to `refine_pair`), is a link to that edge (rule 5). Each edge's `refined_by`
-    follows; its support and PMIDs stay as they are. Each statement reads the way round
-    `refine_pair` wrote it: Biolink allows a species in both readings of a symmetric statement
-    or in neither, so taking it out doesn't change which reading is valid. Returns `refinement`
-    itself when no proposal or link loses a species."""
+    (rule 7, with the flag off), except where an original it refines has that same species.
+    Those that become the same statement are one, with the union of their claims, PMIDs, notes
+    and `original_edge_ids`. One left refining no original is dropped. One an edge of the pair
+    makes, in scope or among `others` (the edges select left out, as given to `refine_pair`),
+    is a link to that edge (rule 5). Each edge's `refined_by` follows; its support and PMIDs
+    stay as they are. Each statement reads the way round `refine_pair` wrote it: Biolink allows
+    a species in both readings of a symmetric statement or in neither, so taking it out doesn't
+    change which reading is valid. Returns `refinement` itself when no proposal or link loses a
+    species."""
     species = {o.edge_id: o.statement.qualifiers.get(SPECIES) for o in refinement.edges}
 
     def stated(p: Proposal) -> Statement:

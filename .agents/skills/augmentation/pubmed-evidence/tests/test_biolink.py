@@ -205,7 +205,9 @@ def test_element_name():
     assert biolink.element_name("biolink:not_in_biolink") == "not in biolink"
 
 
-# Every in-scope triple of DESIGN.md's step 1 table, with the classes that fit it.
+# Triples that five of the built-in rules keep (reference/rules.md, "Built-in rules, in order":
+# chemical-treats-disease, chemical-affects-gene, gene-disease, gene-gene, gene-phenotype), with
+# the classes that fit each.
 CHEM_TO_DISEASE = "biolink:ChemicalOrDrugOrTreatmentToDiseaseOrPhenotypicFeatureAssociation"
 CHEM_AFFECTS = [
     "biolink:ChemicalAffectsGeneAssociation",

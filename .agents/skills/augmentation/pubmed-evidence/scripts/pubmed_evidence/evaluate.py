@@ -1,64 +1,14 @@
 """Choosing the models: a run's claims, and the refinements they lead to, scored against a
 curator's gold set.
 
-The gold set is a curator's claims for some abstracts of some pairs, and the edges of those
-pairs to score. This step reads it and the caches and calls no model, so comparing models and
-prompt versions costs nothing once each has labeled the gold pairs. Step 6's refinement
-(`refine.refine_pair`, by the rules DESIGN.md's step 6 gives, cited here by their numbers) runs
-on both sides: on the curator's claims, the gold side, and on each run's checked claims. It
-scores four things:
+This step reads the gold set and the caches and calls no model. Step 6's refinement
+(`refine.refine_pair`) runs on both sides, on the curator's claims (the gold side) and on each
+run's checked claims, and the sides are compared on claims, support, PMIDs and proposals.
+`--draw N` draws the pairs to curate from step 6's `refinements.jsonl` (`draw`).
 
-- **Claims.** Each gold abstract's claims against the run's: precision, recall and F1, each
-  claim matching at most one on the other side. Exact: the same polarity and statement. Up to
-  an ancestor: the same polarity, and the run's statement the curator's or one it entails (the
-  run stopped at `affects` where the curator has `causes decreased activity`). Scored on the
-  claims as the run answered them, and as checked: without those that failed a check or whose
-  evidence sentence wasn't found, even after the repair pass, which count for nothing in step 6.
-- **Support.** Whether each gold edge is supported on the gold claims and on the run's:
-  accuracy, Cohen's kappa, the confusion matrix, and precision, recall and F1 of each.
-- **PMIDs.** Each edge's supporting PMIDs on the run's claims against those on the gold claims:
-  micro precision, recall and F1 over the edges.
-- **Proposals.** The statements each side proposes for a pair, and those it links to an edge of
-  the pair that already makes them: micro precision, recall and F1 over the pairs, matched by
-  statement key (`refine.statement_key`).
-
-Both sides read the same abstracts: a pair is refined on its gold abstracts, and only where the
-run answered every one of them. Its edges are the pair's gold edges, all in scope; the gold set
-names no others. A claim counts as step 6 counts it (rules 1 and 8 to 10): its quote passed
-the check, its paper isn't retracted (PubMed's publication types, from the PubMed cache), and it
-isn't a hypothesis. No review verdict is read, on either side (`require_review=False`): this
-scores the extractor. The species is taken out of both sides' proposals, as step 6 does, unless
-config.SPECIES_IN_PROPOSALS or `--species-in-proposals` keeps it (`refine.without_species`,
-rule 7). Every statement is read the way round Biolink's domain and range put it
-(`refine.directed`), the curator's as the run's, with the nodes' categories from select's
-`entities.jsonl`. Claims are read as step 6 reads them (`bundle.claim_record`), anatomy names
-grounded as the ground step grounds them. The ground step grounds only the names of the run
-`label_run.json` names, so a name its cache doesn't have (the curator's, another run's) is
-grounded here the same way, through the Name Resolver and NodeNorm, and cached; the report
-counts the names grounded, those not, and those whose lookup failed (a rerun retries them).
-An abstract a fallback model answered (a Claude model's server-side fallback, the answer's
-`answered_by`) is counted apart and left out of the scores, which are the requested model's
-own, and so is every edge of its pair. Cost comes from the calls the label cache logged, so it
-is what the run really cost per pair rather than an estimate.
-
-The gold file is JSONL, with two kinds of line; other keys are ignored:
-
-- `{"pair_id": "CHEBI:45783|MONDO:0011996", "pmid": "12345", "gold_claims": [...]}`: the
-  curator's claims for one abstract of the pair, each in the shape the label step stores
-  (`label.stored_claim`), and [] for an abstract that states nothing about the pair. The anatomy
-  may be a name, grounded as the run's are, or an UBERON CURIE. A `label_sample.jsonl` line
-  becomes one by adding `gold_claims`. A line whose `gold_claims` is null or missing is skipped
-  as not yet curated.
-- `{"edge": {...}}`: an edge to score, as the graph's `edges.jsonl` has it. Its expected outcome
-  is refinement's on the gold claims, so the line needs no label.
-
-**Drawing the pairs** (`--draw N`). The gold pairs are drawn from step 6's `refinements.jsonl`,
-stratified by each edge's outcome (`OUTCOMES`) and predicate family (the scope rule that kept
-it), so the rarer outcomes are in the set: each stratum gets about as many pairs as the others
-(`draw`). A pair with no abstracts read is left out, and counted: a curator would have nothing
-to read for it, and `label --pairs` nothing to label. They go to `gold_pairs.jsonl`, and a
-`label --pairs FILE` run with each candidate model labels exactly those pairs and writes them,
-with the model's claims, to `label_sample.jsonl`, whose lines a curator turns into gold lines.
+DESIGN.md, "Choosing the model: the gold set", says what is scored and how the two sides are
+kept even. reference/formats.md, "Gold set", has the gold file, and reference/work-files.md
+has `gold_pairs.jsonl` and `evaluate_report.md`.
 """
 
 from __future__ import annotations
@@ -268,9 +218,11 @@ def family_of(
     rules: Sequence[scope.Rule],
     categories: Mapping[str, Sequence[str]],
 ) -> str:
-    """A refined edge's predicate family: the id of the statement rule that kept it, matched as
-    select matches it on its nodes' categories (never a provenance rule, which only sets a
-    tier); its predicate if none matches."""
+    """A refined edge's predicate family: the id of the first statement rule that matches its
+    statement on its nodes' categories (never a provenance rule), or its predicate if none
+    does. The edge's knowledge level and agent type aren't given to `scope.match_rule`, so a
+    rule that lists either never matches here, and the family isn't always the rule select
+    kept the edge by: with the built-in rules a `text-mined-location` edge is `pathway-go`."""
     subject, object = statement["subject"], statement["object"]
     rule = scope.match_rule(
         rules,
@@ -289,14 +241,12 @@ def draw(
     seed: int = 0,
 ) -> list[dict[str, Any]]:
     """N pairs from step 6's refinement records (`refinements.jsonl`'s lines), stratified by
-    outcome and predicate family, as the lines of a pairs file. A stratum is an (outcome,
-    family) of the refined edges, and a pair is in the strata of each of its edges. The strata
-    take turns, the smallest first, each drawing a pair it has that isn't drawn yet, in an order
-    shuffled by `seed`, until N are drawn or none is left: each stratum gets about as many pairs
-    as the others, or all it has, so the rarer outcomes come up. A pair with no abstracts read
-    (`abstracts_read` 0) is left out: its edges are unsupported for want of anything to read,
-    and a curator would have nothing to read either. A line names the pair, the stratum it was
-    drawn for, and its edges' outcomes."""
+    outcome and predicate family (DESIGN.md, "Choosing the model: the gold set"), as the lines
+    of a pairs file. A stratum is an (outcome, family) of the refined edges, and a pair is in
+    the strata of each of its edges. The strata take turns, the smallest first, each drawing a
+    pair not drawn yet, in an order shuffled by `seed`, until N are drawn or none is left. A
+    pair with no abstracts read (`abstracts_read` 0) is left out. A line names the pair, the
+    stratum it was drawn for, and its edges' outcomes."""
     by_stratum: dict[tuple[str, str], set[str]] = defaultdict(set)
     edges: dict[str, dict[str, str]] = defaultdict(dict)
     for line in refinements:

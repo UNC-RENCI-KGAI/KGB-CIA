@@ -1,13 +1,9 @@
 """UBERON's is_a/part_of closure, which decides whether one anatomical context is at or below
-another.
+another (DESIGN.md, "Step 4: Grounding anatomy").
 
-A claim's anatomy is grounded to an UBERON term (the ground step). One term is at or below
-another when they're equal or the other is its ancestor by is_a or part_of, in any mix: the
-liver is at or below the digestive system, but not below the kidney (`refine.Lattice`, which
-takes `Uberon.ancestors`). The closure is built at load from `uberon-basic.obo` in the cache
-directory, the release config.UBERON_URL pins, fetched once; its `data-version` names the
-release a run used. No dependency: the OBO file is read line by line, and its 15,000 live terms
-and 453,000 ancestor pairs take about 0.1 s.
+The closure is built at load from `uberon-basic.obo` in the cache directory, and
+`refine.Lattice` takes `Uberon.ancestors`. No dependency: the OBO file is read line by line,
+and its 15,000 live terms and 453,000 ancestor pairs take about 0.1 s.
 """
 
 from __future__ import annotations

@@ -2,49 +2,16 @@
 abstracts read for the pair, as refinement (`refine.py`) takes them. It is gathered per pair from
 the work files and the caches, with no request and no model call.
 
-Steps 5 and 6 read the bundles: the review step sends the claims that would count
-(`refine.would_count`), and step 6 refines edges on them (`refine.refine_pair`).
+Steps 5 and 6 read the same bundles: the review step sends the claims that would count
+(`refine.would_count`), and step 6 refines edges on them (`refine.refine_pair`). DESIGN.md,
+"What a pair brings", says which pairs are bundled and what each brings. Beyond it:
 
-- **Pairs.** A pair is bundled when step 2 searched it (`pubmed.jsonl`), the input graph has an
-  edge of it in scope, every abstract the label step asks about (`label.pair_pmids`) has an
-  answer of the run, and every claim of those answers has its check (`claim_checks`): the pair
-  is fully labeled. A pair with an abstract unanswered, after a failed call, or with a claim
-  never checked, after a label run stopped between storing its answers and checking them, isn't
-  bundled, and its edges stay as they are until a label run finishes it. Nor is a pair with a
-  claim that passed its checks and names anatomy the ground step never looked up (its lookup
-  failed, or no ground run came after the label run): that claim would count in every context
-  without a word. It is listed apart (`Bundles.not_looked_up`), for step 6 to hold, and the
-  next ground run looks the name up. A pair with no abstracts to read is bundled with no
-  evidence.
-- **The source screen.** The label step asks about none of the mass-cited source papers its
-  source screen leaves unread (`label.screened`, from the counts select wrote in pairs.jsonl,
-  `mass_cited`), so they never hold a pair: it is checked on the abstracts read, and one the
-  screen leaves with none is bundled with no evidence, like a pair the search found nothing
-  for. `Bundle.screened` names them, for step 6's record, and the counts count them.
-- **Edges.** The input graph's edges whose statement select kept (`statements.jsonl`), each with
-  its `id` (`graphio.edge_id`) and its `publications` as its source cited them
-  (`graphio.as_cited`), never one an earlier run added (`kgbcia-augmentation:`). An id that two
-  different records of the graph give is an error. The pair's other edges, those select left
-  out, come too (`others`): they aren't checked, but a proposal that one of them already makes
-  links to it instead of adding a duplicate.
-- **Evidence.** One `PublicationEvidence` per abstract, by PMID: PubMed's publication types,
-  year and retraction from the PubMed cache; the study design PubMed's types name, else the
-  extractor's (`pubmed.design_of`), whose own answer is kept either way; and `found_by`
-  `search` when step 2's search found it. Whether an edge's own publications cite it (`source`)
-  is a matter of the edge, for step 6 to add.
-- **Claims.** Each abstract's claims as `ClaimRecord`s, but for those that failed a check other
-  than the sentence's (`claim_checks`): they count for nothing. A
-  sentence counts as found when its check found it or a repair the run names did
-  (`repair.sentence_repairs`: the code's, then the repair model's), and is then the first such
-  repair's. Anatomy is grounded through the ground
-  step's cache (`ground.groundings`); a name it looked up and didn't ground stays as
-  `anatomy_name`, which goes to `lit_context_notes`. Each
-  statement reads the way round Biolink's domain and range put it (`refine.directed`), so
-  'gene condition_associated_with_gene disease' is 'gene gene_associated_with_condition
-  disease', and a claim that passed its check only through a post-label repair reads as
-  repaired (`label.read_claim`); the stored claim, which `claim_id` hashes, stays as the model
-  gave it. A claim carries the verdict of the reviewer and review prompt version given, if
-  any.
+- A pair with a claim that names anatomy the ground step never looked up isn't bundled. It is
+  listed apart (`Bundles.not_looked_up`), for step 6 to hold.
+- An abstract's evidence has `found_by` `search` when step 2's search found it. Whether an
+  edge's own publications cite it (`source`) is a matter of the edge, for step 6 to add.
+- An anatomy name the ground step looked up and didn't ground stays on the claim as
+  `anatomy_name`.
 
 `Bundle.keys` names each claim as the claim tables key it, (pair, PMID, `claim_id`), in the
 order of `Bundle.claims`, which is `refine.claims_of`'s, and so that of the claim indices

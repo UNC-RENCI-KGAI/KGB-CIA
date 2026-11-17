@@ -1,63 +1,12 @@
 """Step 6: refine every checked edge from its pair's claims, and write the graph, in code.
 
-Step 6 reads the input graph, the run's work files and both caches through `bundle.py`, and
-refines each pair (`refine.refine_pair`) by the rules DESIGN.md's step 6 gives, cited here by
-their numbers ("rule 4"). No model is called, so the graph can be rebuilt from the caches, as
-"agents decide, code transforms" asks.
+Step 6 reads the input graph, the run's work files and both caches through `bundle.py`, refines
+each pair (`refine.refine_pair`), and writes the graph, `refinements.jsonl` and
+`apply_report.json`. No model is called.
 
-- Every input edge gets an `id`: its own, or a hash of the record (`graphio.edge_id`).
-- **Checked edges.** An edge is checked when select kept its statement and its pair is fully
-  labeled (every abstract step 3 asks about has an answer of the run) and not held. A pair with
-  no abstracts is checked too, and its edges are unsupported; so is a pair whose only abstracts
-  are mass-cited source papers the source screen left unread (`label.screened`), which
-  `refinements.jsonl` names (`abstracts_screened`). A checked edge comes out as an
-  `AugmentedEdge`: the record as read, every slot keeping its exact value, with `augmentation:
-  checked`. The counting claims with a statement narrower than or equal to its own support it
-  (rules 1 to 3): their PMIDs are its `lit_supporting_publications`, and their number its
-  `lit_support_score`. Those its source didn't cite are appended to its `publications` and
-  listed in `lit_added_publications`. `lit_refined_by` names the more specific edges its
-  supporting claims make, and `lit_evidence` lists every abstract read for the pair, each claim
-  marked with whether it `supports` the edge. An unsupported edge is written the same way, with
-  score 0, so that "checked, nothing found" reads apart from "never checked".
-- **Proposed edges** (rule 4). A statement strictly narrower than an original, that counting
-  claims make, is one edge, whose id is `kgbcia-augmentation:` plus a hash of the statement's
-  key (`refine.statement_key`, the same for a symmetric statement either way round) and whose
-  `original_edge_ids` name every original it refines. Its provenance is this stage's:
-  config.INFORES, with `supporting_data_source` [infores:pubmed], a `knowledge_assertion` by a
-  `text_mining_agent`, and as `publications` the PMIDs of the claims that make it. A statement an
-  edge of the pair already makes, whether select kept that edge or left it out, isn't added: the
-  originals it refines name that edge in `lit_refined_by` instead (a link, rule 5).
-- **Species in proposals** (rule 7): unless config.SPECIES_IN_PROPOSALS or
-  `--species-in-proposals` keeps it, the species is taken out of every proposal but one that
-  refines an original with that same species, which keeps it so as to stay narrower than that
-  original (`refine.without_species`). Proposals that become the same statement are one edge,
-  with the PMIDs and originals of each. One that becomes an original it refines ("E in human"
-  becomes E) no longer refines it, and is dropped if it refines nothing else; one that becomes
-  an edge of the pair is a link to it. The report counts the species-qualified proposals folded
-  so. The originals' support and PMIDs are the same either way.
-- **Held pairs.** A pair is held, and its edges in scope pass through as read and are counted,
-  while a claim of it that would count has no review (`kgb-augment review` clears it), or a
-  claim names anatomy the ground step never looked up (`kgb-augment ground` clears it), so that
-  a partial run never writes a partial answer. `--no-review` counts the unreviewed claims
-  instead, for testing only; a rejected claim counts for nothing either way.
-- **Support only** (rule 11). A claim statement narrower than an edge only by a predicate
-  config.SUPPORT_ONLY lists under the edge's (`ameliorates_condition` under `treats`) supports
-  the edge but is never proposed under it, and, unless config.REVIEW_SUPPORT_ONLY or
-  `--review-support-only`, counts without review and holds no pair. Give `review` the same
-  flag: a claim it didn't send holds its pair here until it is reviewed.
-- **Unchecked edges** pass through as read, apart from their `id`: those out of scope, and those
-  in a pair that isn't fully labeled after a failed call, or with claims a stopped label run
-  never checked, which the next label run finishes.
-- **Rerunning on its own output.** Every field step 6 writes on an input edge, now or in an
-  earlier evidence format, is stripped, and the PMIDs it appended are taken back out of
-  `publications` (`graphio.as_cited`), before the edge is refined again; and the edges an
-  earlier run added (`kgbcia-augmentation:`) are dropped: the run adds its own.
-
-It writes `nodes.jsonl` and `edges.jsonl` (the originals in input order, then the proposed edges
-by id) to the output directory, and `refinements.jsonl` (one line per refined pair, by pair) and
-`apply_report.json` to the work directory. The graph and `refinements.jsonl` are written under
-temporary names and renamed into place at the end, so a failed run leaves none half-written;
-`apply_report.json` is written after them.
+DESIGN.md, "Step 6: Refining the edges", has the rules, cited here by their numbers ("rule 4"),
+and what the step writes and why. The edge fields are in reference/formats.md, "The graph, in
+and out", and the two work files in reference/work-files.md.
 """
 
 from __future__ import annotations
@@ -197,11 +146,9 @@ def refine_pairs(
 ) -> Refinements:
     """Refine every bundled pair (`refine.refine_pair`). A pair with a claim that would count
     and has no review is held, unless `require_review` is False; a held pair contributes
-    nothing. `review_support_only` requires review for support-only statements too (rule
-    11). Unless `species_in_proposals`, the species is taken out of the proposals
-    (`refine.without_species`). Each edge's outcome is kept by its id, the first one where an
-    edge is listed twice (identical records; `bundle.edges_of` refuses an id two different ones
-    give)."""
+    nothing. `review_support_only` is rule 11's flag and `species_in_proposals` rule 7's. Each
+    edge's outcome is kept by its id, the first one where an edge is listed twice (identical
+    records; `bundle.edges_of` refuses an id two different ones give)."""
     out = Refinements()
     for b in loaded.pairs:
         r = refine.refine_pair(
@@ -372,14 +319,8 @@ def from_earlier_run(row: dict[str, Any]) -> bool:
 
 def _plain(row: dict[str, Any], eid: str) -> dict[str, Any]:
     """An input edge as read, with its id, and with its publications as its source cited them.
-    An edge from an earlier run also loses the fields that run wrote (AUGMENTED).
-
-    Decision (review of #22, Nov 2026): strip only edges an earlier run wrote, and leave every
-    other edge exactly as its source wrote it. AUGMENTED holds generic names (`augmentation`,
-    `original_edge_ids`, `evidence`, `evidence_score`, `evidence_counts`) that a source may use
-    for its own data; stripping them from every edge would silently delete that data, even on
-    edges this step never checked. On the filter's output, the normal input, nothing is
-    stripped."""
+    Only an edge from an earlier run loses the fields that run wrote (AUGMENTED): a source may
+    use those names for its own data (DESIGN.md, "What step 6 writes")."""
     out = {**graphio.as_cited(row), "id": eid}
     if not from_earlier_run(row):
         return out
@@ -554,10 +495,9 @@ def apply_claims(
     review_prompt_version: str | None = None,
 ) -> dict[str, Any]:
     """Refine the checked edges, write the graph to `output_dir` and `refinements.jsonl` and
-    `apply_report.json` to `work`; return the report. `species_in_proposals` keeps the species
-    in proposed edges (default config.SPECIES_IN_PROPOSALS). `review_support_only` counts
-    support-only statements only once upheld (default config.REVIEW_SUPPORT_ONLY; rule 11).
-    Raises ApplyError on a problem with the inputs."""
+    `apply_report.json` to `work`; return the report. `species_in_proposals` (rule 7) defaults
+    to config.SPECIES_IN_PROPOSALS and `review_support_only` (rule 11) to
+    config.REVIEW_SUPPORT_ONLY. Raises ApplyError on a problem with the inputs."""
     input_dir, output_dir, work = Path(input_dir), Path(output_dir), Path(work)
     cache_dir = Path(cache_dir)
     if species_in_proposals is None:

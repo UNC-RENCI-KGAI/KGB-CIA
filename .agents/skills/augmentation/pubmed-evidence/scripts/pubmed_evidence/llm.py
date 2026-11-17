@@ -1,22 +1,13 @@
 """Calling the models directly, without Pi.
 
-Step 3 labels in bulk by calling a cheap model straight from the library rather than through
-subagents, and `kgb-augment` has to run from `shared/pipeline.py`, which can't start subagents.
-Every model the steps can call is in `config.MODELS`, with its endpoint, the environment
-variable holding its key, its prices and the settings a call sends by default; any other
-model is an error.
+The clients, the reply schemas, the prompt versions, token use and cost, and the thread pool
+that runs a step's calls. DESIGN.md has the design: "How the agent runs" (why direct calls, the
+model table `config.MODELS`, efforts, fallbacks, the 5% rule) and "Structured replies";
+reference/work-files.md, "Ids and versions", defines a prompt version.
 
-Prompts are versioned by content: `prompt_version` hashes the prompt text, so any edit to a
-prompt starts a fresh set of labels in the cache without anyone remembering to bump a number. A
-prompt file may include another (`{{include NAME}}` on a line of its own), so that two prompts
-share a section; the version hashes the text with its includes.
-
-Replies are strict structured output: every call sends its step's JSON Schema (`Schema`), the
-same for every request so the service's prompt cache holds, and the service returns an object
-that fits it. Code then checks only what a schema can't say, such as verbatim quotes.
-A client's `call` returns the reply and its `Usage`: the tokens of each attempt, in one form
-for every backend (uncached input, cache read, cache write, output), and the model that
-answered.
+Every call sends a JSON Schema (`Schema`) for strict structured output. A client's `call`
+returns the reply and its `Usage`: the tokens of each attempt, in one form for every backend
+(uncached input, cache read, cache write, output), and the model that answered.
 
 A model's `backend` picks its client (`client_for`): `OpenAIClient` speaks the OpenAI v1
 Responses API, which Azure OpenAI serves, through the `openai` SDK, and
@@ -340,9 +331,8 @@ def run_effort(model_id: str, override: str | None = None) -> str:
     """The reasoning effort a step's calls to `model_id` send, as its prompt version hashes it
     and label_run.json records it: the model's own in config.MODELS, or `override`; 'omit'
     (config.OMIT_EFFORT) when they send none, which as an override sends none again. 'none' is
-    the level sent as such, so the two never share a version, and every other effort hashes
-    as it always has. Raises LLMError for a model not in config.MODELS or an effort it doesn't
-    take."""
+    the level sent as such, so the two never share a version. Raises LLMError for a model not
+    in config.MODELS or an effort it doesn't take."""
     return sent_effort(model(model_id), override) or config.OMIT_EFFORT
 
 
@@ -446,11 +436,10 @@ class AnthropicClient:
     `cache_control` breakpoint, so later calls read it from the prompt cache. The schema goes in
     `output_config.format` with the effort beside it (Claude's efforts have no 'none', which
     `sent_effort` refuses; 'omit' leaves the model's default); thinking stays at the model's
-    default, adaptive. A model with `fallbacks` asks for Anthropic's server-side fallback: a
-    request a safety classifier declines is run again on a model Anthropic picks by the
-    refusal's category, and each attempt is priced by its own model (`claude_attempts`). A
-    refusal that stands is a failed call. The settings and `http_client` are as for
-    `OpenAIClient`."""
+    default, adaptive. A model with `fallbacks` asks for Anthropic's server-side fallback
+    (DESIGN.md, "How the agent runs", "Claude models"), on a model Anthropic picks by the
+    refusal's category; a refusal that stands is a failed call. The settings and `http_client`
+    are as for `OpenAIClient`."""
 
     FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
@@ -565,9 +554,8 @@ MAX_FAILED_SHARE = 0.05
 
 def too_many_failed(needed: int, failed: int) -> bool:
     """Whether a step failed: more than MAX_FAILED_SHARE of the calls its work needs did.
-    `needed` counts the calls this run sent and those the work answered by earlier runs took,
-    so a rerun that resends only a few calls that keep failing isn't judged on those alone,
-    and a stuck call can't fail every later run."""
+    `needed` counts the calls this run sent and those the work answered by earlier runs took
+    (DESIGN.md, "How the agent runs", "The 5% rule")."""
     return bool(needed) and failed / needed > MAX_FAILED_SHARE
 
 
@@ -587,8 +575,7 @@ class Call:
 class Tally:
     """What a step's calls did: how many, how many failed, how many another model answered
     (a server-side fallback; a call that failed counts as unanswered), the pairs and the token
-    use. Input counts every prompt token,
-    the cache's reads and writes among them."""
+    use. Input counts every prompt token, the cache's reads and writes among them."""
 
     calls: int = 0
     failed: int = 0
