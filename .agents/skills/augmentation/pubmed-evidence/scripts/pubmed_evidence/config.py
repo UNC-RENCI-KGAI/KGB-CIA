@@ -95,18 +95,31 @@ SOURCE_SCREEN_MIN_PAIRS: int | None = 100
 # Step 4: the RENCI Name Resolver, which grounds the anatomy claims name.
 NAMERES_URL = os.environ.get("NAMERES_URL", "https://name-resolution-sri.renci.org")
 
-# Step 3: models. The gold set decides these; until then, the cheapest candidates. Each must
-# be in MODELS, below.
+# Steps 3 and 5: models. Each must be in MODELS, below.
 BULK_MODEL = os.environ.get("KGB_AUGMENT_MODEL", "gpt-6-luna")
-REVIEW_MODEL = os.environ.get("KGB_AUGMENT_REVIEW_MODEL", "gpt-5.6-terra")
+# Step 5's reviewer: gpt-6-luna, at REVIEW_EFFORT. Against gpt-5.6-terra on 6,953 claims
+# (2026-11-16), gpt-6-luna at medium agreed at Cohen's kappa 0.47-0.51 and caught about half of
+# terra's rejects, for 18-24x less; in a blind read of 33 records it agreed with the human
+# reader on 27, terra on 19. terra is still there: `review --model gpt-5.6-terra`.
+REVIEW_MODEL = os.environ.get("KGB_AUGMENT_REVIEW_MODEL", "gpt-6-luna")
+# The effort review sends when no --reasoning-effort is given, whatever the model (None: each
+# model's own in MODELS). As an override it follows `llm.run_effort`: a model that takes no
+# effort is sent none, and one whose `efforts` don't list it is an error before any call.
+# medium is gpt-5.6-terra's own, so terra's reviews keep their version (review@72d23654).
+REVIEW_EFFORT: str | None = "medium"
 # The end of step 3 repairs quotes that weren't found with code first (quote_align.py), and
-# with the review model those code can't place. Its repairs are the ones review, evaluate and
-# step 6 read after the code's, so changing it starts the model's repairs afresh.
-REPAIR_MODEL = REVIEW_MODEL
+# with this model those code can't place. It is its own setting, not the reviewer: its repairs
+# are the ones review, evaluate and step 6 read after the code's, so changing it starts the
+# model's repairs afresh.
+REPAIR_MODEL = os.environ.get("KGB_AUGMENT_REPAIR_MODEL", "gpt-5.6-terra")
 # The most abstracts and review items one call sends; a pair with more is split across calls.
 ABSTRACTS_PER_CALL = 20
 REVIEW_ITEMS_PER_CALL = 40
-WORKERS = 8
+# Parallel calls for label (its quote repair too) and review. On Azure gpt-6-luna, 32 gave 1.84x
+# the throughput of 16 (2026-11-16), near the resource's 7.5M tokens a minute: Azure counts each
+# call's prompt plus its output reservation, about 27k tokens a label call. gpt-5.6-terra's
+# limits weren't measured.
+WORKERS = 32
 # The full run (`kgb-augment` with no step, as the pipeline runs it) labels only as many pairs
 # as step 3's estimated cost, in US dollars, allows. Pairs already labeled cost nothing.
 FULL_RUN_LABEL_BUDGET = 20.0
@@ -211,12 +224,13 @@ def _claude(
 MODELS: dict[str, Model] = {
     m.id: m
     for m in (
-        # Bulk labeling candidates: a low effort, since step 3 sends many calls.
+        # Bulk labeling candidates: a low effort, since step 3 sends many calls. gpt-6-luna
+        # also reviews, at REVIEW_EFFORT.
         _azure("gpt-6-luna", Price(0.1, 0.5, 0.01, 0.125), "low", efforts=GPT_6_EFFORTS),
         _azure("gpt-5.6-luna", Price(0.2, 1.2, 0.02, 0.25), "low"),
         _azure("DeepSeek-V4-Flash", Price(0.19, 0.51, 0.028, 0), "low"),
         _azure("gpt-oss-120b", Price(0.15, 0.6, 0, 0), None, reasoning=False),
-        # Review candidates.
+        # Other review candidates; gpt-5.6-terra also repairs quotes (REPAIR_MODEL).
         _azure("gpt-5.6-terra", Price(2, 12, 0.2, 2.5)),
         _azure("gpt-6.1-sol", Price(2, 10, 0.1, 2.5)),
         # The endpoint's other deployments.

@@ -34,7 +34,7 @@ STEPS = [
     (
         "review",
         "pubmed_evidence.review",
-        "step 5: a stronger model reviews the claims that would count",
+        "step 5: a second pass reviews the claims that would count",
     ),
     (
         "apply",
@@ -109,8 +109,9 @@ def _parser(prog: str = "kgb-augment") -> argparse.ArgumentParser:
     full.add_argument(
         "--review-model",
         dest="full_review_model",
-        help=f"model for the second pass (default: the reviewer label_run.json names, else "
-        f"{config.REVIEW_MODEL})",
+        help=f"model for the second pass (default: the reviewer label_run.json names, at its "
+        f"effort, else {config.REVIEW_MODEL}); any other reviews at config.REVIEW_EFFORT "
+        f"({config.REVIEW_EFFORT})",
     )
     full.add_argument(
         "--limit", dest="full_limit", type=int, help="search and label only the first N pairs"

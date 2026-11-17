@@ -166,7 +166,7 @@ def test_one_pass_sends_every_claim_that_would_count_and_has_no_verdict(scene):
 
     run = records.read_label_run(scene.work)
     assert (run.reviewer, run.review_prompt_version) == (REVIEWER, version)
-    assert run.review_reasoning_effort == llm.model(REVIEWER).effort
+    assert run.review_reasoning_effort == config.REVIEW_EFFORT
     assert (run.model, run.prompt_version, run.repairer) == (MODEL, PV, config.REPAIR_MODEL)
 
 
@@ -449,11 +449,29 @@ def test_the_review_prompt_includes_the_claim_rules_and_its_version_the_effort()
     system, version = review.review_prompt()
     assert "{{include" not in system
     assert (config.PROMPTS_DIR / "claim-rules.md").read_text().strip() in system
-    assert review.review_prompt(reasoning_effort="medium")[1] == version  # the model's own
+    assert review.review_prompt(reasoning_effort="medium")[1] == version  # config.REVIEW_EFFORT
     assert review.review_prompt(reasoning_effort="high")[1] != version
     assert review.review_prompt(reasoning_effort="none")[1] != version
     with pytest.raises(llm.LLMError, match="not-a-model"):
         review.review_prompt(model="not-a-model")
+
+
+def test_the_default_review_is_luna_at_medium_with_terras_version():
+    """gpt-6-luna reviews at config.REVIEW_EFFORT, medium, not its own low; medium is
+    gpt-5.6-terra's own, so terra's reviews before luna became the default keep their version.
+    An effort override works as any other: a model that takes none is sent none."""
+    assert config.REVIEW_EFFORT == "medium"
+    assert config.MODELS["gpt-6-luna"].effort != config.REVIEW_EFFORT
+    parser = argparse.ArgumentParser()
+    review.add_arguments(parser)
+    assert parser.parse_args([]).reasoning_effort == config.REVIEW_EFFORT
+
+    luna = review.review_prompt(model="gpt-6-luna")[1]
+    assert luna == review.review_prompt(model="gpt-5.6-terra", reasoning_effort=None)[1]
+    assert luna == review.review_prompt(model="gpt-5.6-terra")[1]
+    assert luna != review.review_prompt(model="gpt-6-luna", reasoning_effort=None)[1]
+    no_effort = review.review_prompt(model="gpt-oss-120b", reasoning_effort="omit")[1]
+    assert review.review_prompt(model="gpt-oss-120b")[1] == no_effort
 
 
 def test_the_review_prompt_rejects_a_claim_posed_only_as_a_hypothesis():
@@ -505,7 +523,10 @@ def test_run_returns_1_when_too_many_calls_fail(scene, monkeypatch):
 
     client.answer = reviewer().answer
     assert review.run(_args(scene)) == 0
-    assert built[-1] == (REVIEWER, {"max_output_tokens": None, "reasoning_effort": None})
+    assert built[-1] == (
+        REVIEWER,
+        {"max_output_tokens": None, "reasoning_effort": config.REVIEW_EFFORT},
+    )
     assert records.read_label_run(scene.work).reviewer == REVIEWER
 
 

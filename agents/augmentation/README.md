@@ -15,7 +15,7 @@ skill. Its steps:
 3. **label:** an LLM writes down the claims each abstract makes about the pair, each with a
    verbatim sentence that is checked against the abstract.
 4. **ground:** map the anatomy those claims name to UBERON.
-5. **review:** a stronger model reviews every claim that would count.
+5. **review:** a second pass (gpt-6-luna at medium effort) reviews every claim that would count.
 6. **apply:** code refines each checked edge from its pair's claims. A supported edge gains the
    abstract's PMID, and a more specific statement becomes a proposed edge.
 7. **evaluate:** score a run's claims and refinements against a curator's gold set, to compare
