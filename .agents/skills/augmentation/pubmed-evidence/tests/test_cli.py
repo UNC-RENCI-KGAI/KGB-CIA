@@ -22,7 +22,7 @@ from urllib.parse import parse_qsl
 import httpx
 import pytest
 from conftest import FakeClient, Sent
-from pubmed_evidence import cli, config, graphio, ground, label, llm, records, uberon
+from pubmed_evidence import cli, config, graphio, ground, label, llm, records, review, uberon
 from pubmed_evidence.cache import LabelCache
 from toy import ABL1, CML, EDGES, IMATINIB, NODES, UBERON_OBO, UBERON_VERSION
 
@@ -448,6 +448,8 @@ def test_full_run_continues_the_runs_effort(tmp_path, fakes, monkeypatch):
         return fake_model(fakes)
 
     monkeypatch.setattr(llm, "client_for", client_for)
+    # The bulk model reviews too, at config.REVIEW_EFFORT: count label's clients only.
+    monkeypatch.setattr(review, "_client", lambda *a: fake_model(fakes))
     common = common_args(tmp_path)
     work = tmp_path / "out" / "work"
     assert cli.main(common) == 0
@@ -468,32 +470,55 @@ def test_full_run_continues_the_runs_effort(tmp_path, fakes, monkeypatch):
 
 
 def test_full_run_continues_the_reviews_effort(tmp_path, fakes, monkeypatch):
-    efforts: list[str | None] = []
+    efforts: list[tuple[str, str | None]] = []
 
-    def client_for(model, **kw):
-        if model.id == config.REVIEW_MODEL:
-            efforts.append(kw.get("reasoning_effort"))
+    def review_client(model, max_output_tokens, reasoning_effort):
+        efforts.append((model, reasoning_effort))
         return fake_model(fakes)
 
-    monkeypatch.setattr(llm, "client_for", client_for)
+    monkeypatch.setattr(llm, "client_for", lambda model, **kw: fake_model(fakes))
+    monkeypatch.setattr(review, "_client", review_client)
     common = common_args(tmp_path)
     work = tmp_path / "out" / "work"
+    # With no label_run.json review, the default: config.REVIEW_MODEL at config.REVIEW_EFFORT.
     assert cli.main(common) == 0
-    assert efforts == [None] and records.read_label_run(work).review_reasoning_effort == "medium"
+    assert efforts == [(config.REVIEW_MODEL, config.REVIEW_EFFORT)]
+    assert records.read_label_run(work).review_reasoning_effort == config.REVIEW_EFFORT
 
     # A review at another effort reviews afresh; the full run then continues it, without calls.
     assert cli.main([*common, "review", "--reasoning-effort", "high"]) == 0
     run = records.read_label_run(work)
-    assert efforts[-1] == "high" and run.review_reasoning_effort == "high"
+    assert efforts[-1] == (config.REVIEW_MODEL, "high") and run.review_reasoning_effort == "high"
     reviews = fakes.count("review")
     assert cli.main(common) == 0
     assert fakes.count("review") == reviews
     assert records.read_label_run(work).review_prompt_version == run.review_prompt_version
 
-    # Another reviewer starts from its own default.
+    # Another reviewer starts from the review default, config.REVIEW_EFFORT.
     assert cli.main([*common, "--review-model", "gpt-6.1-sol"]) == 0
     run = records.read_label_run(work)
-    assert (run.reviewer, run.review_reasoning_effort) == ("gpt-6.1-sol", "medium")
+    assert efforts[-1] == ("gpt-6.1-sol", config.REVIEW_EFFORT)
+    assert (run.reviewer, run.review_reasoning_effort) == ("gpt-6.1-sol", config.REVIEW_EFFORT)
+
+
+def test_a_work_dir_terra_reviewed_keeps_terras_verdicts(tmp_path, fakes):
+    """gpt-5.6-terra (at its own effort, medium) was the default reviewer before gpt-6-luna at
+    medium. A work dir terra reviewed keeps that review: the full run continues it without a
+    call, and step 6 applies terra's verdicts rather than looking for luna's."""
+    common = common_args(tmp_path)
+    work = tmp_path / "out" / "work"
+    assert cli.main([*common, "--review-model", "gpt-5.6-terra"]) == 0
+    run = records.read_label_run(work)
+    assert (run.reviewer, run.review_reasoning_effort) == ("gpt-5.6-terra", "medium")
+    # The default review has the same version; verdicts are told apart by reviewer.
+    assert run.review_prompt_version == review.review_prompt()[1]
+
+    reviews = fakes.count("review")
+    assert cli.main(common) == 0
+    assert fakes.count("review") == reviews
+    report = json.loads((work / "apply_report.json").read_text())
+    assert (report["run"]["reviewer"], report["held"]["pairs_unreviewed"]) == ("gpt-5.6-terra", 0)
+    assert records.read_label_run(work).reviewer == "gpt-5.6-terra"
 
 
 def test_affordable_counts_the_first_pairs_that_fit():

@@ -5,6 +5,9 @@ files from before code repairs. The pass as the label step runs it is in test_la
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -265,3 +268,34 @@ def test_a_label_run_json_from_before_code_repairs_still_loads(tmp_path):
         [],
         None,
     )
+
+
+def _models(env: dict[str, str]) -> list:
+    """[config.REVIEW_MODEL, config.REPAIR_MODEL, repair.current()] in a fresh interpreter with
+    these environment variables and no other KGB_AUGMENT_ ones, since config reads them at
+    import."""
+    here = Path(__file__).resolve()
+    code = (
+        "import json; from pubmed_evidence import config, repair; "
+        "print(json.dumps([config.REVIEW_MODEL, config.REPAIR_MODEL, repair.current()]))"
+    )
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("KGB_AUGMENT_")}
+    clean["PYTHONPATH"] = os.pathsep.join([str(here.parents[1] / "scripts"), str(here.parents[5])])
+    done = subprocess.run(
+        [sys.executable, "-c", code], env=clean | env, capture_output=True, text=True, check=True
+    )
+    return json.loads(done.stdout)
+
+
+def test_the_repair_model_stays_terra_when_the_review_model_changes():
+    """The repair model was the review model until gpt-6-luna began reviewing; it is its own
+    setting now, so the repairs a label run counts don't follow the reviewer."""
+    reviewer, repairer, current = _models({})
+    assert (reviewer, repairer) == ("gpt-6-luna", "gpt-5.6-terra")
+    assert [r for r, _ in current] == ["code", "gpt-5.6-terra"]
+    assert _models({"KGB_AUGMENT_REVIEW_MODEL": "gpt-6.1-sol"}) == [
+        "gpt-6.1-sol",
+        repairer,
+        current,
+    ]
+    assert _models({"KGB_AUGMENT_REPAIR_MODEL": "gpt-6.1-sol"})[:2] == [reviewer, "gpt-6.1-sol"]

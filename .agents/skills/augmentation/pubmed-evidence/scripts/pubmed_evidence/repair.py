@@ -14,10 +14,10 @@ found, is repaired in two passes:
    Its repairs are stored under the repairer 'code' and `quote_align.VERSION`, even when it
    returns none, so a claim is placed by code once.
 2. A claim code can't place (under half the quote's words are in the abstract: a made-up or
-   rewritten quote) gets one small call to the repair model (config.REPAIR_MODEL, the review
-   model): the claim, the sentence that wasn't found, and the abstract. The reply is a verbatim
-   quote or null, and code checks it as it checks the first pass's. A claim code placed is
-   never sent, even when the passage doesn't name both entities.
+   rewritten quote) gets one small call to the repair model (config.REPAIR_MODEL,
+   gpt-5.6-terra, whichever model reviews): the claim, the sentence that wasn't found, and the
+   abstract. The reply is a verbatim quote or null, and code checks it as it checks the first
+   pass's. A claim code placed is never sent, even when the passage doesn't name both entities.
 
 On the 409 such claims of the 2026-11-16 test, code placed 393 (every one verbatim) and left 16
 for the model, which found 9: 402 sentences found with 16 calls, against 347 with the model

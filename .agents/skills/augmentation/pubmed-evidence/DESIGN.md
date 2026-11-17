@@ -15,8 +15,8 @@ gives its number ("rule 2"), and the code cites them by those numbers.
 3. **label:** an LLM reads each pair's abstracts and writes down the claims each one makes
    about the pair. Code checks every claim against Biolink and the abstract.
 4. **ground:** resolve the anatomy the claims name to UBERON terms, and pin UBERON's release.
-5. **review:** a stronger model reads again every claim that would count: each one that would
-   add a PMID to an edge or propose a more specific edge.
+5. **review:** a second pass (gpt-6-luna at medium effort) reads again every claim that would
+   count: each one that would add a PMID to an edge or propose a more specific edge.
 6. **apply:** code refines each checked edge from its pair's claims and writes the graph. An
    edge the abstracts support gains their PMIDs, and each more specific statement they make is
    proposed as a new edge beside the originals, which stay.
@@ -46,21 +46,30 @@ failed calls (`llm.MAX_FAILED_SHARE`, 5%) still stops the run.
   subagent carries the harness's system prompt and tool definitions and re-sends its context
   every turn, which costs far more per abstract. `kgb-augment` also has to run from
   `shared/pipeline.py`, which can't start subagents.
-- **Second pass:** a stronger model reviews every claim that would count (step 5), and upholds
-  or rejects each one. The script calls the model directly, as step 3 does, so `kgb-augment`
-  runs without Pi.
+- **Second pass:** the bulk model again, at a higher effort (gpt-6-luna at `medium`,
+  `config.REVIEW_MODEL` and `config.REVIEW_EFFORT`), reviews every claim that would count
+  (step 5), and upholds or rejects each one. The script calls the model directly, as step 3
+  does, so `kgb-augment` runs without Pi. It was gpt-5.6-terra until 2026-11-17, and
+  `--model gpt-5.6-terra` still reviews with it:
+  - On 6,953 claims (2026-11-16), luna at medium agreed with terra at Cohen's kappa 0.47-0.51
+    and caught about half of terra's rejects, for about 18-24x less.
+  - In a blind read of 33 records, luna agreed with the human reader on 27, and terra on 19.
+  - On a random 2,000-pair sample of the Plan A label run (2026-11-17), luna at medium
+    reviewed 1,780 claims for $0.26 and rejected 9.2%.
 - **Choosing the models:** a curator's gold set decides which models are good enough
   (`evaluate`, below). Candidates for the bulk pass are gpt-6-luna (the default),
   gpt-5.6-luna, DeepSeek-V4-Flash and gpt-oss-120b. Candidates for the second pass are
-  gpt-5.6-terra (the default) and gpt-6.1-sol. The Claude candidates are claude-haiku-5-5 for
-  the bulk pass (the price of gpt-6-luna), and claude-sonnet-5-5 and claude-opus-5-5 for the
-  second.
+  gpt-6-luna at medium (the default), gpt-5.6-terra and gpt-6.1-sol. The Claude candidates are
+  claude-haiku-5-5 for the bulk pass (the price of gpt-6-luna), and claude-sonnet-5-5 and
+  claude-opus-5-5 for the second.
 - **One model table:** every model a step can call is in `config.MODELS`. Each entry has its
   API, endpoint and key variable, and its prices per million tokens (input, output, cache read
   and write, and any longer-prompt tier) with where and when they were copied from. It also has
   the output cap and reasoning effort a call sends unless `--max-output-tokens` or
   `--reasoning-effort` overrides them: `low` for the Azure bulk candidates, `medium` for the
-  rest, and Anthropic's own default for each Claude model until tuned. `none` is an effort like
+  rest, and Anthropic's own default for each Claude model until tuned. Review overrides it with
+  `config.REVIEW_EFFORT` (`medium`) whatever the model, unless `--reasoning-effort` is given; a
+  model that takes no effort is sent none, as with any override. `none` is an effort like
   the others, sent as such; `omit` sends no effort setting, so the service's default applies,
   which for gpt-6-luna is `medium` (probed Nov 16 2026: with no setting it reasons at medium,
   and at `none` not at all). Where the efforts a model takes are known they are in the table
@@ -451,8 +460,8 @@ passed reads exactly as before. Step 6 replayed on them gains, and loses nothing
   each claim that passes every other check but whose sentence wasn't found, about 1% of them.
   Nearly all such quotes are the abstract's own words, slightly off: sentences stitched
   together without `...`, words dropped, one to three words changed, punctuation, hyphens, a
-  `Title:` prefix, title and abstract mixed. So code repairs them first, and the review model
-  only what code can't place:
+  `Title:` prefix, title and abstract mixed. So code repairs them first, and the repair model
+  (gpt-5.6-terra) only what code can't place:
   - **Code** (`quote_align.py`, standard library only) covers the quote's words with at most
     two of the abstract's sentences (difflib's matching blocks; the title and the abstract
     apart, since a quote can't mix them) and quotes those sentences whole, so its quote is
@@ -461,10 +470,11 @@ passed reads exactly as before. Step 6 replayed on them gains, and loses nothing
     sentence that names the missing one, as the label prompt's own rule asks. Where no sentence
     does, the passage is kept as it is ("unresolved") and not sent to the model.
   - **The model:** a claim code can't place, where under half the quote's words are in the
-    abstract (a made-up or rewritten quote), gets one small call to the review model
-    (`config.REPAIR_MODEL`) with the abstract, the claim and the failed sentence. The reply is
-    a verbatim quote or null, and code checks it the same way. Null is a normal answer, since a
-    model asked for a quote may grab a loosely related sentence.
+    abstract (a made-up or rewritten quote), gets one small call to the repair model
+    (`config.REPAIR_MODEL`, gpt-5.6-terra, its own setting since the reviewer became luna) with
+    the abstract, the claim and the failed sentence. The reply is a verbatim quote or null, and
+    code checks it the same way. Null is a normal answer, since a model asked for a quote may
+    grab a loosely related sentence.
 
   A repair supplies a sentence and never changes the claim. Measured on the 409 claims of the
   2026-11-16 repair test (`data/augmentation/quote-repair-methods-2026-11-16/`, not in git,
@@ -609,8 +619,12 @@ qualifier value is an enum, so code checks only what a schema can't say (above).
   call.
 - **Versions:** the review prompt version hashes the prompt with its includes,
   `FORMAT_VERSION`, the reply schema and the reasoning effort, so another effort reviews
-  afresh. `label_run.json` names the reviewer, its prompt version and its effort, and the full
-  run continues them while the same reviewer reviews.
+  afresh. The version doesn't hash the model, so luna and terra at medium share
+  `review@72d23654`; verdicts are stored per reviewer, so they never mix. `label_run.json` names
+  the reviewer, its prompt version and its effort, and the full run continues them while the
+  same reviewer reviews. Step 6 applies the review `label_run.json` names, not the default, so
+  a work dir terra reviewed applies terra's verdicts until a review run with another model
+  names its own.
 - **Failed calls:** the step returns 1, and leaves `label_run.json` as it was, when more than
   5% of the calls the claims that would count need have failed. Those are this run's calls
   plus the calls the claims reviewed before took (`calls_needed`). Counting only this run's
@@ -930,10 +944,11 @@ calls are free. The dry run's estimate assumes
 2,000 output tokens a call (`label.ESTIMATED_OUTPUT_TOKENS`), a guess the tuning sample will
 replace, and it covers labeling alone; the dry run says so, since review and quote repair come
 on top and no multiplier is assumed for them. On the Nov 12 2026 run labeling was 58% of the
-total, review 35% and repair 7%, with the labeling estimate itself 20% over the actual
-($3.44 estimated, $2.81 spent). Repair has since gone code first: the model is called for
-about 4% of the claims it used to be (16 of 409 in the 2026-11-16 test), so repair's share is
-now near nothing. `label --dry-run --budget USD` exits 1 when the estimate is
+total, review 35% (with gpt-5.6-terra) and repair 7%, with the labeling estimate itself 20%
+over the actual ($3.44 estimated, $2.81 spent). Review is now gpt-6-luna at medium, about
+18-24x cheaper: on a 2,000-pair sample of the Plan A label run it cost $0.26 for 1,780 claims.
+Repair has since gone code first: the model is called for about 4% of the claims it used to be
+(16 of 409 in the 2026-11-16 test), so repair's share is now near nothing. `label --dry-run --budget USD` exits 1 when the estimate is
 over the budget, and the full run's `--budget` stops the run before any model call on the
 same estimate; `--max-label-cost` instead labels the first pairs that fit. If a 20-abstract
 call's 95th percentile of output tokens exceeds 70% of the model's 16,000-token cap, reasoning
