@@ -6,7 +6,52 @@ A read-only MCP server over a Neo4j copy of the final graph. Any MCP client, Pi 
 it to search nodes, explore neighbors and paths, and explain any edge down to the source file,
 columns and record it came from ("why does A connect to B?").
 
-The implementation spec is [`AGENTS.md`](AGENTS.md) in this directory.
+The implementation spec is [`AGENTS.md`](https://github.com/UNC-RENCI-KGAI/KGB-CIA/blob/main/agents/mcp_interface/AGENTS.md) in the
+[KGB-CIA repository](https://github.com/UNC-RENCI-KGAI/KGB-CIA).
+
+## Quick start
+
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer. Add this to your MCP client's
+configuration (for Pi, `.pi/mcp.json`), with the values from the current release:
+
+```json
+{
+  "mcpServers": {
+    "kgbcia-mcp": {
+      "command": "uvx",
+      "args": ["kgbcia-mcp", "serve", "--enable-cypher"],
+      "env": {
+        "NEO4J_URI": "bolt://<bolt-host>:7687",
+        "KGB_MCP_ARTIFACTS": "https://<public-artifact-host>/artifacts.tar.gz",
+        "KGB_MCP_ARTIFACTS_SHA256": "<64-hex-artifact-checksum>"
+      }
+    }
+  }
+}
+```
+
+The shared Neo4j runs without authentication, so no user or password is needed. The server
+downloads and verifies the artifacts tarball on first start.
+
+## Tools
+
+- `get_graph_info`, `get_schema`: counts, sources, build status, quality-flag counts and the
+  category–predicate–category meta-graph, all precomputed.
+- `search_nodes`, `get_node`: find nodes by CURIE, equivalent identifier, name or synonym.
+- `summarize_node_edges`, `get_node_edges`: what a node connects to, with optional predicate,
+  category, property and `exclude_flags` filters.
+- `get_edges_between(include_lineage=true)`: every direct edge between two nodes with full
+  lineage: the one-call answer to "why does A connect to B?".
+- `find_paths`, `find_connected_nodes`: bounded multi-hop connections, skipping hub nodes.
+- `explain_edge`: Biolink provenance, quality flags with reasons, and each source record
+  resolved to its file, record set and columns.
+- `query_cypher` (with `--enable-cypher`): read-only, row-capped Cypher for counts and patterns
+  the fixed tools can't express. Column aliases are optional.
+
+Every edge in a response carries its ID, predicate, primary knowledge source, publication count
+and quality flags. To work on part of the graph (a gene family, a disease, a drug class), just
+ask: the server's instructions tell the agent to resolve and confirm the seed nodes, then scope
+its answers to them.
 
 ## How it fits together
 
@@ -19,7 +64,8 @@ final graph (nodes.jsonl, edges.jsonl) + transform_report.json files
 
 The server ships as its own package, [`kgbcia-mcp` on PyPI](https://pypi.org/project/kgbcia-mcp/),
 so it runs without the rest of the pipeline. Lineage beyond Biolink fields comes from each edge's
-`kgbcia_source_records`, resolved against the `TransformReport`s (see `agents/AGENTS.md`).
+`kgbcia_source_records`, resolved against the `TransformReport`s (see
+[`agents/AGENTS.md`](https://github.com/UNC-RENCI-KGAI/KGB-CIA/blob/main/agents/AGENTS.md)).
 
 ## Run it alone
 
@@ -27,7 +73,7 @@ Pipeline stage: an offline check that the final graph is ready to be dumped into
 
 ```bash
 uv run kgb-mcp check --input <dir with nodes.jsonl and edges.jsonl>
-# For a local development graph whose reports are outside data/transformation/:
+# For a graph whose reports live outside data/transformation/:
 uv run kgb-mcp check --input <graph-dir> --report <transform_report.json>
 ```
 
@@ -57,8 +103,9 @@ bash agents/mcp_interface/deploy/prepare_dump.sh \
 MCP server, against a running Neo4j:
 
 ```bash
-# Authenticated Neo4j (the local-k8s default): set both variables.
-export NEO4J_URI=bolt://<host>:7687 NEO4J_USER=<user> NEO4J_PASSWORD=<password>
+export NEO4J_URI=bolt://<host>:7687
+# Only for an authenticated Neo4j (the local-k8s default); the AWS deployment has no auth:
+export NEO4J_USER=<user> NEO4J_PASSWORD=<password>
 export KGB_MCP_ARTIFACTS=<dir or URL of the artifacts tarball>
 export KGB_MCP_ARTIFACTS_SHA256=<required when artifacts is a URL>
 uvx kgbcia-mcp serve --enable-cypher               # stdio, the published package from PyPI
@@ -66,7 +113,7 @@ uv run kgbcia-mcp serve --enable-cypher            # stdio, this checkout's code
 ```
 
 An artifacts URL is downloaded and unpacked once, by checksum, into `$KGB_CACHE_DIR/mcp-artifacts/`
-when `KGB_CACHE_DIR` is set (the pipeline's cache root, `shared/paths.py`), else
+when `KGB_CACHE_DIR` is set (the pipeline's cache root), else
 `~/.cache/kgbcia-mcp/artifacts/`.
 
 For the local authenticated cluster, port-forward Bolt and source the local ignored deployment
@@ -78,14 +125,14 @@ set -a; . agents/mcp_interface/deploy/.env; set +a
 uv run kgbcia-mcp serve --enable-cypher
 ```
 
-For the prepared AWS final host, use [`deploy/aws/README.md`](deploy/aws/README.md). It deploys
-only Neo4j from the same chart with the LitCoin test overlay and keeps `mcp.enabled=false`; run
-`kgbcia-mcp` locally over stdio against the host's Bolt Service.
+For the AWS host, use [`deploy/aws/README.md`](https://github.com/UNC-RENCI-KGAI/KGB-CIA/blob/main/agents/mcp_interface/deploy/aws/README.md).
+It deploys only Neo4j from the same chart with `values-aws.yaml` and keeps `mcp.enabled=false`;
+run `kgbcia-mcp` locally over stdio against the host's Bolt Service.
 
 ## Input / output
 
 **Input:** `nodes.jsonl` and `edges.jsonl` in ORION KGX format (`shared.schema.Node` / `Edge`),
-from the cleaning stage or, until that exists, `data/transformation/merged/`. Every edge must
+from the cleaning stage (`data/cleaning/`, the default) or `data/transformation/merged/`. Every edge must
 have an `id` and a `kgbcia_source_records` list, except an edge the augmentation stage proposed
 from the literature (`primary_knowledge_source: infores:kgbcia-augmentor`): it has no
 transformation record, so it is accepted without one when it cites `publications` and names the
@@ -130,11 +177,11 @@ controlled by the maintainer outside this repository.
 Build-order steps 1–4 are complete: the standalone uv workspace package, offline graph check,
 artifact loading, TransformReport lineage, bounded Neo4j service, FastMCP tools, optional
 Cypher tool, dump preparation, precomputed statistics, indexes, Docker image, Helm chart,
-local-k8s sample deployment, AWS sample deployment, and AWS real-graph deployment. Step 5,
-publication to PyPI, is complete: `kgbcia-mcp` 0.1.0 was published on Nov 16, 2026, so
-anyone can run `uvx kgbcia-mcp serve --enable-cypher` without a checkout.
+local-k8s deployment, and AWS deployment of the cleaned graph. Step 5, publication to PyPI, is
+complete: [`kgbcia-mcp`](https://pypi.org/project/kgbcia-mcp/) is
+published, so anyone can run `uvx kgbcia-mcp serve --enable-cypher` without a checkout.
 
-Anyone can connect by adding an MCP entry like this, with placeholders filled
+Anyone can connect by adding an MCP entry like this (see "Quick start"), with placeholders filled
 from the current release handoff. Update `KGB_MCP_ARTIFACTS_SHA256` every time a new
 `artifacts.tar.gz` is published.
 
@@ -181,12 +228,13 @@ Known limits:
 - `explain_edge(edge_id)` still unions over relationship types and can time out on the full
   graph for some edge IDs. Prefer `get_edges_between(include_lineage=true)` when endpoint IDs
   are known; it returns the same lineage for direct edges with an anchored query.
-- AWS uses unauthenticated Bolt. Read-only graph settings block graph writes, but Neo4j
-  Community does not provide a strong authorization boundary for the `system` database. Keep
-  Bolt exposure restricted.
+- AWS uses unauthenticated Bolt. Read-only graph settings block graph writes and resource limits
+  bound expensive queries, but Neo4j Community does not provide a strong authorization boundary
+  for the `system` database. Who can reach Bolt is set by the maintainer's AWS security group;
+  open it widely only for as long as needed.
 - `query_cypher` is read-only, row-capped and useful for ad hoc aggregates, but expensive raw
   queries can still hit the configured 30-second transaction timeout or 2 GiB transaction memory
-  cap.
+  cap. Add `LIMIT` to large queries: rows beyond the cap are discarded.
 
 ## Design decisions
 
@@ -205,10 +253,10 @@ Known limits:
   index and relationship-id indexes are created before the final `kgb.dump` is produced.
 - **Checksum-keyed loads:** Helm init containers key their PVC marker on the dump checksum, not
   the URL, so changing presigned URLs does not reload an unchanged dump.
-- **AWS auth disabled:** Neo4j Community allowed the authenticated sample user to administer
-  `system`; the AWS deployment therefore uses `NEO4J_AUTH=none` plus maintainer-controlled
-  network exposure, graph read-only mode and resource limits rather than a reusable plaintext
-  Bolt password.
+- **AWS auth disabled:** Neo4j Community allowed the authenticated read-only user (`kgbcia`) to
+  administer `system`; the AWS deployment therefore uses `NEO4J_AUTH=none` plus
+  maintainer-controlled network exposure, graph read-only mode and resource limits rather than a
+  reusable plaintext Bolt password.
 - **Build description is an artifact:** `description.json` is generated on the VM that has the
   Nov 9 transformation output and cleaning report, then sanitized and packed into the artifact
   tarball so user-facing tools can mention failed or missing sources.
