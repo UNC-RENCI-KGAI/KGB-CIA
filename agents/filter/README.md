@@ -1,19 +1,24 @@
 # Filter agent
 
-**Team:** @UNC-RENCI-KGAI/filter
+Stage 4, and the one place the pipeline asks the user anything. We build and clean one full
+graph; the part a user works with comes from what they ask for, not from a scope chosen in
+advance. With no request, the user gets the whole graph.
 
-We build and clean one full graph. The part a user works with comes from what they ask, not
-from a scope we chose in advance. The agent turns a request ("human kinases and the drugs that
-target them", "Alzheimer's disease", "my screening data") into a focus file: seed rules for the
-nodes the request is about, and how far to reach out from them. `kgb-filter` then cuts that
-subgraph out of the full graph reproducibly. With no request, the user's graph is the whole
-graph.
+## How it works
 
-The agent side is two skills in `.agents/skills/filter/`: `focus-subgraph` (request to focus
-file, with `find_nodes.py` to look up seed ids) and `describe-graph` (what is in the graph, and
-with a user's own source, which other sources connect to it).
+Two skills in [`.agents/skills/filter/`](../../.agents/skills/filter/) do the agent's part:
 
-## Run it alone
+- **`describe-graph`** gives a plain-language overview of what's in the graph. Given the user's
+  own data source, it also measures how much of it the graph's sources already cover, and
+  recommends which sources to focus on. That recommendation is the default.
+- **`focus-subgraph`** turns a request ("human kinases and the drugs that target them",
+  "Alzheimer's disease", "my screening data") into a focus file: rules for the nodes the request
+  is about, and how far to reach out from them. `find_nodes.py` looks up the IDs.
+
+`kgb-filter` then cuts that subgraph from the full graph. The cut is plain code, so the same
+focus file always gives the same subgraph.
+
+## Run it
 
 ```bash
 uv run kgb-filter                                   # no request: the whole graph
@@ -24,31 +29,36 @@ uv run kgb-filter --focus data/filter/<name>.json   # the subgraph for one reque
 
 ## Input / output
 
-**Input:** a directory with `nodes.jsonl` and `edges.jsonl` in ORION KGX format: the cleaned
-graph (`data/cleaning`) when cleaning has run, else the merged one
-(`data/transformation/merged`). So the filter runs on the cleaned full graph, once per request.
+**Input:** a directory with `nodes.jsonl` and `edges.jsonl` in KGX format. That's the cleaned
+graph (`data/cleaning`) if cleaning has run, otherwise the merged one
+(`data/transformation/merged`).
 
-**Output:** `data/filter/`, where augmentation reads it, with `nodes.jsonl`, `edges.jsonl`
-(records unchanged) and `focus_report.json`: the request, each seed rule with how many nodes it
-matched and examples, the subgraph's size, and its edges by source and predicate. With no focus,
-`nodes.jsonl` and `edges.jsonl` link to the input graph. Each run replaces the last; to keep a
-cut beside the current one (a demo subgraph, say), pass `--output data/filter/<name>` and give
+**Output:** `data/filter/`, where augmentation reads it:
+
+- `nodes.jsonl` and `edges.jsonl`, with records unchanged.
+- `focus_report.json`: the request, each seed rule with how many nodes it matched and examples,
+  the subgraph's size, and its edges by source and predicate.
+
+With no focus file, `nodes.jsonl` and `edges.jsonl` link to the input graph. Each run replaces
+the last. To keep a cut beside the current one, pass `--output data/filter/<name>` and give
 augmentation the same folder with `--input`.
 
 ## How a subgraph is cut
 
-Seeds are the union of the focus file's seed rules (exact ids; a word in node names, by category
-and taxon; members or subclasses of given nodes; everything one source touches). From the seeds
-it reaches out `hops` steps (default 1), not expanding through hubs with more than
-`max_degree` edges (default 2000), except seeds, which always expand. The subgraph's edges
-are every edge between its nodes, optionally only from some sources or with some
-predicates. The format is in the `focus-subgraph` skill's reference.
+The seeds are the union of the focus file's seed rules:
+- exact IDs;
+- a word in node names, by category and taxon;
+- members or subclasses of given nodes;
+- everything one source touches.
 
-## Status
+From the seeds the cut reaches out `hops` steps (default 1). It doesn't expand through hubs with
+more than `max_degree` edges (default 2,000), except for the seeds themselves, which always
+expand. The subgraph keeps every edge between its nodes, optionally only from some sources or
+with some predicates. The focus file format is in the `focus-subgraph` skill's reference.
 
-`kgb-filter` works and is tested (`tests/test_filter.py`). On the frozen merged graph (1.2M
-nodes, 12M edges) a request takes 2 to 3 minutes: each hop is a pass over the edges. For
-example, the 635 Pharos kinases and their drugs gave 633 seed proteins and 4,675 drug-target
-edges. The `describe-graph` skill (`.agents/skills/filter/describe-graph/`) does the first half
-of the filter's job: given the user's own source, it measures how much of it the pre-built
-sources already share and recommends which sources to focus on, with that list as the default.
+For example, on the full graph (1.2M nodes, 12M edges), "the 635 Pharos kinases and their drugs"
+matched 633 seed proteins and gave 4,675 drug–target edges.
+
+## Limitations
+
+- A request on the full graph takes 2 to 3 minutes, because each hop is a pass over every edge.

@@ -1,12 +1,16 @@
-.PHONY: setup lint format test demo clean
+.PHONY: setup lint format test test-metadata test-neo4j demo clean
 
 UV := $(shell command -v uv 2>/dev/null)
 
-setup:  ## create .venv and install in editable mode
+setup:  ## create .venv with every dependency (uv fetches Python 3.12+ itself if needed)
 ifdef UV
 	uv sync --dev --all-extras
 else
-	python3 -m venv .venv && .venv/bin/pip install -e '.[augmentation]' pytest ruff
+	@echo "make setup needs uv. Install it with one command, then rerun make setup:"
+	@echo "  curl -LsSf https://astral.sh/uv/install.sh | sh     (macOS / Linux)"
+	@echo "  brew install uv                                      (Homebrew)"
+	@echo "See https://docs.astral.sh/uv/getting-started/installation/"
+	@exit 1
 endif
 
 lint:
@@ -15,8 +19,19 @@ lint:
 format:
 	uv run ruff check --fix . && uv run ruff format .
 
-test: lint
+test: lint  ## lint, the project's tests, and the metadata skill's tests
 	uv run pytest -q
+	$(MAKE) --no-print-directory test-metadata
+
+test-metadata:  ## the croissant-semantics skill's tests, with that skill's own dependencies
+# The --with list repeats the dependencies in the skill scripts' `# /// script` headers: add a
+# package here when a script adds one there.
+	cd .agents/skills/metadata/croissant-semantics && uv run --with pytest --with requests \
+		--with jsonpath-ng --with pyyaml --with bioregistry --with openpyxl --with truststore \
+		--with pypdf --with pyarrow --with xlrd pytest -q tests/
+
+test-neo4j:  ## the MCP server against a toy graph in a throwaway Neo4j container (needs Docker)
+	bash tests/neo4j_smoke.sh
 
 demo:  ## dry run every stage on toy data; must always work on main
 	uv run python -m shared.pipeline --dry-run

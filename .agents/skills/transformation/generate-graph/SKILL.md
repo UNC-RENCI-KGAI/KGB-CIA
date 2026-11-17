@@ -5,6 +5,9 @@ description: Compile semantic Croissant metadata into per-source ORION SourceDat
 
 # Generate graph
 
+In the KGB-CIA repository, read [`agents/AGENTS.md`](../../../../agents/AGENTS.md) first: the
+stage contract, the provenance every edge carries, and the non-Biolink keys each stage writes.
+
 Generate native ORION parsers from mappings supplied by the metadata agent. Saved code
 performs reproducible extraction; ORION owns graph construction, normalization, and merging.
 Follow the current flat models in `shared/schema.py` and write a `TransformReport` for each

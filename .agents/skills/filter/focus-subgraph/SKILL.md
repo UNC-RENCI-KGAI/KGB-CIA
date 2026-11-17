@@ -5,6 +5,9 @@ description: Turn what a user asks for ("kinases and the drugs that hit them", "
 
 # Focus subgraph
 
+In the KGB-CIA repository, read [`agents/AGENTS.md`](../../../../agents/AGENTS.md) first: the
+stage contract, the provenance every edge carries, and the non-Biolink keys each stage writes.
+
 We build and clean one full graph. What a user works with is decided by what they ask, not by
 us. You turn their request into a **focus file**: rules that pick the nodes the request is about
 (the seeds), and how far to reach out from them. `kgb-filter` then cuts that subgraph out the

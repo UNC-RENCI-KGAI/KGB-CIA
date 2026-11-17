@@ -85,6 +85,7 @@ outside this skill.
 * `scripts/run_orion.py`: registration and native ORION ingestion.
 * `tests/`: compiler and real ORION integration tests with synthetic data.
 
-The runtime stage CLI in `agents/transformation/cli.py` remains a stub. Generator tests run
+`kgb-transform` (`agents/transformation/cli.py`) runs this workflow for every source and
+merges the results. Generator tests run
 with `make test`; native integration tests require the pinned ORION environment described
 in the reference. Generated packages and source data belong under `data/`, not in git.

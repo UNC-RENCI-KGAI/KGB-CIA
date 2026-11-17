@@ -23,13 +23,17 @@ knowledge sources, knowledge level and agent type; augmentation adds to `publica
 than replacing them. The transformation agent also writes a `TransformReport` per source: which
 Croissant files and columns it used to make which nodes and edges.
 
-Extra keys on a `Node` or `Edge` are Biolink slots, with one exception: every `Edge` the
-transformation agent writes carries `kgbcia_source_records: list[str]`, the MCP interface's
-pointer from the edge back to its `TransformReport`. Each entry is
-`{Mapping.id}#{source record key}`, using the source's primary key where it has one and the row
-number only as a fallback. Keep it a list even with one entry: ORION concatenates lists when it
-merges duplicate edges, so every contributing record survives. Later stages carry it through
-untouched.
+Extra keys on a `Node` or `Edge` are Biolink slots, except these, which our stages write:
+
+| Key | Written by | Meaning | Later stages |
+| --- | --- | --- | --- |
+| `kgbcia_source_records` | transformation, on every edge | The MCP interface's pointer from the edge back to its `TransformReport`: `{Mapping.id}#{source record key}`, using the source's primary key where it has one and the row number only as a fallback. | Carried through untouched. |
+| `kgbcia_flags`, `kgbcia_flag_reasons` | cleaning, on a flagged edge | The edge's flags and one plain-language reason for each, in the same order (`agents/cleaning/README.md`). | Carried through; each cleaning pass replaces them, except that it keeps an inherited `rare_category_combination`. |
+| `original_edge_ids` | augmentation, on a proposed edge | The ids of the edges it refines. A proposed edge has no `kgbcia_source_records`. | Carried through. |
+| `lit_support_score`, `lit_supporting_publications`, `lit_added_publications`, `lit_refined_by`, `lit_context_notes`, `lit_evidence` | augmentation, on a checked edge | What the PubMed check found (the skill's `reference/formats.md`). | Carried through. |
+
+Keep `kgbcia_source_records` a list even with one entry: ORION concatenates lists when it merges
+duplicate edges, so every contributing record survives. A new key goes in this table.
 
 When the CLI's flags or its input/output files change, update the stage's `README.md` ("Run it
 alone" and "Input / output").
@@ -41,8 +45,9 @@ The original reasoning is in `docs/agent_plan.md`; where this list differs, this
 
 - **metadata**: Croissant metadata per source file and column, building on RoboCroissant.
   Purely descriptive; builds no graph.
-- **transformation**: decides which columns map to which Biolink class and predicate, then
-  writes and runs code to do it. A *full* transform of everything it can convert; choosing a
+- **transformation**: follows the metadata's mappings (which columns are which Biolink class
+  and predicate) and never changes them; a wrong mapping is fixed in the metadata. It writes
+  and runs the code that applies them. A *full* transform of everything it can convert; choosing a
   subset is the filter stage's job. It generates an ORION parser per source from the semantic
   metadata, builds each source, and merges them into one graph with ORION's merge rules
   (`merged/`). Wrapping ORION by hand as the whole stage was ruled out; the agent writes the
@@ -57,8 +62,10 @@ The original reasoning is in `docs/agent_plan.md`; where this list differs, this
   merged graph before the filter, and as `final_cleaning` on augmentation's output, applying the
   drop lists and flag lists the evidence check wrote. The evidence check runs just before it as
   its own stage, `evidence_check` (`kgb-evidence`, `agents/cleaning/evidence_check.py`), which
-  runs the evidence-check skill's scripts for every question file. An edge isn't dropped just because no
-  abstract supports it. See `agents/cleaning/README.md`.
+  runs the evidence-check skill's scripts for every question file. An edge isn't dropped just
+  because no abstract supports it. See `agents/cleaning/README.md`. In `STAGES` these are three
+  stages: `cleaning`, `evidence_check` (after augmentation) and `final_cleaning`, so the
+  pipeline has eight.
 - **filter**: the only stage that talks to the user. It turns what the user asks for ("human
   kinases and the drugs that target them", or their own dataset) into a subgraph of the cleaned
   graph; with no request, the whole graph. Every question has a default. It doesn't merge:

@@ -1,31 +1,39 @@
 # Metadata agent
 
-**Team:** @UNC-RENCI-KGAI/metadata · **Existing asset:** RoboCroissant
+Stage 1. Works out what each source file means: which columns hold which kinds of node, what
+relationship a row states, which identifier prefixes and codes it uses, and how the file is laid
+out. It builds no graph itself; the transformation stage builds one from what it writes.
 
-Describe each source file and its columns as Croissant metadata. Purely descriptive; builds no graph.
+## How it works
 
-## Semantics
+Each source arrives with a [Croissant](https://mlcommons.org/croissant/) file from
+[RoboCroissant](https://github.com/RoboBoulangerie/robo-croissant-pipeline), which describes the
+files and columns but not their meaning. The
+[`croissant-semantics`](../../.agents/skills/metadata/croissant-semantics/) skill has an agent
+add the meaning, in Biolink terms: node categories, predicates, identifier prefixes, units, code
+values and file dialects. It writes those choices as a plan, and its scripts check the plan
+against samples of the real data and against NodeNorm before anything is built. The agent
+chooses the mapping; code applies it, so the result can be reproduced.
 
-The `croissant-semantics` skill in [`.agents/skills/metadata/croissant-semantics/`](../../.agents/skills/metadata/croissant-semantics/)
-adds what the data means (Biolink classes and associations, identifier prefixes, units, code
-values, file dialects) to the Croissant files RoboCroissant produces, with checking scripts. See
-its README.
+## Run it
 
-## Run it alone
+Ask an agent (Pi or Claude Code) to add semantics to a croissant, and it follows the skill's
+`SKILL.md`. The skill's [README](../../.agents/skills/metadata/croissant-semantics/README.md)
+explains how to run its scripts by hand.
 
-Run the `croissant-semantics` skill per source; its README says how. `kgb-metadata` is still a
-stub that prints "not implemented yet" ([#41](https://github.com/UNC-RENCI-KGAI/KGB-CIA/pull/41)
-implements it).
+`kgb-metadata`, which would run the skill for every source in one command, isn't implemented
+yet. For now the skill runs once per source.
 
 ## Input / output
 
 **Input:** a RoboCroissant `croissant.json` per source, kept in `data/cache/croissant/`.
 
 **Output:** per source, `croissant.semantic.json` with `semantics_plan.json` and the check
-reports, which `kgb-transform` reads (see `agents/transformation/README.md`).
+reports. The transformation stage reads these (see
+[`agents/transformation/README.md`](../transformation/README.md)).
 
-## Status
+## Limitations
 
-The skill works and has been run on the Pharos sources. The graph is frozen at the Nov 9
-transformation run, so metadata fixes now go into a report (what, which source, why) rather than
-into new bundles.
+- The skill runs one source at a time; there's no batch command yet.
+- It can only describe the files a source's croissant lists. If the croissant leaves out a file,
+  as Monarch's currently does, that file can't be in the graph.

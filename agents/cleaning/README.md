@@ -1,194 +1,164 @@
 # Cleaning agent
 
-**Team:** @UNC-RENCI-KGAI/cleaning
+Stages 3, 6 and 7. Cleaning cuts the merged graph down to edges that can be trusted and explained,
+and reports what it removed and why. It drops edges that can't be right. It keeps edges that
+are only suspicious, but flags each one and writes the reason onto the edge, so anyone querying
+the graph can see it.
 
-Prune the merged graph to what can be trusted and explained, and report what was removed and
-why. Maps to the accuracy and pruning criterion.
+The pipeline runs cleaning twice:
+1. On the merged graph, before the filter and augmentation, so the paid steps never spend money
+   on edges cleaning would drop.
+2. At the end, on augmentation's output. This pass also applies the evidence check's drop and
+   flag lists.
 
-## Run it alone
+## Run it
 
 ```bash
 uv run kgb-clean                                # data/transformation/merged -> data/cleaning
-uv run kgb-clean --input <dir> --output <dir>   # only when the graph lives somewhere else
+uv run kgb-clean --input <dir> --output <dir>   # a graph somewhere else
 uv run kgb-clean --input data/augmentation --output data/final --drop-lists data/cleaning/drop_lists
 ```
 
-There are no rules to choose between: every rule always applies. To drop more edges, put a drop
-list in `<output>/drop_lists/` (see below) rather than passing anything. The pipeline runs
-cleaning twice: first on the merged graph with no arguments, then as `final_cleaning` on
-augmentation's output (the third line). `--drop-lists` is only for that second pass, which
-reads the drop lists the evidence check wrote for the first pass's output directory, and the
-flag lists beside them (`data/cleaning/flag_lists`), since the two folders travel together.
+Every rule always applies; there's nothing to switch on or off. The third line is the final
+pass: `--drop-lists` points it at `data/cleaning/drop_lists`, where the evidence check writes,
+and it reads the flag lists in `data/cleaning/flag_lists` beside them.
 
-The evidence check runs between augmentation and the final pass as its own pipeline stage:
+The evidence check runs between augmentation and the final pass, as its own stage:
 
 ```bash
 uv run kgb-evidence --graph data/augmentation          # every question; what the pipeline runs
 uv run kgb-evidence --question data/cleaning/evidence/my_question.json   # one question
 ```
 
-It runs the evidence-check skill's three scripts (gather, judge with Jev, build the lists) for
-each question: the ones the skill ships in its `questions/` folder, and any an agent wrote in
-`data/cleaning/evidence/*.json` (same `name` replaces the shipped one). Without
-`TYPESAFE_API_KEY` it asks Jev nothing, writes each question's requests, leaves its lists as
-they were, and the pipeline carries on. A question whose step fails (NCBI unreachable, TypeSafe
-down, `uv` missing) is reported and its lists left as they were; the stage still returns 0 so the
-final pass runs. `--strict` returns nonzero instead, for running a question by hand.
+For each question (those the skill ships, plus any an agent wrote in
+`data/cleaning/evidence/`), it gathers the cited abstracts, asks Jev about each edge, and writes
+the lists. Without `TYPESAFE_API_KEY`, a question whose Jev answers are already cached from an
+earlier run with the key has its lists rebuilt from those answers; any other question's lists are
+left as they were. If a step fails, it reports why, leaves the lists as they were, and the
+pipeline carries on; `--strict` makes a failure stop it instead.
 
 ## Input / output
 
-**Input:** a directory with `nodes.jsonl` and `edges.jsonl` in ORION KGX format
+**Input:** a directory with `nodes.jsonl` and `edges.jsonl` in KGX format
 (`shared.schema.Node` / `Edge`), normally the transformation stage's `merged/`.
 
 **Output**, in `--output`:
 
-- `nodes.jsonl`, `edges.jsonl`: the cleaned graph. Records pass through unchanged, including
-  `id` and `kgbcia_source_records`, except that a flagged edge gains two lists (see "Flags on
-  the edges" below).
-- `cleaning_report.json`: counts in and out; `attention`, the sources that lost at least half
-  their edges, with the CURIE prefixes that didn't resolve; every dropped edge and node by
-  reason and by primary knowledge source; unresolved nodes by prefix; flags on kept edges; and a
-  few examples of each.
-- `pruned_edges.tsv`: the record of what cleaning removed and why. One KGX TSV row per dropped
-  edge: `subject`, `predicate`, `object`, `primary_knowledge_source`, `statement_id`,
-  `publications`, `reason` (as in the report), an `explanation` in plain words, and a
-  `confidence` only for a drop-listed edge whose list line carries one (the evidence check
-  writes the judge's probability). It is not a gold set: a rule drops an edge because it can't
-  be used (its ids don't resolve, say), which says nothing about whether the claim is true. The
-  scored gold set is the evidence check's `gold_set.tsv`. `malformed` and
-  `no_primary_knowledge_source` edges are counted in the report but not listed, since their rows
-  wouldn't be valid KGX.
-- `flagged_edges.jsonl`: the kept edges worth a look, one per line, keyed like a drop list (see
-  below).
-- `unresolved_nodes.tsv`: every node NodeNorm couldn't resolve, with its prefix, name, the
-  edges it took down, the edges kept with an `unresolved_node` flag, and the sources and
-  predicates of the dropped edges, most costly first. This is what a metadata fix needs: the
-  identifiers, not just the prefix. Written on every run.
+| File | What it holds |
+| --- | --- |
+| `nodes.jsonl`, `edges.jsonl` | The cleaned graph. Records pass through unchanged, except that a flagged edge gains two lists (see [Flags on the edges](#flags-on-the-edges)). |
+| `cleaning_report.json` | Counts in and out. `attention`: the sources that lost at least half their edges, with the prefixes that didn't resolve. Dropped edges by reason and by source; dropped nodes by reason. Unresolved nodes by prefix, flags on kept edges, and a few examples of each. |
+| `flagged_edges.jsonl` | The kept edges worth a look, one per line, keyed like a drop list. |
+| `unresolved_nodes.tsv` | Every node NodeNorm couldn't resolve: its prefix and name, how many edges it took down and how many were kept with a flag, and the sources and predicates of the edges it took down, most costly first. |
+| `pruned_edges.tsv` | Every dropped edge except `malformed` and `no_primary_knowledge_source` ones (counted in the report only, since their rows would have no predicate or source), one KGX TSV row each, with its `reason` and a plain-words `explanation` (and the evidence check's `confidence`, where it gave one). It records what was removed, not whether the claim is false: the scored gold set is the evidence check's `gold_set.tsv`. |
 
-## Reading the result
+### Reading the result
 
-Start with `attention` (also printed as "Needs attention"). A source there almost always has an
-id problem in its metadata: a prefix NodeNorm doesn't know, native ids without a prefix, or
-versioned ids. Fix the source's semantics plan with the croissant-semantics skill and rebuild
-it.
+Start with `attention`, which the run also prints as "Needs attention". A source listed there
+almost always has an ID problem in its metadata: a prefix NodeNorm doesn't know, native IDs
+without a prefix, or versioned IDs. Fix the source's plan with the croissant-semantics skill and
+rebuild it. `unresolved_nodes.tsv` gives the identifiers a fix needs.
 
-Unresolved nodes are kept where they still connect to the graph. An edge with one unresolved
-end (a resolved gene and a dbSNP variant, a resolved protein and a Reactome reaction, a
-resolved protein and an obsolete GO term) is a real fact about the resolved end, so it is kept
-and flagged `unresolved_node`. An edge with both ends unresolved can't join anything else, so
-it is dropped, as is an edge touching an id that is wrong rather than unknown to NodeNorm
-(`BROKEN_ID_PREFIXES`). On the Nov 9 graph, 1.96M of the 2.21M edges with an unresolved end
-had the other end resolved.
+## What it drops
 
-## What it removes
-
-Garbage collection (`garbage.py`), in this order. An edge is dropped when it:
+An edge is dropped when:
 
 | Reason | Meaning |
-|---|---|
-| `malformed` | no subject, predicate or object |
-| `no_primary_knowledge_source` | no provenance, so it can't be explained |
-| `dangling` | names a node that isn't in `nodes.jsonl` |
-| `broken_id` | touches an unresolved id that is wrong, not just unknown to NodeNorm (`BROKEN_ID_PREFIXES`): `OBA:VT...` trait ids written with the wrong prefix (TIGA, GWAS Catalog), and `phenopacket.store:` patients from case reports. Dropped even when the other end resolves |
-| `unresolved_both_ends` | both its nodes are ones NodeNorm couldn't resolve (empty `equivalent_identifiers`), so it can't join the rest of the graph |
-| `drop_list:<name>` | listed in `<output>/drop_lists/<name>.jsonl` |
-| `type_violation:<predicate>-><category>` | a type violation promoted to a drop in `DROP_TYPE_VIOLATIONS`: today, `treats` whose object is a Procedure, ClinicalIntervention, BiologicalProcess, ChemicalEntity, OrganismTaxon, Protein or Drug |
+| --- | --- |
+| `malformed` | It has no subject, predicate or object. |
+| `no_primary_knowledge_source` | It has no provenance, so it can't be explained. |
+| `dangling` | It names a node that isn't in `nodes.jsonl`. |
+| `broken_id` | An end that didn't resolve has an ID that is wrong, not just unknown to NodeNorm (`BROKEN_ID_PREFIXES`). Examples: `OBA:VT...` trait IDs written with the wrong prefix (TIGA, GWAS Catalog), and `phenopacket.store:` patients from case reports. Dropped even when the other end resolves. |
+| `unresolved_both_ends` | Neither of its nodes resolved in NodeNorm, so it can't join the rest of the graph. |
+| `drop_list:<name>` | It's listed in `<output>/drop_lists/<name>.jsonl`. |
+| `type_violation:<predicate>-><category>` | A type violation serious enough to drop (`DROP_TYPE_VIOLATIONS`). Today that's `treats` whose object is a Procedure, ClinicalIntervention, BiologicalProcess, ChemicalEntity, OrganismTaxon, Protein or Drug. |
 
-Then nodes are dropped when no kept edge touches them: `unresolved` when NodeNorm couldn't
-resolve them either, else `orphan`. An unresolved node with a kept edge stays.
+Then any node no kept edge touches is dropped: as `unresolved` if NodeNorm couldn't resolve it,
+otherwise as `orphan`. A node with no `id` is dropped as `malformed`.
 
-The promoted type violations are the drops a reviewer made by hand on the Nov 9 graph, so an
-unattended run reaches the same result in one pass: DrugCentral `treats` edges to "General
-Anesthesia" (Procedure), "Asthma management" (ClinicalIntervention), "relaxation of muscle"
-(BiologicalProcess), "Diagnostic agents" (ChemicalEntity), "Vancomycin-Resistant Enterococci"
-(OrganismTaxon) or the drug's own synonym (Protein, Drug). `treats` to a Phenomenon stays a
-flag on purpose ("severe pain" is a real indication). To promote another pair, add it to the
-table with the names that justify it; every other violation stays a flag.
+**Why an edge with one unresolved end is kept.** An edge between a resolved gene and a dbSNP
+variant, or a resolved protein and an obsolete GO term, is still a real fact about the resolved
+end. So it's kept, with an `unresolved_node` flag. In the submitted graph, 1.91M of the 2.21M
+edges with an unresolved end were kept, flagged `unresolved_node`.
 
-Kept edges are counted, not changed, as flags: things to fix upstream in metadata, not reasons
-to lose a fact.
+**Why only some type violations are drops.** The `treats` drops are ones a reviewer made by hand
+on real data, such as DrugCentral `treats` edges to "General Anesthesia" (Procedure) or
+"relaxation of muscle" (BiologicalProcess). `treats` to a Phenomenon stays a flag on purpose,
+because "severe pain" is a real indication. Decide drops by predicate *and* category, never by
+predicate alone. To make another pair a drop, add it to `DROP_TYPE_VIOLATIONS` with the examples
+that justify it.
+
+## What it flags
+
+Flagged edges are kept. A flag points at something to fix upstream in the metadata; it isn't a
+reason to lose a fact.
 
 | Flag | Meaning |
-|---|---|
-| `unresolved_node` | one end is a node NodeNorm couldn't resolve; the other end resolved |
-| `self_loop` | subject and object are the same node |
-| `knowledge_level_not_provided`, `agent_type_not_provided` | provenance slots left at `not_provided` |
-| `type_violation` | the predicate's Biolink domain or range doesn't fit the node categories (`biolink_types.py`); `type_violations_by_predicate` and `type_violations_by_category` in the report say where |
-| `rare_category_combination` | a (subject categories, predicate, object categories) combination, using each node's most specific categories, under 0.1% of that predicate's edges, for predicates with at least 1,000 kept edges; listed with an example edge each. A flag the input already carried is kept (see below) |
-| `opposing_predicate` | the pair also carries the opposite predicate (`treats` or a predicate under it, such as `ameliorates_condition`, with `contraindicated_in`); the pairs are listed |
+| --- | --- |
+| `unresolved_node` | One end didn't resolve in NodeNorm; the other did. |
+| `self_loop` | The subject and object are the same node. |
+| `type_violation` | The node categories don't fit the predicate's Biolink domain or range (`biolink_types.py`). The report breaks these down by predicate and category. |
+| `rare_category_combination` | A (subject categories, predicate, object categories) combination that makes up under 0.1% of a predicate's edges, for predicates with at least 1,000 kept edges. |
+| `opposing_predicate` | The same pair also carries the opposite predicate. Today the one pair is `treats` and `contraindicated_in` (each with the predicates under it). |
+
+The report also counts `knowledge_level_not_provided` and `agent_type_not_provided` (a
+provenance field left at `not_provided`), but these are report counts only: they aren't written
+on the edge or to `flagged_edges.jsonl`. Flags from a flag list (such as the evidence check's
+`wrong_mechanism`) are written on the edge like the ones above.
+
+Some violations are Biolink's quirks, not the graph's errors. The participation predicates
+(`has_participant`, `participates_in`, `catalyzes`, `has_catalyst`) would flag every gene in a
+Reactome pathway, so `biolink_types.NOT_ENFORCED` turns off that side of the check for them.
+
+Categories always use each node's *most specific* categories, never the first in its list. A
+node can have more than one (a drug that is both `Drug` and `SmallMolecule`).
 
 ### Flags on the edges
 
-Every kept edge with an `unresolved_node`, `self_loop`, `type_violation`,
-`rare_category_combination` or `opposing_predicate` flag, or a flag from a flag list, carries
-them on the edge, so the MCP interface can tell a user the edge is in question and why:
+A flagged edge carries its flags and a plain-language reason for each, so the MCP server can tell
+a user that the edge is in question and why:
 
 ```json
 "kgbcia_flags": ["type_violation"],
 "kgbcia_flag_reasons": ["Biolink expects the subject of enables to be a physical entity, but it is Gene"]
 ```
 
-The two lists line up, one plain sentence per flag. They are lists of strings so Neo4j stores
-them as they are. A cleaning pass replaces any flags its input already had, so the final pass
-after augmentation doesn't stack them. The exception is `rare_category_combination`, which is
-a statistic of the graph it was computed on. The final pass runs on one request's subgraph, a
-biased sample of that graph (a cut around a gene holds a few thousand edges, and whatever it
-holds of a predicate says nothing about how rare a combination is across the graph), so a
-pass keeps the flag and reason its input carries, adds any it finds in its own input, and
-counts the kept ones under `flags_inherited` in the report. On the Nov 12 cleaned graph, a
-21,732-edge cut around its 1,325 rare-flagged edges came out of a second pass with 7 of them
-before this rule and all 1,325 after.
+The two lists line up, one sentence per flag. A cleaning pass replaces the flags its input
+carried, so the final pass doesn't stack them. The exception is `rare_category_combination`: it's
+a statistic of the whole graph, and the final pass only sees one request's subgraph, so a pass
+keeps the rare flags its input already had.
 
-A flag list is how a check outside `kgb-clean` marks edges without dropping them: a `.jsonl`
-file in `flag_lists/`, beside `drop_lists/` (`<output>/flag_lists/` by default), one edge per
-line, keyed like a drop list, with a `flag` and a `reason`:
+## Drop and flag lists
+
+These let a check outside `kgb-clean` drop or flag specific edges. The evidence check is one
+such check.
+
+A **drop list** is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by
+`subject`, `predicate`, `object` and `primary_knowledge_source`. Edge `id`s can't be used as the
+key, because the merge assigns new ones on every run. To match only one statement, and not
+another edge that differs from it only in qualifiers, a line can also give the edge's
+`statement_id` (`shared.schema.edge_statement_id`), or its qualifiers and `negated`.
+
+A **flag list** is the same, in `<output>/flag_lists/`, with a `flag` and a `reason` on each
+line:
 
 ```json
 {"subject": "CHEBI:82700", "predicate": "biolink:interacts_with", "object": "UniProtKB:P07550", "primary_knowledge_source": "infores:drugcentral", "statement_id": "<16 hex digits>", "causal_mechanism_qualifier": "antagonism", "flag": "wrong_mechanism", "reason": "PMID:20371707 reports a different action than antagonism"}
 ```
 
-The evidence check writes one for edges whose paper shows the drug acting on the target, but
-not the way the edge's qualifier says.
+To drop some flagged edges, copy their lines from `flagged_edges.jsonl` into a drop list.
 
-The same edges are also written to `flagged_edges.jsonl`, keyed like a drop list (statement
-included), with its flags, the endpoints' most specific categories and, for a type violation, whether
-the domain or the range failed. A node can have more than one most specific category (a drug
-that is both `Drug` and `SmallMolecule`, neither under the other), so these are lists, and the
-category combinations behind `rare_category_combination` use all of them. The order of a
-node's `category` list is never relied on. To drop some of them, copy those lines into a drop list.
+### The evidence check
 
-Decide drops by predicate and category, not by predicate alone. On the Oct 30 DrugCentral
-indication graph, `treats` had 411 range violations: about 240 objects were a Procedure
-(imaging, contraception), which are wrong as `treats`, but about 100 were a Phenomenon (severe
-pain, skin irritation), which are real indications that NodeNorm categorizes as Phenomenon.
-Some violations are Biolink's, not the graph's: the participation predicates (`has_participant`,
-`participates_in`, `catalyzes`, `has_catalyst`) put `occurrent` on the participant's side, so
-every gene or protein in a Reactome pathway or reaction would be flagged (262K edges on the
-Nov 9 graph). `biolink_types.NOT_ENFORCED` turns off that side for them; the process side is
-still checked.
+The [`evidence-check`](../../.agents/skills/cleaning/evidence-check/) skill judges edges against
+the PubMed abstracts they cite, using the Jev model. An edge an abstract contradicts goes in a
+drop list. An edge whose paper gets a detail wrong, such as the mechanism, goes in a flag list.
+So does a text-mined edge that no abstract supports (`unsupported_by_abstract`). Every later
+cleaning run applies the lists. The check is modeled on the Translator TMKP filter
+([NCATSTranslator/translator-ingests#560](https://github.com/NCATSTranslator/translator-ingests/issues/560)).
+It runs up to the Jev step without a key, and needs `TYPESAFE_API_KEY` to finish.
 
-A drop list is a `.jsonl` file in `<output>/drop_lists/`, one edge per line, keyed by `subject`, `predicate`, `object` and
-`primary_knowledge_source`. It is not keyed by `id`, because the merge assigns new edge uuids
-every run. A line can also name the edge's statement, so it matches only that edge and not
-others that differ from it only in qualifiers (one `causes` edge with
-`gain_of_function_variant_form`, another with `genetic_variant_form`): by `statement_id`, the
-hash `shared.schema.edge_statement_id` gives of the subject, predicate, object, qualifiers and
-`negated` (the augmentation agent's statement id too), or else by the line's own qualifier slots
-and `negated`. A line with neither matches the edge however it is qualified, as every line did
-before Nov 13, 2026. The evidence check and `flagged_edges.jsonl` always write the
-`statement_id`, with the qualifiers beside it to read. This is how an evidence check plugs in: a model judges each edge's supporting text
-once, writes the edges it rejects to that folder, and every later cleaning run drops them (the
-`evidence-check` skill in `.agents/skills/cleaning/` does this with Jev), in the style of the
-Translator TMKP filter (NCATSTranslator/translator-ingests#560).
+## Limitations
 
-## Status
-
-Garbage collection, the type, rare-combination and opposing-predicate flags, and
-`flagged_edges.jsonl` work and are tested (`tests/test_cleaning.py`). The `evidence-check` skill
-writes drop lists; it runs up to the Jev step without a key and needs `TYPESAFE_API_KEY` to
-finish (`tests/test_evidence_check.py`).
-
-Running it per source on the Oct 30 transformation outputs showed where the graph is weak.
-All edges were dropped for ChEMBL (CHEMBL.TARGET ids), KEGG pathways (native `ko`/`hsa`/`path`
-ids) and STRING ids (ids with no prefix). HPA lost 93% (ENSEMBL ids that don't resolve). Those
-are metadata problems, and the report names the prefixes to fix.
+- The evidence check covers only edges that cite an abstract, and few sources cite them.
+- A drop- or flag-list line that matches no edge is skipped without a warning.

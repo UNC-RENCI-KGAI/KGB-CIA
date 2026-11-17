@@ -5,6 +5,9 @@ description: "Check a Biolink knowledge graph's edges against PubMed — choose 
 
 # PubMed evidence for the graph's edges
 
+In the KGB-CIA repository, read [`agents/AGENTS.md`](../../../../agents/AGENTS.md) first: the
+stage contract, the provenance every edge carries, and the non-Biolink keys each stage writes.
+
 **You decide, the code transforms.** Run the steps one at a time, read what each wrote, tune the
 extraction prompt on a sample, choose the model, then run the full set. Every change to the
 graph comes from `augment.py apply` refining each edge from the cached claims, so it can be
