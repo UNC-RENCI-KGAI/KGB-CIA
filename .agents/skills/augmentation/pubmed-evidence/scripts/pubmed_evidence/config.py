@@ -106,7 +106,11 @@ REPAIR_MODEL = REVIEW_MODEL
 # The most abstracts and review items one call sends; a pair with more is split across calls.
 ABSTRACTS_PER_CALL = 20
 REVIEW_ITEMS_PER_CALL = 40
-WORKERS = 8
+# Parallel calls for label (its quote repair too) and review. On Azure gpt-6-luna, 32 gave 1.84x
+# the throughput of 16 (2026-11-16), near the resource's 7.5M tokens a minute: Azure counts each
+# call's prompt plus its output reservation, about 27k tokens a label call. gpt-5.6-terra's
+# limits weren't measured.
+WORKERS = 32
 # The full run (`kgb-augment` with no step, as the pipeline runs it) labels only as many pairs
 # as step 3's estimated cost, in US dollars, allows. Pairs already labeled cost nothing.
 FULL_RUN_LABEL_BUDGET = 20.0
