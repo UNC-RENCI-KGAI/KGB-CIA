@@ -87,8 +87,5 @@ describes every field.
 - Every step is implemented and tested without network (the skill's `tests/`, including an
   end-to-end run of this package's `main([])` with PubMed, NodeNorm, the Name Resolver and the
   models faked).
-- The claims and the refinement haven't run live yet: a tuning sample, which also measures the
-  cost, and a relabel of both graphs (Monarch and DrugCentral) are next.
-- No gold set yet, so the models are still unvalidated defaults.
-- Open items (`negated` handling team-wide, what's not built yet)
-  are in the skill's `DESIGN.md`, "Open items".
+- Open items (`negated` handling team-wide, what's not built yet) are in the skill's
+  `DESIGN.md`, "Open items".
