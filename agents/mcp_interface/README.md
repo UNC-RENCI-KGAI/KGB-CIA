@@ -12,7 +12,9 @@ The implementation spec is [`AGENTS.md`](https://github.com/UNC-RENCI-KGAI/KGB-C
 ## Quick start
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer. Add this to your MCP client's
-configuration (for Pi, `.pi/mcp.json`), with the values from the current release:
+configuration (for Pi, `.pi/mcp.json`). The Bolt host, artifacts URL and checksum change with
+each release; get the current ones from the KGB-CIA team by opening an issue in the
+[repository](https://github.com/UNC-RENCI-KGAI/KGB-CIA/issues).
 
 ```json
 {
@@ -22,6 +24,7 @@ configuration (for Pi, `.pi/mcp.json`), with the values from the current release
       "args": ["kgbcia-mcp", "serve", "--enable-cypher"],
       "env": {
         "NEO4J_URI": "bolt://<bolt-host>:7687",
+        "NEO4J_DATABASE": "neo4j",
         "KGB_MCP_ARTIFACTS": "https://<public-artifact-host>/artifacts.tar.gz",
         "KGB_MCP_ARTIFACTS_SHA256": "<64-hex-artifact-checksum>"
       }
@@ -181,26 +184,8 @@ local-k8s deployment, and AWS deployment of the cleaned graph. Step 5, publicati
 complete: [`kgbcia-mcp`](https://pypi.org/project/kgbcia-mcp/) is
 published, so anyone can run `uvx kgbcia-mcp serve --enable-cypher` without a checkout.
 
-Anyone can connect by adding an MCP entry like this (see "Quick start"), with placeholders filled
-from the current release handoff. Update `KGB_MCP_ARTIFACTS_SHA256` every time a new
-`artifacts.tar.gz` is published.
-
-```json
-{
-  "mcpServers": {
-    "kgbcia-mcp": {
-      "command": "uvx",
-      "args": ["kgbcia-mcp", "serve", "--enable-cypher"],
-      "env": {
-        "NEO4J_URI": "bolt://<aws-bolt-host>:7687",
-        "NEO4J_DATABASE": "neo4j",
-        "KGB_MCP_ARTIFACTS": "https://<public-artifact-host>/artifacts.tar.gz",
-        "KGB_MCP_ARTIFACTS_SHA256": "<64-hex-artifact-checksum>"
-      }
-    }
-  }
-}
-```
+Anyone can connect with the entry under "Quick start". Update `KGB_MCP_ARTIFACTS_SHA256` every
+time a new `artifacts.tar.gz` is published.
 
 Current verification:
 

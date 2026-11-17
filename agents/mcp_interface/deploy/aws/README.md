@@ -1,8 +1,8 @@
-# AWS development-sample deployment
+# AWS deployment
 
-This procedure deploys the LitCoin development-sample dump to the prepared single-node AWS
-k3s host. The maintainer runs every command. It does not install or reconfigure k3s or Helm,
-create AWS resources, deploy the MCP HTTP server, or publish `kgbcia-mcp` to PyPI.
+This procedure deploys the cleaned graph's dump to the prepared single-node AWS k3s host. The
+maintainer runs every command. It does not install or reconfigure k3s or Helm, create AWS
+resources, deploy the MCP HTTP server, or publish `kgbcia-mcp` to PyPI.
 
 The chart exposes only Neo4j Bolt through k3s ServiceLB. Both AWS overlays set
 `neo4j.auth.enabled: false`, so Neo4j runs with `NEO4J_AUTH=none`: there is no user-creation
@@ -12,23 +12,32 @@ clients can administer users in `system`. Network exposure is therefore entirely
 maintainer's responsibility. Graph writes remain blocked by Neo4j's database-wide read-only
 setting; resource limits and the MCP server's existing read protections remain in force.
 
-## Current deployment handoff (November 12, 2026)
+## Current deployment (November 13, 2026)
 
-The LitCoin development-sample deployment is active as Helm release **`kgb-mcp`** in namespace
-**`kgb-mcp`**. It uses the chart at `../helm/kgb-mcp` with its default `values.yaml` plus this
-directory's `values-aws-test.yaml`. It does **not** use `../helm/kgb-mcp/values-aws.yaml`,
-which is reserved for a future real graph and is too large for this development instance.
-The test overlay gives Neo4j a 5 Gi local-path PVC, 2 CPU / 4 GiB limit, 1 GiB initial / 2 GiB
-maximum heap, 1 GiB page cache, Bolt-only `LoadBalancer` exposure, and `mcp.enabled=false`.
+The cleaned graph (`pharos-2026-11-09-cleaned`: 943,412 nodes, 11,701,010 edges) is active as
+Helm release **`kgb-mcp`** in namespace **`kgb-mcp`**, revision 1, loaded 2026-11-13 23:38 UTC.
+It uses the chart at `../helm/kgb-mcp` with `../helm/kgb-mcp/values-aws.yaml`: a 30 Gi
+local-path PVC, 2 CPU / 14 GiB limit, 4 GiB heap, 7 GiB page cache, 30 s transaction timeout
+and 2 GiB per-transaction memory cap, Bolt-only `LoadBalancer` exposure, and
+`mcp.enabled=false`.
 
-The private LitCoin `kgb.dump` was supplied only as a two-hour presigned URL at install time.
-The `download-dump` init container verified its SHA-256; `load-dump` then ran
-`neo4j-admin database load --overwrite-destination`. A checksum-keyed
-`.kgbcia-load.sha256` marker resides on PVC `data-kgb-mcp-neo4j-0`. Keep that PVC to preserve
-the loaded database: pod restarts and re-installs with the same dump checksum skip both download
-and load. If the PVC is lost or deliberately deleted, generate a fresh presigned URL and load
-the dump again. The public artifacts tarball is consumed by each laptop-local stdio MCP process,
-not by this AWS chart while MCP is disabled.
+The private `kgb.dump` was supplied only as a two-hour presigned URL at install time. The
+`download-dump` init container verified its SHA-256; `load-dump` then ran
+`neo4j-admin database load --overwrite-destination`. A checksum-keyed `.kgbcia-load.sha256`
+marker resides on PVC `data-kgb-mcp-neo4j-0`. Keep that PVC to preserve the loaded database:
+pod restarts and re-installs with the same dump checksum skip both download and load. If the
+PVC is lost or deliberately deleted, generate a fresh presigned URL and load the dump again. The
+public artifacts tarball is consumed by each laptop-local stdio MCP process, not by this AWS
+chart while MCP is disabled.
+
+`values-aws-test.yaml` in this directory is the smaller overlay used for the earlier LitCoin
+development sample (5 Gi PVC, 4 GiB limit). It is kept for testing on a small instance.
+
+### Earlier LitCoin sample deployment (November 12, 2026)
+
+Before the cleaned graph, the same release name held the LitCoin development sample with
+`values-aws-test.yaml`. The notes below come from that deployment; they still describe how the
+chart and Neo4j behave.
 
 Verification completed successfully from a laptop: Bolt login as `kgbcia`, raw graph-write
 rejection, the configured integration smoke test, and a local `kgbcia-mcp serve` lineage answer
@@ -61,13 +70,13 @@ uninstall the stuck Helm release and delete only its failed hook Job, verify the
 
 ## 1. On the laptop: create a short-lived dump URL
 
-Confirm that the development-sample checksums are the release values in the parent runbook,
-then set them in your shell. The artifact URL is public and long-lived; use the URL supplied by
+Confirm that these checksums are the current release values (the cleaned graph of
+November 13, 2026), then set them in your shell. The artifact URL is public and long-lived; use the URL supplied by
 the AWS administrator. Do not save either URL in a repository file.
 
 ```bash
-export DUMP_SHA256=5f3e7f0fdad1074ff0ff0eaea23ce95eb98a2a04639cc7b38d15bbe4809b0cc5
-export ARTIFACTS_SHA256=3ec97998f4716dffe7be69c13327b79ad1529c1b974c3ff228453486702cae56
+export DUMP_SHA256=6fd2728baba5299c5538221c6e8495ad85c8690b10feb03fa563fc412ce85773
+export ARTIFACTS_SHA256=e47b3b5ea8fcba2b21530d4cdc90eeaf36e3ebb68e8b402b8c6a5fc541b29ee7
 export ARTIFACTS_URL='<public artifacts.tar.gz URL supplied by the AWS administrator>'
 DUMP_URL="$(aws s3 presign 's3://<private bucket created by the AWS administrator>/neo4j-dumps/kgb.dump' \
   --region us-east-2 --expires-in 7200)"
@@ -92,18 +101,18 @@ cd /path/to/KGB-CIA
 bash agents/mcp_interface/deploy/aws/verify_host.sh
 
 export NAMESPACE=kgb-mcp
-export DUMP_SHA256=5f3e7f0fdad1074ff0ff0eaea23ce95eb98a2a04639cc7b38d15bbe4809b0cc5
-export ARTIFACTS_SHA256=3ec97998f4716dffe7be69c13327b79ad1529c1b974c3ff228453486702cae56
+export DUMP_SHA256=6fd2728baba5299c5538221c6e8495ad85c8690b10feb03fa563fc412ce85773
+export ARTIFACTS_SHA256=e47b3b5ea8fcba2b21530d4cdc90eeaf36e3ebb68e8b402b8c6a5fc541b29ee7
 read -r -p 'Paste the fresh presigned dump URL: ' DUMP_URL
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE"
 
 bash agents/mcp_interface/deploy/aws/install.sh \
   "$NAMESPACE" "$DUMP_URL" "$DUMP_SHA256" "$ARTIFACTS_SHA256" \
-  agents/mcp_interface/deploy/aws/values-aws-test.yaml
+  agents/mcp_interface/deploy/helm/kgb-mcp/values-aws.yaml
 ```
 
 The installer reads `neo4j.auth.enabled` from the values file supplied as its final argument.
-For this AWS test overlay it skips Secret creation and the chart omits the user Job; if a
+For the AWS overlays it skips Secret creation and the chart omits the user Job; if a
 supplied values file enables auth, it creates the Secret and fails clearly if that required
 Secret is absent. It waits for the Neo4j StatefulSet and any rendered hook Job, then prints the
 Bolt Service plus its `svclb` pod. It receives the dump URL only on the command line and never

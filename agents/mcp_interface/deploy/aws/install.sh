@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the LitCoin development sample on the prepared AWS k3s host.
+# Install a graph dump on the prepared AWS k3s host.
 # The presigned dump URL is intentionally accepted as an argument and is never written to disk.
 set -euo pipefail
 
