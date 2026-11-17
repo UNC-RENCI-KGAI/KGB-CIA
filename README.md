@@ -34,9 +34,12 @@ The submitted graph comes from the Nov 9, 2026 build: 22 sources merged into one
   support them. Another, the evidence check, drops or flags an edge whose cited abstract says
   otherwise.
 
-The graph files are too large for git and are distributed separately.
-<!-- TODO before merge: link to where the submitted graph can be downloaded. -->
-What the submitted graph is known to be missing is in
+What every stage produced on the way to the submitted graph (the metadata, the agents'
+decisions, the build records, what cleaning removed and why, the evaluation) is in the
+[submission folder](https://kgb-cia-972034964799.s3.us-east-2.amazonaws.com/submission-2026-11-17/README.md),
+one folder per stage. The graph itself is served read-only through the MCP server (see
+[Querying the graph](#querying-the-graph)); its files aren't redistributed, because some sources'
+licenses don't allow it. What the submitted graph is known to be missing is in
 [`docs/known_limitations.md`](docs/known_limitations.md).
 
 ## Pipeline
