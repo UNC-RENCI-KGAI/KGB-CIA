@@ -52,7 +52,7 @@ final pass runs. `--strict` returns nonzero instead, for running a question by h
 | `cleaning_report.json` | Counts in and out. `attention`: the sources that lost at least half their edges, with the prefixes that didn't resolve. Every dropped edge and node by reason and by source. Unresolved nodes by prefix, flags on kept edges, and a few examples of each. |
 | `flagged_edges.jsonl` | The kept edges worth a look, one per line, keyed like a drop list. |
 | `unresolved_nodes.tsv` | Every node NodeNorm couldn't resolve: its prefix and name, the edges it took down or that were kept with a flag, and their sources and predicates, most costly first. |
-| `pruned_edges.tsv` | Every dropped edge with its reason. |
+| `pruned_edges.tsv` | The record of what cleaning removed and why: one KGX TSV row per dropped edge (`subject`, `predicate`, `object`, `primary_knowledge_source`, `statement_id`, `publications`, `reason`, a plain-words `explanation`, and a `confidence` where an evidence-check drop line carries one). It is not a gold set: a rule that drops an edge because its ids don't resolve says nothing about whether the claim is true. The scored gold set is the evidence check's `gold_set.tsv`. `malformed` and `no_primary_knowledge_source` edges are counted in the report but not listed, since their rows wouldn't be valid KGX. |
 
 ### Reading the result
 

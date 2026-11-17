@@ -1,4 +1,6 @@
+import csv
 import json
+from collections import Counter
 
 import pytest
 
@@ -377,6 +379,14 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
         "biolink:enables": {"domain: biolink:Gene": 1},
     }
     assert written["dropped_edges"] == {"type_violation:biolink:treats->biolink:Procedure": 1}
+    with open(tmp_path / "out" / "pruned_edges.tsv") as f:
+        [row] = list(csv.DictReader(f, delimiter="\t"))
+    assert (row["object"], row["reason"]) == (
+        "UMLS:P",
+        "type_violation:biolink:treats->biolink:Procedure",
+    )
+    assert row["explanation"].startswith("treats to Procedure: ")
+    assert row["confidence"] == ""
 
     flagged = _read(tmp_path / "out" / "flagged_edges.jsonl")
     assert written["flagged_edges"] == len(flagged) == 4  # 1 violation, 2 opposing, 1 self loop
@@ -407,7 +417,7 @@ def test_type_violation_flags_treats_to_procedure(tmp_path):
     # a flagged line is a valid drop-list line, so a reviewed subset can be promoted to a drop
     drop = tmp_path / "promote.jsonl"
     _write(drop, [violation])
-    assert garbage.load_drop_list(drop) == {
+    assert set(garbage.load_drop_list(drop)) == {
         ("NCBIGene:1", "biolink:enables", "REACT:1", "infores:test", statement)
     }
 
@@ -690,3 +700,112 @@ def test_broken_ids():
     assert garbage.is_broken_id("phenopacket.store:PMID_1_individual_II-3")
     assert not garbage.is_broken_id("OBA:0000001")  # a real OBA id is only unknown
     assert not garbage.is_broken_id("REACT:R-HSA-1")
+
+
+def _pruned(out):
+    with open(out / "pruned_edges.tsv") as f:
+        return list(csv.DictReader(f, delimiter="\t"))
+
+
+def test_pruned_edges_tsv_records_every_usable_drop(graph, tmp_path):
+    """The record of what was removed and why: not a gold set, so no verdict, and a rule's drop
+    has no confidence. Malformed and source-less edges are counted in the report only."""
+    out = tmp_path / "clean"
+    report = garbage.collect(graph, out)
+    rows = _pruned(out)
+    assert list(rows[0]) == list(garbage.PRUNED_COLUMNS)
+    assert "verdict" not in garbage.PRUNED_COLUMNS
+    unlisted = {r: n for r, n in report.dropped_edges.items() if r in garbage.UNLISTED_DROPS}
+    assert unlisted == {"malformed": 1, "no_primary_knowledge_source": 1}
+    assert Counter(r["reason"] for r in rows) == report.dropped_edges - Counter(unlisted)
+    assert all(r["subject"] and r["predicate"] and r["statement_id"] for r in rows)
+    assert {r["confidence"] for r in rows} == {""}
+    assert all(r["explanation"] for r in rows)
+
+
+def _key(edge):
+    return {k: edge[k] for k in ("subject", "predicate", "object", "primary_knowledge_source")}
+
+
+def test_pruned_edges_take_the_dropping_lines_confidence_and_reason(graph, tmp_path):
+    out = tmp_path / "clean"
+    edge = _read(graph / "edges.jsonl")[0]  # A-B, otherwise kept
+    (out / "drop_lists").mkdir(parents=True)
+    line = {**_key(edge), "confidence": 0.98, "reason": "evidence check drug_target"}
+    _write(out / "drop_lists" / "check.jsonl", [line])
+    garbage.collect(graph, out)
+    listed = [r for r in _pruned(out) if r["reason"] == "drop_list:check"]
+    assert [(r["confidence"], r["explanation"]) for r in listed] == [
+        ("0.980", "evidence check drug_target")
+    ]
+
+
+def test_pruned_edges_confidence_comes_from_the_list_that_dropped_the_edge(graph, tmp_path):
+    """An edge in two lists is dropped by the first by name, and its row takes that list's line."""
+    out = tmp_path / "clean"
+    edge = _read(graph / "edges.jsonl")[0]
+    (out / "drop_lists").mkdir(parents=True)
+    _write(out / "drop_lists" / "a.jsonl", [{**_key(edge), "confidence": 0.71}])
+    _write(out / "drop_lists" / "b.jsonl", [{**_key(edge), "confidence": 0.99}])
+    garbage.collect(graph, out)
+    listed = [r for r in _pruned(out) if r["reason"].startswith("drop_list:")]
+    assert [(r["reason"], r["confidence"]) for r in listed] == [("drop_list:a", "0.710")]
+
+
+def test_pruned_edges_hand_made_list_says_only_that_it_was_listed(graph, tmp_path):
+    out = tmp_path / "clean"
+    edge = _read(graph / "edges.jsonl")[0]
+    (out / "drop_lists").mkdir(parents=True)
+    _write(out / "drop_lists" / "a_manual.jsonl", [_key(edge)])
+    garbage.collect(graph, out)
+    [row] = [r for r in _pruned(out) if r["reason"] == "drop_list:a_manual"]
+    assert (row["explanation"], row["confidence"]) == ("listed in drop list a_manual", "")
+
+
+@pytest.mark.parametrize("confidence", ["high", "", 1.5, [0.9]])
+def test_drop_list_confidence_must_be_a_number_from_0_to_1(tmp_path, confidence):
+    drop = tmp_path / "bad.jsonl"
+    _write(drop, [{**_key(_edge("UniProtKB:A", "UniProtKB:B")), "confidence": confidence}])
+    with pytest.raises(ValueError, match="bad.jsonl:1: confidence must be a number"):
+        garbage.load_drop_list(drop)
+
+
+def test_cli_reports_a_bad_drop_list_line_without_a_traceback(graph, tmp_path, capsys):
+    out = tmp_path / "clean"
+    (out / "drop_lists").mkdir(parents=True)
+    edge = _edge("UniProtKB:A", "UniProtKB:B")
+    _write(out / "drop_lists" / "bad.jsonl", [{**_key(edge), "confidence": "high"}])
+    assert main(["--input", str(graph), "--output", str(out)]) == 1
+    assert "bad.jsonl:1: confidence must be a number" in capsys.readouterr().out
+
+
+def test_pruned_row_survives_odd_publications_and_new_reasons():
+    edge = _edge("UniProtKB:A", "UniProtKB:B", publications=12345)
+    row = garbage.pruned_row(edge, "some_new_rule", {})
+    assert row["publications"] == "12345"
+    assert row["explanation"] == "some new rule"
+    edge["publications"] = ("PMID:1", "PMID:2")
+    assert garbage.pruned_row(edge, "dangling", {})["publications"] == "PMID:1|PMID:2"
+
+
+def test_type_violation_reason_round_trips():
+    reason = garbage.type_violation_reason("biolink:treats", "biolink:Procedure")
+    assert garbage.type_violation_parts(reason) == ("biolink:treats", "biolink:Procedure")
+    assert garbage.type_violation_parts("drop_list:check") is None
+
+
+def test_pruned_edges_tell_qualifier_versions_apart(two_mechanisms, tmp_path):
+    """Each version's row has its own statement_id and its own line's confidence."""
+    out = tmp_path / "clean"
+    (out / "drop_lists").mkdir(parents=True)
+    lines, expected = [], {}
+    for mechanism, confidence in (("agonism", 0.91), ("antagonism", 0.62)):
+        edge = _edge("UniProtKB:A", "UniProtKB:B", causal_mechanism_qualifier=mechanism)
+        statement = edge_statement_id(edge)
+        lines.append({**edge, "statement_id": statement, "confidence": confidence})
+        expected[statement] = f"{confidence:.3f}"
+    _write(out / "drop_lists" / "check.jsonl", lines)
+    garbage.collect(two_mechanisms, out)
+    with open(out / "pruned_edges.tsv") as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    assert {r["statement_id"]: r["confidence"] for r in rows} == expected
