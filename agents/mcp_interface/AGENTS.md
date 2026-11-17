@@ -500,7 +500,7 @@ fixture first and then promoted to deployed graphs.
    service. AWS uses auth-disabled Neo4j (`NEO4J_AUTH=none`) with network exposure controlled by
    the maintainer, graph read-only mode, a 30-second transaction timeout, and a 2 GiB
    transaction memory cap.
-5. **Publish to PyPI: complete.** `kgbcia-mcp` 0.1.0 was published on Nov 16, 2026. Clients
+5. **Publish to PyPI: complete.** `kgbcia-mcp` 0.1.1 was published on Nov 17, 2026. Clients
    outside the repository run `uvx kgbcia-mcp serve --enable-cypher`; `uv run kgbcia-mcp serve`
    runs a checkout's code, for development.
 

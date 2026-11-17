@@ -1,6 +1,6 @@
 [project]
 name = "kgbcia-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Read-only MCP server for the KGB-CIA biomedical knowledge graph"
 readme = "README.md"
 requires-python = ">=3.12"
