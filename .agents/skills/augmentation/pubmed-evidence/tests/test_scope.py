@@ -205,6 +205,27 @@ def _edge(subject, predicate, object, **kw) -> Edge:
     return Edge(subject=subject, predicate=predicate, object=object, **{**fields, **kw})
 
 
+def test_each_pair_carries_how_many_kept_pairs_cite_its_source_pmids(tmp_path):
+    """Counted over the pairs select keeps, each once however many of its edges cite a PMID:
+    a pair past the cap counts for nothing."""
+    genes = [Node(id=f"NCBIGene:{i}", category=["biolink:Gene"], name=f"G{i}") for i in range(5)]
+    i = "biolink:interacts_with"
+    edges = [
+        _edge("NCBIGene:0", i, "NCBIGene:1", score=0.9, publications=["PMID:5", "PMID:6"]),
+        _edge("NCBIGene:1", i, "NCBIGene:2", score=0.8, publications=["PMID:5"]),
+        _edge("NCBIGene:2", i, "NCBIGene:1", score=0.8, publications=["PMID:5"]),
+        _edge("NCBIGene:2", i, "NCBIGene:3", score=0.7, publications=["PMID:5"]),
+        _edge("NCBIGene:3", i, "NCBIGene:4", score=0.1, publications=["PMID:5", "PMID:6"]),
+    ]
+    graph = _graph(tmp_path / "g", genes, edges)
+    _, _, pairs, _ = _run(graph, tmp_path / "work", capped_limit=3)
+    assert {pid: p.source_pmid_pairs for pid, p in pairs.items()} == {
+        pair_id("NCBIGene:0", "NCBIGene:1"): {"5": 3, "6": 1},
+        pair_id("NCBIGene:1", "NCBIGene:2"): {"5": 3},
+        pair_id("NCBIGene:2", "NCBIGene:3"): {"5": 3},
+    }
+
+
 def test_capped_rule_keeps_best_scored_pairs(tmp_path):
     genes = [Node(id=f"NCBIGene:{i}", category=["biolink:Gene"], name=f"G{i}") for i in range(5)]
     edges = [
@@ -276,6 +297,30 @@ def test_symmetric_predicate_matches_reversed_and_missing_nodes(tmp_path):
             "object_category": "biolink:SmallMolecule",
             "edges": 1,
             "rule": "unmatched",
+        }
+    ]
+
+
+def test_skipped_breakdown_names_each_node_by_its_most_specific_category(tmp_path):
+    """The cleaned graph lists a node's categories alphabetically, BiologicalEntity or
+    AnatomicalEntity first: the report names each node by its most specific one, as the label
+    and review messages show it (`biolink.shown_category`)."""
+    gene = ["biolink:BiologicalEntity", "biolink:Gene", "biolink:GeneOrGeneProduct"]
+    anatomy = ["biolink:AnatomicalEntity", "biolink:CellularComponent", "biolink:NamedThing"]
+    nodes = [
+        Node(id="NCBIGene:1", category=gene, name="g"),
+        Node(id="GO:0005634", category=anatomy, name="nucleus"),
+    ]
+    edges = [_edge("NCBIGene:1", "biolink:located_in", "GO:0005634", **CURATED)]
+    report, statements, _, _ = _run(_graph(tmp_path / "g", nodes, edges), tmp_path / "work")
+    assert statements == []
+    assert report["skipped"] == [
+        {
+            "subject_category": "biolink:Gene",
+            "predicate": "biolink:located_in",
+            "object_category": "biolink:CellularComponent",
+            "edges": 1,
+            "rule": "skip:pathway-go",
         }
     ]
 
@@ -544,17 +589,177 @@ def test_a_capped_provenance_rule_keeps_its_best_scored_pairs(tmp_path):
 
 
 def test_a_text_mined_go_edge_is_skipped_by_its_statement_rule(tmp_path):
-    """A skip statement rule names the edges it skips whatever their provenance."""
+    """A skip statement rule names the edges it skips whatever their provenance: a GO location
+    a text-mining pipeline read (not a co-mention, which text-mined-location keeps) is skipped
+    as pathway-go, though the text-mined provenance rule would cap it."""
     nodes = [
         Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
         Node(id="GO:0005634", category=["biolink:CellularComponent"], name="nucleus"),
     ]
-    edge = _edge("NCBIGene:1", "biolink:located_in", "GO:0005634", **MINED)
+    read = MINED | {"knowledge_level": "statistical_association"}
+    edge = _edge("NCBIGene:1", "biolink:located_in", "GO:0005634", **read)
     report, statements, _, _ = _run(_graph(tmp_path / "g", nodes, [edge]), tmp_path / "work")
     assert statements == []
     [skipped] = report["skipped"]
     assert (skipped["rule"], skipped["edges"]) == ("skip:pathway-go", 1)
     assert report["rules"]["pathway-go"] == {"tier": "skip", "skipped_edges": 1}
+
+
+CO_MENTIONED = ("text_co_occurrence", "text_mining_agent")
+CURATED_MADE = ("knowledge_assertion", "manual_agent")
+
+
+@pytest.mark.parametrize(
+    ("subject", "predicate", "object", "made", "expected"),
+    [
+        # Drug-target activity (ChEMBL, DrugCentral, GtoPdb, ...), either way round, since
+        # Biolink marks interacts_with symmetric.
+        ("SmallMolecule", "interacts_with", "Protein", CURATED_MADE, ("drug-target", None)),
+        ("Protein", "interacts_with", "Drug", CURATED_MADE, ("drug-target", None)),
+        ("SmallMolecule", "physically_interacts_with", "Gene", CURATED_MADE, ("drug-target", None)),
+        # `binds` and `directly_physically_interacts_with` are below interacts_with: the rule
+        # before drug-target keeps them.
+        ("SmallMolecule", "binds", "Protein", CURATED_MADE, ("chemical-affects-gene", None)),
+        (
+            "SmallMolecule",
+            "directly_physically_interacts_with",
+            "Gene",
+            CURATED_MADE,
+            ("chemical-affects-gene", None),
+        ),
+        ("Gene", "interacts_with", "Protein", CURATED_MADE, ("gene-gene", None)),
+        # TIGA: gene to an EFO trait, typed PhenotypicFeature or only DiseaseOrPhenotypicFeature.
+        (
+            "Gene",
+            "gene_associated_with_condition",
+            "PhenotypicFeature",
+            ("statistical_association", "data_analysis_pipeline"),
+            ("gene-trait", None),
+        ),
+        (
+            "Gene",
+            "genetically_associated_with",
+            "DiseaseOrPhenotypicFeature",
+            ("statistical_association", "data_analysis_pipeline"),
+            ("gene-trait", None),
+        ),
+        # Disease is below DiseaseOrPhenotypicFeature: the rule before gene-trait keeps it.
+        ("Gene", "gene_associated_with_condition", "Disease", CURATED_MADE, ("gene-disease", None)),
+        ("Gene", "has_phenotype", "PhenotypicFeature", CURATED_MADE, ("gene-phenotype", None)),
+        # DrugCentral indications to a phenotype, and to a disease.
+        (
+            "SmallMolecule",
+            "treats",
+            "PhenotypicFeature",
+            CURATED_MADE,
+            ("chemical-treats-phenotype", None),
+        ),
+        ("SmallMolecule", "treats", "Disease", CURATED_MADE, ("chemical-treats-disease", None)),
+        # COMPARTMENTS' text mining is kept before pathway-go and capped by text-co-occurrence;
+        # a curated GO location stays skipped.
+        (
+            "Protein",
+            "located_in",
+            "CellularComponent",
+            CO_MENTIONED,
+            ("text-mined-location", "text-co-occurrence"),
+        ),
+        ("Protein", "located_in", "CellularComponent", CURATED_MADE, ("pathway-go", None)),
+    ],
+)
+def test_default_rules_place_each_edge_type(subject, predicate, object, made, expected):
+    """The defaults' order decides which rule an edge type takes (reference/rules.md)."""
+    statement, lowered = scope.decide(
+        scope.DEFAULT_RULES,
+        (f"biolink:{subject}",),
+        f"biolink:{predicate}",
+        (f"biolink:{object}",),
+        *made,
+    )
+    assert (statement.id, lowered.id if lowered else None) == expected
+
+
+def test_drug_targets_traits_and_text_mined_locations_are_kept(tmp_path):
+    """The edge types the defaults left unmatched (drug-target, TIGA's gene-trait, DrugCentral's
+    phenotype indications) or skipped (COMPARTMENTS' text-mined locations), with their tiers."""
+    nodes = [
+        Node(id="CHEBI:1", category=["biolink:SmallMolecule"], name="c"),
+        Node(id="UniProtKB:P1", category=["biolink:Protein"], name="p"),
+        Node(id="NCBIGene:1", category=["biolink:Gene"], name="g"),
+        Node(id="EFO:1", category=["biolink:PhenotypicFeature"], name="body height"),
+        Node(id="EFO:2", category=["biolink:DiseaseOrPhenotypicFeature"], name="bmi"),
+        Node(id="HP:1", category=["biolink:PhenotypicFeature"], name="pain"),
+        Node(id="GO:0005634", category=["biolink:CellularComponent"], name="nucleus"),
+        Node(id="GO:0005737", category=["biolink:CellularComponent"], name="cytoplasm"),
+    ]
+    tiga = dict(
+        primary_knowledge_source="infores:tiga",
+        knowledge_level="statistical_association",
+        agent_type="data_analysis_pipeline",
+    )
+    compartments = dict(
+        primary_knowledge_source="infores:compartments",
+        knowledge_level="text_co_occurrence",
+        agent_type="text_mining_agent",
+    )
+    edges = [
+        _edge(
+            "CHEBI:1",
+            "biolink:interacts_with",
+            "UniProtKB:P1",
+            primary_knowledge_source="infores:chembl",
+            causal_mechanism_qualifier="biolink:inhibition",
+        ),
+        _edge("NCBIGene:1", "biolink:gene_associated_with_condition", "EFO:1", **tiga),
+        _edge("NCBIGene:1", "biolink:gene_associated_with_condition", "EFO:2", **tiga),
+        _edge("CHEBI:1", "biolink:treats", "HP:1", primary_knowledge_source="infores:drugcentral"),
+        _edge("UniProtKB:P1", "biolink:located_in", "GO:0005634", score=0.8, **compartments),
+        _edge("UniProtKB:P1", "biolink:located_in", "GO:0005737", **CURATED),
+    ]
+    graph = _graph(tmp_path / "g", nodes, edges)
+    report, statements, pairs, _ = _run(graph, tmp_path / "work")
+    by_object = {s.object: s for s in statements}
+    assert {o: (s.rule, s.provenance_rule) for o, s in by_object.items()} == {
+        "UniProtKB:P1": ("drug-target", None),
+        "EFO:1": ("gene-trait", None),
+        "EFO:2": ("gene-trait", None),
+        "HP:1": ("chemical-treats-phenotype", None),
+        "GO:0005634": ("text-mined-location", "text-co-occurrence"),
+    }
+    assert by_object["UniProtKB:P1"].qualifiers == {
+        "causal_mechanism_qualifier": "biolink:inhibition"
+    }
+    location = pairs[by_object["GO:0005634"].pair_id]
+    assert location.rules == ["text-mined-location"]
+    # The location rule sets what its pairs' claims may say.
+    assert label.predicates_of(scope.DEFAULT_RULES, location.rules) == (
+        "biolink:active_in",
+        "biolink:expressed_in",
+        "biolink:located_in",
+    )
+    rules = report["rules"]
+    assert {r: rules[r]["pairs"] for r in ("drug-target", "chemical-treats-phenotype")} == {
+        "drug-target": 1,
+        "chemical-treats-phenotype": 1,
+    }
+    assert (rules["drug-target"]["tier"], rules["gene-trait"]["tier"]) == ("query", "capped")
+    assert rules["gene-trait"]["pairs"] == 2
+    # Every location edge is text co-occurrence: the provenance rule's report entry counts them.
+    assert rules["text-co-occurrence"]["pairs"] == 1
+    assert rules["text-mined-location"]["matched_edges"] == 0
+    assert report["skipped"] == [
+        {
+            "subject_category": "biolink:Protein",
+            "predicate": "biolink:located_in",
+            "object_category": "biolink:CellularComponent",
+            "edges": 1,
+            "rule": "skip:pathway-go",
+        }
+    ]
+    # gene-trait is capped like gene-phenotype.
+    report, _, pairs, _ = _run(graph, tmp_path / "work2", capped_limit=1)
+    assert report["rules"]["gene-trait"]["dropped_by_cap"]["pairs"] == 1
+    assert report["rules"]["drug-target"]["pairs"] == 1
 
 
 def test_rules_file_can_match_on_provenance(toy_graph, tmp_path):

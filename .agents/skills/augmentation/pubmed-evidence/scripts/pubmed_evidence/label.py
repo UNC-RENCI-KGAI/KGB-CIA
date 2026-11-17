@@ -5,6 +5,12 @@ most config.ABSTRACTS_PER_CALL): the pair's nodes go as X and Y, with names, syn
 categories, and the graph's edges are never sent. So a pair's claims serve every edge between
 the pair, from any graph, now or later; step 6 refines each edge from them (`refine.py`).
 
+A pair's abstracts are those step 2 fetched with text (`pair_pmids`), less those the source
+screen leaves unread (`screened`): a PMID the pair has only as a source citation, that at least
+config.SOURCE_SCREEN_MIN_PAIRS pairs of the selection cite (select's count), and whose title
+and abstract don't name both nodes, is a high-throughput paper that states nothing about the
+pair. Steps 5 and 6 ask `pair_pmids` too, so a PMID screened out never holds a pair.
+
 For each abstract the model gives a study design and zero or more claims: an abstract with no
 claims states nothing about the pair. A claim's statement names X or Y as its subject, a
 predicate and its qualifiers, and code stores it with the pair's CURIEs in their place and its
@@ -21,9 +27,11 @@ can't say (`check_claim`), on each statement turned the way round Biolink
 reads it (`refine.directed`; a claim whose predicate fits neither way fails): the qualifier
 slots and values the predicate's association allows, `causes` only with an aspect or a
 direction, `negative_finding_type` on negative claims only, and `also_supports` entries that
-add something; and that the evidence sentence is in the abstract (`quotes.quote_found`). A claim
-failing a check is kept in the cache but counts for nothing: the checks go to the
-`claim_checks` table, recomputed on every run for the run's pairs, since nothing versions them.
+add something; and that the evidence sentence is in the abstract (`quotes.quote_found`). A
+statement that fails as written is read with the post-label repairs SALVAGE names
+(`read_claim`), which change no prompt version. A claim still failing a check is kept in the
+cache but counts for nothing: the checks go to the `claim_checks` table, recomputed on every
+run for the run's pairs, since nothing versions them.
 Last, the quote repair pass (`repair.py`) repairs the evidence sentences of claims that pass
 every other check but whose sentence wasn't found: code puts back the sentences a quote was
 taken from, and a stronger model is asked only for those code can't place.
@@ -44,11 +52,12 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import sys
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any, get_args
 
@@ -114,6 +123,12 @@ def _warn(message: str) -> None:
 
 def _bare(curie: str) -> str:
     return curie.removeprefix("biolink:")
+
+
+def _category(categories: Sequence[str]) -> str:
+    """The category the message shows for a node (`biolink.shown_category`), bare."""
+    category = biolink.shown_category(tuple(categories))
+    return _bare(category) if category else "unknown"
 
 
 # --- Scope rules and reply schemas ----------------------------------------------------------
@@ -303,12 +318,78 @@ def read_pairs(path: Path) -> list[str]:
     return list(out)
 
 
-def pair_pmids(record: PubmedRecord, texts: Mapping[str, Abstract]) -> list[str]:
+def mass_cited(pair: Pair) -> frozenset[str]:
+    """The pair's source PMIDs that at least config.SOURCE_SCREEN_MIN_PAIRS pairs of the
+    selection cite, by the counts select recorded on it (`Pair.source_pmid_pairs`): none
+    without counts (a pairs.jsonl from before them) or with the screen off (None)."""
+    least = config.SOURCE_SCREEN_MIN_PAIRS
+    if least is None:
+        return frozenset()
+    return frozenset(p for p, n in pair.source_pmid_pairs.items() if n >= least)
+
+
+def _words(text: str) -> str:
+    """Lowercase, with every run of characters but a-z and 0-9 one space."""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+@lru_cache(maxsize=4096)
+def _screen_text(title: str, abstract: str) -> tuple[str, str]:
+    """A title and abstract as `names_both` searches them: as words, with a space at each end,
+    and with the spaces squashed out. Cached: a mass-cited abstract is screened for many pairs."""
+    words = _words(f"{title} {abstract}")
+    return f" {words} ", words.replace(" ", "")
+
+
+def _names(terms: Iterable[str], spaced: str, squashed: str) -> bool:
+    for term in terms:
+        words = _words(term)
+        if len(words) >= 2 and f" {words} " in spaced:
+            return True
+        joined = words.replace(" ", "")
+        if len(joined) >= 3 and joined in squashed:
+            return True
+    return False
+
+
+def names_both(record: PubmedRecord, abstract: Abstract) -> bool:
+    """Whether a title and abstract name both of the pair's nodes, each by any of the terms
+    step 2 searched it by (`record.synonyms`): as whole words, case and punctuation aside
+    ("c-Abl" names "c abl"), or, for a term of 3 characters or more, with the spaces squashed
+    out of both ("STI-571" names "STI571"). Permissive, so that a doubtful abstract is read."""
+    spaced, squashed = _screen_text(abstract.title or "", abstract.abstract or "")
+    return all(
+        _names(record.synonyms.get(node) or (), spaced, squashed)
+        for node in pair_nodes(record.pair_id)
+    )
+
+
+def screened(
+    record: PubmedRecord, texts: Mapping[str, Abstract], cited: Collection[str]
+) -> list[str]:
+    """The pair's PMIDs the source screen leaves unread, once each, in order: each it has only
+    as a source citation (origin `source`: the search didn't find it), that at least
+    config.SOURCE_SCREEN_MIN_PAIRS pairs cite (`cited`, from `mass_cited`), and whose title and
+    abstract don't name both nodes (`names_both`; one missing from the cache names neither)."""
+    out: dict[str, None] = {}
+    for p in record.pmids:
+        if p.origin == "source" and p.pmid in cited:
+            abstract = texts.get(p.pmid)
+            if abstract is None or not names_both(record, abstract):
+                out[p.pmid] = None
+    return list(out)
+
+
+def pair_pmids(
+    record: PubmedRecord, texts: Mapping[str, Abstract], cited: Collection[str] = frozenset()
+) -> list[str]:
     """The PMIDs step 3 asks about for a pair: those step 2 found whose abstract the PubMed
-    cache (`texts`) has with text, once each, in order. A pair is fully labeled when each has an
-    answer."""
+    cache (`texts`) has with text, once each, in order, but those the source screen leaves
+    unread (`screened`, with `cited` the pair's `mass_cited` PMIDs). A pair is fully labeled
+    when each has an answer: a PMID screened out never holds it."""
+    skip = set(screened(record, texts, cited)) if cited else set()
     pmids = dict.fromkeys(p.pmid for p in record.pmids)
-    return [p for p in pmids if p in texts and texts[p].has_text]
+    return [p for p in pmids if p in texts and texts[p].has_text and p not in skip]
 
 
 @dataclass
@@ -357,9 +438,16 @@ def build_jobs(inputs: Inputs, pubmed: PubMedCache) -> tuple[list[PairJob], Coun
         missing = sum(p not in texts for p in found)
         if missing:
             skipped["abstracts missing from the PubMed cache"] += missing
-        pmids = pair_pmids(record, texts)
+        cited = mass_cited(pair)
+        pmids = pair_pmids(record, texts, cited)
+        screened_out = len(pair_pmids(record, texts)) - len(pmids) if cited else 0
+        if screened_out:
+            skipped["source abstracts screened out"] += screened_out
         if not pmids:
-            skipped["pairs without abstracts"] += 1
+            if screened_out:
+                skipped["pairs left without abstracts by the source screen"] += 1
+            else:
+                skipped["pairs without abstracts"] += 1
             continue
         entities = [inputs.entities.get(n) or Entity(id=n) for n in pair_nodes(pair.pair_id)]
         synonyms = {
@@ -581,9 +669,10 @@ def build_message(
     for side, e in zip(SIDES, job.entities, strict=True):
         name = e.name or e.id
         lines.append(f"{side}: {name} ({e.id})")
-        # The most specific category: KGX lists every ancestor and mixin after it.
-        category = e.category[0].removeprefix("biolink:") if e.category else "unknown"
-        lines.append(f"  category: {category}")
+        # The node's most specific category, not its first: the cleaned graph lists them
+        # alphabetically. FORMAT_VERSION stays: the Nov 16 run's entities were reordered to
+        # list this one first, so its messages are the same.
+        lines.append(f"  category: {_category(e.category)}")
         synonyms = [
             s
             for s in dict.fromkeys(t.strip() for t in job.synonyms.get(e.id, []))
@@ -743,6 +832,245 @@ def statement_of(stored: Mapping[str, Any]) -> schema.Statement:
     return schema.Statement.model_validate(stored)
 
 
+# What `read_claim` repairs in a stored claim instead of failing it. It runs after labeling, on
+# claims as cached: the stored claim stays as the model gave it (`claim_id` hashes it), and the
+# check, the review and step 6 read it through `read_claim`, so a change here reaches every
+# cached label at the next check, with no new call and no new prompt version. A statement that
+# passes the checks as written is read as written, and each repair reads a statement as saying
+# no more than the model wrote:
+# - "bare_qualified_predicate": `qualified_predicate: causes` with no aspect or direction to
+#   qualify says nothing the predicate doesn't, and is dropped.
+# - "gene_product": a gene product that isn't a gene (a Protein, which NodeNorm doesn't conflate
+#   into its gene) also fits a `gene` domain or range, as the claim rules count a gene's
+#   products as the gene: `gene_associated_with_condition`, and `regulates`, whose
+#   PhysicalEssenceOrOccurrent range Biolink 4.4.6 puts a Gene under but not a Protein. Only
+#   when the node's own categories fail the statement. Step 6 still writes a proposal only if
+#   it is valid with the node's own categories (`refine._written`), so no invalid edge results.
+# - "wrong_side": a subject or object qualifier on a disease or phenotype, which takes none,
+#   describes the gene, gene product or chemical on the other side, and moves there. A
+#   direction moves only with an aspect beside it (alone it might mean the disease's course),
+#   and is dropped otherwise, as is a slot the other side sets already.
+# - "symmetric_turn": a symmetric statement whose qualifiers fit only read from its object
+#   (written from the disease, with the gene's qualifiers on the object) is read that way
+#   round, as step 6 writes a proposal (`refine._written`).
+# - "redundant_also_supports": an `also_supports` entry that a positive claim's own statement
+#   already entails is dropped, rather than failing the claim.
+# No repair drops a slot from what a negative claim denies, which would deny more.
+SALVAGE: frozenset[str] = frozenset(
+    {
+        "bare_qualified_predicate",
+        "gene_product",
+        "wrong_side",
+        "symmetric_turn",
+        "redundant_also_supports",
+    }
+)
+GENE = "biolink:Gene"
+GENE_PRODUCT = "biolink:GeneProductMixin"
+SIDE_PREFIXES = ("subject_", "object_")
+
+
+@dataclass(frozen=True)
+class Reading:
+    """A stored statement as `read_statement` reads it: None if its predicate fits its nodes
+    neither way round; what fails it, in words; and the repairs made (`SALVAGE`)."""
+
+    statement: schema.Statement | None
+    errors: list[str]
+    fixes: list[str] = field(default_factory=list)
+
+
+def gene_products_as_genes(
+    categories: Mapping[str, Sequence[str]], nodes: Iterable[str]
+) -> dict[str, list[str]]:
+    """The categories of `nodes`, with each gene product that isn't a gene (a Protein) a Gene
+    too."""
+    out = {}
+    for node in nodes:
+        cats = list(categories.get(node) or ())
+        if cats and biolink.is_a(cats, GENE_PRODUCT) and not biolink.is_a(cats, GENE):
+            cats.append(GENE)
+        out[node] = cats
+    return out
+
+
+def _stored(statement: schema.Statement) -> dict[str, Any]:
+    return statement.model_dump(exclude={"negated"})
+
+
+def _slots_fit(
+    statement: schema.Statement,
+    categories: Mapping[str, Sequence[str]],
+    qualifiers: Qualifiers,
+) -> bool:
+    """Whether every qualifier slot and value the statement sets is one its association takes
+    between its nodes, `qualified_predicate` included."""
+    offered = qualifiers.offered(
+        tuple(categories.get(statement.subject) or ()),
+        statement.predicate,
+        tuple(categories.get(statement.object) or ()),
+    )
+    slots = dict(statement.qualifiers)
+    if statement.qualified_predicate:
+        slots["qualified_predicate"] = statement.qualified_predicate
+    return all(k in offered and v in (offered[k].values or ()) for k, v in slots.items())
+
+
+def _off_the_disease(
+    statement: schema.Statement, categories: Mapping[str, Sequence[str]], *, drop: bool
+) -> schema.Statement:
+    """The statement with each subject or object qualifier set on a disease or phenotype moved
+    to the gene, gene product or chemical on the other side ("wrong_side"). A direction without
+    an aspect beside it, and a slot the other side sets already, are dropped; or, without
+    `drop`, the statement is left as it is."""
+    node = {"subject_": statement.subject, "object_": statement.object}
+    cats = {side: list(categories.get(n) or ()) for side, n in node.items()}
+    takes = {side: biolink.is_a(c, QUALIFIABLE) for side, c in cats.items()}
+    off = {
+        side: not takes[side] and biolink.is_a(c, DISEASE_OR_PHENOTYPE) for side, c in cats.items()
+    }
+    out = dict(statement.qualifiers)
+    for slot, value in statement.qualifiers.items():
+        side = next((s for s in SIDE_PREFIXES if slot.startswith(s)), None)
+        if side is None or not off[side]:
+            continue
+        other = next(s for s in SIDE_PREFIXES if s != side)
+        if not takes[other]:
+            continue
+        moved = other + slot.removeprefix(side)
+        alone = slot.endswith("_direction_qualifier") and (
+            side + "aspect_qualifier" not in statement.qualifiers
+        )
+        del out[slot]
+        if moved not in statement.qualifiers and not alone:
+            out[moved] = value
+        elif not drop:
+            return statement
+    if out == statement.qualifiers:
+        return statement
+    return statement.model_copy(update={"qualifiers": dict(sorted(out.items()))})
+
+
+def _reading(
+    entry: Mapping[str, Any],
+    categories: Mapping[str, Sequence[str]],
+    qualifiers: Qualifiers,
+    salvage: Collection[str],
+    denied: bool,
+) -> Reading:
+    """The stored statement the way round Biolink reads it between nodes of these categories,
+    with the statement repairs `salvage` names, and what still fails it."""
+    s = refine.directed(statement_of(entry), categories)
+    if s is None:
+        return Reading(None, [misfit(entry, categories)])
+    fixes = []
+    if "wrong_side" in salvage:
+        moved = _off_the_disease(s, categories, drop=not denied)
+        if moved != s:
+            s, fixes = moved, [*fixes, "wrong_side"]
+    if (
+        "symmetric_turn" in salvage
+        and s.subject != s.object
+        and biolink.is_symmetric(s.predicate)
+        and not _slots_fit(s, categories, qualifiers)
+    ):
+        turned = refine.turned(s)
+        if _slots_fit(turned, categories, qualifiers):
+            s, fixes = turned, [*fixes, "symmetric_turn"]
+    if (
+        "bare_qualified_predicate" in salvage
+        and not denied
+        and s.qualified_predicate is not None
+        and not any(k.endswith(CAUSAL_SLOTS) for k in s.qualifiers)
+    ):
+        s = s.model_copy(update={"qualified_predicate": None})
+        fixes.append("bare_qualified_predicate")
+    return Reading(s, qualifiers.errors(_stored(s), categories), fixes)
+
+
+def read_statement(
+    entry: Mapping[str, Any],
+    categories: Mapping[str, Sequence[str]],
+    qualifiers: Qualifiers,
+    salvage: Collection[str] | None = None,
+    *,
+    denied: bool = False,
+) -> Reading:
+    """A stored statement as the check, the review and step 6 read it: the way round Biolink
+    reads it (`refine.directed`), as written if that passes the checks (its predicate fits the
+    nodes by domain and range, and its qualifier slots and values are ones its association
+    takes, `Qualifiers`). Otherwise with the repairs `salvage` names (default SALVAGE; see
+    there), first between the nodes' own categories, then, with "gene_product", reading a gene
+    product as its gene too: the first reading that passes. One no repair saves is read as
+    written, with its errors. `denied`: the statement is what a negative claim denies."""
+    salvage = SALVAGE if salvage is None else salvage
+    written = _reading(entry, categories, qualifiers, (), denied)
+    if not written.errors or not salvage:
+        return written
+    tries = [(categories, [])]
+    if "gene_product" in salvage:
+        nodes = (entry["subject"], entry["object"])
+        tries.append((gene_products_as_genes(categories, nodes), ["gene_product"]))
+    for cats, made in tries:
+        read = _reading(entry, cats, qualifiers, salvage, denied)
+        if not read.errors:
+            return Reading(read.statement, [], [*made, *read.fixes])
+    return written
+
+
+@dataclass(frozen=True)
+class ReadClaim:
+    """A stored claim as `read_claim` reads it: its own statement, then each `also_supports`
+    entry kept (None for one whose predicate fits neither way); what fails it, in words; and
+    the repairs made (`SALVAGE`)."""
+
+    statements: list[schema.Statement | None]
+    errors: list[str]
+    fixes: list[str]
+
+
+def read_claim(
+    claim: Mapping[str, Any],
+    categories: Mapping[str, Sequence[str]],
+    qualifiers: Qualifiers,
+    lattice: refine.Lattice | None = None,
+    salvage: Collection[str] | None = None,
+) -> ReadClaim:
+    """A stored claim as the check, the review and step 6 read it: each statement as
+    `read_statement` reads it, with the repairs `salvage` names (default SALVAGE). Then
+    checked: `negative_finding_type` only on a negative claim, and each `also_supports` entry
+    adding something: not already entailed by a positive claim's own statement (dropped, with
+    "redundant_also_supports"), and not entailing what a negative claim denies."""
+    salvage = SALVAGE if salvage is None else salvage
+    lattice = lattice or refine.Lattice()
+    positive = claim["polarity"] == "positive"
+    errors: list[str] = []
+    fixes: list[str] = []
+    read: list[schema.Statement | None] = []
+    for i, entry in enumerate([claim["statement"], *(claim.get("also_supports") or ())]):
+        where = f"also_supports[{i - 1}]: " if i else ""
+        reading = read_statement(
+            entry, categories, qualifiers, salvage, denied=not i and not positive
+        )
+        read.append(reading.statement)
+        errors += [f"{where}{e}" for e in reading.errors]
+        fixes += reading.fixes
+    if positive and claim.get("negative_finding_type") is not None:
+        errors.append("negative_finding_type is for negative claims only")
+    own, kept = read[0], read[:1]
+    for i, also in enumerate(read[1:]):
+        if own is not None and also is not None:
+            if positive and lattice.entails(own, also):
+                if "redundant_also_supports" in salvage:
+                    fixes.append("redundant_also_supports")
+                    continue
+                errors.append(f"also_supports[{i}] is already supported by the claim's statement")
+            if not positive and lattice.entails(also, own):
+                errors.append(f"also_supports[{i}] contradicts the negative claim")
+        kept.append(also)
+    return ReadClaim(kept, errors, list(dict.fromkeys(fixes)))
+
+
 def check_claim(
     claim: Mapping[str, Any],
     categories: Mapping[str, Sequence[str]],
@@ -750,37 +1078,12 @@ def check_claim(
     lattice: refine.Lattice | None = None,
 ) -> list[str]:
     """What fails a stored claim, in words; [] if nothing does. The sentence check is apart
-    (`sentence_found`). Each statement is checked the way round Biolink reads it
-    (`refine.directed`), as step 6 will read it: its predicate must fit the pair's nodes
-    by its domain and range, one way round or the other. Then checked: each statement's
-    qualifier slots and values (`Qualifiers`), `negative_finding_type` only on a negative claim,
-    and each `also_supports` entry adding something: not already supported by a positive
-    claim's own statement, and not contradicting a negative claim (a statement that entails the
-    one it denies)."""
-    lattice = lattice or refine.Lattice()
-    errors: list[str] = []
-    read: list[schema.Statement | None] = []
-    for i, entry in enumerate([claim["statement"], *claim["also_supports"]]):
-        where = f"also_supports[{i - 1}]: " if i else ""
-        statement = refine.directed(statement_of(entry), categories)
-        read.append(statement)
-        if statement is None:
-            errors.append(f"{where}{misfit(entry, categories)}")
-        else:
-            stored = statement.model_dump(exclude={"negated"})
-            errors += [f"{where}{e}" for e in qualifiers.errors(stored, categories)]
-    positive = claim["polarity"] == "positive"
-    if positive and claim["negative_finding_type"] is not None:
-        errors.append("negative_finding_type is for negative claims only")
-    own = read[0]
-    for i, also in enumerate(read[1:]):
-        if own is None or also is None:
-            continue
-        if positive and lattice.entails(own, also):
-            errors.append(f"also_supports[{i}] is already supported by the claim's statement")
-        if not positive and lattice.entails(also, own):
-            errors.append(f"also_supports[{i}] contradicts the negative claim")
-    return errors
+    (`sentence_found`). The claim is checked as step 6 will read it (`read_claim`): each
+    statement the way round Biolink reads it (`refine.directed`), its predicate fitting the
+    pair's nodes by its domain and range one way round or the other, and its qualifier slots
+    and values allowed (`Qualifiers`), with the repairs SALVAGE names; `negative_finding_type`
+    only on a negative claim; and each `also_supports` entry adding something."""
+    return read_claim(claim, categories, qualifiers, lattice).errors
 
 
 def misfit(statement: Mapping[str, Any], categories: Mapping[str, Sequence[str]]) -> str:
@@ -999,7 +1302,7 @@ def write_sample(
         md += [f"## {n}. {names[x.id]} and {names[y.id]}", "", f"Pair `{job.pair_id}`", ""]
         for side, e in zip(SIDES, job.entities, strict=True):
             synonyms = "; ".join(job.synonyms.get(e.id, [])[:MAX_SYNONYMS_SHOWN]) or "none"
-            category = e.category[0].removeprefix("biolink:") if e.category else "unknown"
+            category = _category(e.category)
             md.append(f"- {side}: {names[e.id]} ({e.id}; {category}); synonyms: {synonyms}")
         md.append("")
         abstracts = pubmed.get_abstracts(job.pmids)
@@ -1457,8 +1760,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--reasoning-effort",
         default=None,
-        help="reasoning effort for reasoning models, or 'none' to omit (default: the model's in "
-        "config.MODELS); it is part of the prompt version, so another effort reads afresh",
+        help="reasoning effort for reasoning models ('none' is sent as such), or 'omit' to send "
+        "none (default: the model's in config.MODELS); it is part of the prompt version, so "
+        "another effort reads afresh",
     )
     parser.add_argument(
         "--dry-run",

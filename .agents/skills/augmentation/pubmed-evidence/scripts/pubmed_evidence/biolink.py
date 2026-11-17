@@ -256,6 +256,19 @@ def most_specific(categories: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     return tuple(_curie(n) for n in _leaves(names)) if names else ()
 
 
+def shown_category(categories: list[str] | tuple[str, ...]) -> str | None:
+    """The one category a message shows for a node, as a CURIE, whatever order the node lists
+    them in (the cleaned graph lists them alphabetically, BiologicalEntity first): of its
+    `most_specific`, the narrowest, the one with the fewest classes at or below it (mixins
+    included), and of equals the first the node lists. So a node that is a NamedThing and a
+    GeneOrGeneProduct, and no class below either, shows GeneOrGeneProduct. A node with no
+    category Biolink knows shows its first; one with none, None."""
+    leaves = most_specific(categories)
+    if not leaves:
+        return categories[0] if categories else None
+    return min(leaves, key=lambda c: len(_desc(_name(c))))
+
+
 def _holds(categories: tuple[str, ...], classes: tuple[str, ...]) -> bool:
     names = tuple(dict.fromkeys(n for n in map(_name, categories) if n))
     if not names:

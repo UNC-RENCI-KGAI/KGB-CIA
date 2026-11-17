@@ -10,9 +10,10 @@ picks are covered, and, if it lists them, by how the edge was made (its `knowled
 `agent_type`). The first statement rule that matches an edge decides its tier:
 
 - `query` rules keep every matching edge.
-- `capped` rules (gene-gene, gene-phenotype) keep only their best-scored `--capped-limit` pairs,
-  after dropping statements below `--min-score` if given; ties, unscored pairs included, go to
-  the pair with the most sources, then by a hash of the pair id (`cap_rank`).
+- `capped` rules (gene-gene, gene-phenotype, gene-trait, text-mined-location) keep only their
+  best-scored `--capped-limit` pairs, after dropping statements below `--min-score` if given;
+  ties, unscored pairs included, go to the pair with the most sources, then by a hash of the
+  pair id (`cap_rank`).
 - `skip` rules keep nothing. They exist so the report can say which skip rule covered an
   edge type, and so an edge type no rule covers shows up as `unmatched`.
 
@@ -56,6 +57,8 @@ step reads claims Biolink's way round, so claims rarely reach them.
 Kept edges become one `SelectedStatement` per distinct statement (`graphio.edge_statement_id`),
 one `Pair` per unordered node pair and one `Entity` per node in a kept pair, in the work directory:
 `statements.jsonl`, `pairs.jsonl`, `entities.jsonl`, and `scope_report.json` with the counts.
+Each pair also carries, for each of its source PMIDs, the number of kept pairs that cite it
+(`citing_pairs`), which step 3's source screen reads.
 
 `--rules FILE` replaces the built-in rules with a JSON list of objects (or `{"rules": [...]}`)
 with the same fields as `Rule`, in order of precedence:
@@ -84,6 +87,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Iterable
+from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -216,6 +220,20 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         ),
         object=("biolink:Disease",),
     ),
+    # DrugCentral writes some indications to a phenotype (an HP term) rather than a disease:
+    # 920 `treats` pairs in the Nov 9 2026 graph. Disease and PhenotypicFeature are siblings, so
+    # this takes nothing from chemical-treats-disease.
+    Rule(
+        id="chemical-treats-phenotype",
+        tier="query",
+        subject=(CHEMICAL,),
+        predicates=(
+            "biolink:treats",
+            "biolink:treats_or_applied_or_studied_to_treat",
+            "biolink:contraindicated_in",
+        ),
+        object=("biolink:PhenotypicFeature",),
+    ),
     Rule(
         id="chemical-affects-gene",
         tier="query",
@@ -225,6 +243,17 @@ DEFAULT_RULES: tuple[Rule, ...] = (
             "biolink:directly_physically_interacts_with",
             "biolink:binds",
         ),
+        object=(GENE,),
+    ),
+    # Drug-target activity: ChEMBL, WOMBAT-PK, DrugMatrix, DrugCentral, GtoPdb, PDSP and others
+    # write it as `interacts_with`, a quarter with a `causal_mechanism_qualifier` (25,148 pairs
+    # in the Nov 9 2026 graph). After chemical-affects-gene, which keeps `binds` and
+    # `directly_physically_interacts_with`: both are below `interacts_with`.
+    Rule(
+        id="drug-target",
+        tier="query",
+        subject=(CHEMICAL,),
+        predicates=("biolink:interacts_with",),
         object=(GENE,),
     ),
     # `associated_with` covers gene_associated_with_condition, genetically_associated_with,
@@ -251,6 +280,31 @@ DEFAULT_RULES: tuple[Rule, ...] = (
         subject=(GENE,),
         predicates=("biolink:has_phenotype",),
         object=("biolink:PhenotypicFeature",),
+    ),
+    # TIGA's GWAS gene-trait associations, to EFO traits (564,098 pairs in the Nov 9 2026
+    # graph), which NodeNorm types PhenotypicFeature or only DiseaseOrPhenotypicFeature. Capped
+    # like gene-phenotype: numerous, and trait names are long. After gene-disease, since
+    # Disease is below DiseaseOrPhenotypicFeature.
+    Rule(
+        id="gene-trait",
+        tier="capped",
+        subject=(GENE,),
+        predicates=("biolink:associated_with", "biolink:contributes_to"),
+        object=("biolink:PhenotypicFeature", "biolink:DiseaseOrPhenotypicFeature"),
+    ),
+    # COMPARTMENTS' text mining: a protein `located_in` a cellular component that abstracts
+    # mention together (4,782,056 pairs in the Nov 9 2026 graph, scored, with no publications),
+    # so only this step can check it. Its edges are all text co-occurrence, so they go into the
+    # text-co-occurrence provenance rule's cap and the report counts them there; this rule sets
+    # the predicates their pairs' claims may use. Before pathway-go, whose skip covers
+    # `located_in` CellularComponent: curated GO locations stay skipped.
+    Rule(
+        id="text-mined-location",
+        tier="capped",
+        subject=(GENE,),
+        predicates=("biolink:located_in",),
+        object=("biolink:CellularComponent",),
+        knowledge_level=("text_co_occurrence",),
     ),
     # Pathway and GO names rarely appear verbatim in abstracts, and GO annotations carry their
     # own references and evidence codes. Pathway is below BiologicalProcessOrActivity.
@@ -526,6 +580,15 @@ def _read_categories(input_dir: Path) -> dict[str, tuple[str, ...]]:
     return out
 
 
+@cache
+def _shown(categories: tuple[str, ...]) -> str:
+    """The category the report's skipped breakdown names a node by: its most specific
+    (`biolink.shown_category`), as the label and review messages show it, not its first, which
+    in the cleaned graph's alphabetical lists is BiologicalEntity. Cached by the category list,
+    which `_read_categories` shares between nodes."""
+    return biolink.shown_category(categories) or ""
+
+
 def cap_rank(pair: str, best: float | None, sources: int) -> tuple:
     """A pair's sort key in a capped rule, first kept first: scored before unscored, the best
     score of the rule's statements in it highest first, then the most distinct
@@ -535,6 +598,15 @@ def cap_rank(pair: str, best: float | None, sources: int) -> tuple:
     first, one prefix's."""
     digest = hashlib.sha256(pair.encode("utf-8")).hexdigest()
     return (best is None, -(best or 0.0), -sources, digest, pair)
+
+
+def citing_pairs(pair_pmids: Iterable[Iterable[str]]) -> Counter[str]:
+    """PMID -> the number of pairs citing it, from each kept pair's source PMIDs. Select
+    counts over every pair it keeps and writes each pair's counts on it
+    (`Pair.source_pmid_pairs`), so the label step's source screen (config.SOURCE_SCREEN_MIN_PAIRS)
+    doesn't depend on how pairs.jsonl is later split into parts or how many pairs step 2
+    searches."""
+    return Counter(p for pmids in pair_pmids for p in set(pmids))
 
 
 def _apply_caps(
@@ -629,8 +701,7 @@ def select(
         rule, lowered_by = matches[key]
         if rule is None or (lowered_by or rule).tier == "skip":
             label = f"skip:{(lowered_by or rule).id}" if rule else "unmatched"
-            first = (s_cats[0] if s_cats else "", edge.predicate, o_cats[0] if o_cats else "")
-            skipped[(*first, label)] += 1
+            skipped[(_shown(s_cats), edge.predicate, _shown(o_cats), label)] += 1
             continue
         sid = edge_statement_id(edge)
         acc = statements.get(sid)
@@ -648,18 +719,23 @@ def select(
     pair_statements: dict[str, list[str]] = defaultdict(list)
     for sid, acc in statements.items():
         pair_statements[acc.pair_id].append(sid)
+    pair_pmids = {
+        pid: sorted(set().union(*(statements[s].pmids for s in sids)), key=pmid_key)
+        for pid, sids in pair_statements.items()
+    }
+    cited = citing_pairs(pair_pmids.values())
     pairs = []
     for pid in sorted(pair_statements):
         sids = sorted(pair_statements[pid])
-        pmids = set().union(*(statements[s].pmids for s in sids))
         rule_ids = sorted({statements[s].rule for s in sids}, key=order.__getitem__)
         pairs.append(
             Pair(
                 pair_id=pid,
                 nodes=pair_nodes(pid),
                 statement_ids=sids,
-                source_pmids=sorted(pmids, key=pmid_key),
+                source_pmids=pair_pmids[pid],
                 rules=rule_ids,
+                source_pmid_pairs={p: cited[p] for p in pair_pmids[pid]},
             )
         )
     statement_records = [
@@ -789,9 +865,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--capped-limit",
         type=int,
         default=config.CAPPED_LIMIT,
-        help=f"pairs kept per capped rule (gene-gene, gene-phenotype, and text-co-occurrence "
-        f"and text-mined for edges mined from the literature), best-scored first "
-        f"(default {config.CAPPED_LIMIT:,})",
+        help=f"pairs kept per capped rule (gene-gene, gene-phenotype, gene-trait, and "
+        f"text-co-occurrence and text-mined for edges mined from the literature, COMPARTMENTS' "
+        f"locations among them), best-scored first (default {config.CAPPED_LIMIT:,})",
     )
     parser.add_argument(
         "--min-score",

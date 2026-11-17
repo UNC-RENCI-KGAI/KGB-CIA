@@ -102,8 +102,9 @@ def _parser(prog: str = "kgb-augment") -> argparse.ArgumentParser:
     full.add_argument(
         "--reasoning-effort",
         dest="full_reasoning_effort",
-        help="reasoning effort for step 3's model, or 'none' to omit (default: the one "
-        "label_run.json names, if its model is labeling, else the model's in config.MODELS)",
+        help="reasoning effort for step 3's model ('none' is sent as such), or 'omit' to send "
+        "none (default: the one label_run.json names, if its model is labeling, else the "
+        "model's in config.MODELS)",
     )
     full.add_argument(
         "--review-model",
@@ -340,9 +341,11 @@ def run_all(common: argparse.Namespace) -> int:
         module = importlib.import_module(MODULES[name])
         args = _step_args(name, common, run)
         if name == "label":
+            # LLMError: a model not in config.MODELS, or an effort it doesn't take.
+            llm = importlib.import_module("pubmed_evidence.llm")
             try:
                 estimate = _label_estimate(common, run)
-            except (FileNotFoundError, ValueError) as e:
+            except (FileNotFoundError, ValueError, llm.LLMError) as e:
                 print(f"label: error: {e}", file=sys.stderr)
                 return 1
             if _over_budget(common, estimate):

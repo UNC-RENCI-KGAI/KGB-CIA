@@ -16,6 +16,11 @@ Steps 5 and 6 read the bundles: the review step sends the claims that would coun
   without a word. It is listed apart (`Bundles.not_looked_up`), for step 6 to hold, and the
   next ground run looks the name up. A pair with no abstracts to read is bundled with no
   evidence.
+- **The source screen.** The label step asks about none of the mass-cited source papers its
+  source screen leaves unread (`label.screened`, from the counts select wrote in pairs.jsonl,
+  `mass_cited`), so they never hold a pair: it is checked on the abstracts read, and one the
+  screen leaves with none is bundled with no evidence, like a pair the search found nothing
+  for. `Bundle.screened` names them, for step 6's record, and the counts count them.
 - **Edges.** The input graph's edges whose statement select kept (`statements.jsonl`), each with
   its `id` (`graphio.edge_id`) and its `publications` as its source cited them
   (`graphio.as_cited`), never one an earlier run added (`kgbcia-augmentation:`). An id that two
@@ -36,8 +41,10 @@ Steps 5 and 6 read the bundles: the review step sends the claims that would coun
   `anatomy_name`, which goes to `lit_context_notes`. Each
   statement reads the way round Biolink's domain and range put it (`refine.directed`), so
   'gene condition_associated_with_gene disease' is 'gene gene_associated_with_condition
-  disease'; the stored claim, which `claim_id` hashes, stays as the model gave it. A claim
-  carries the verdict of the reviewer and review prompt version given, if any.
+  disease', and a claim that passed its check only through a post-label repair reads as
+  repaired (`label.read_claim`); the stored claim, which `claim_id` hashes, stays as the model
+  gave it. A claim carries the verdict of the reviewer and review prompt version given, if
+  any.
 
 `Bundle.keys` names each claim as the claim tables key it, (pair, PMID, `claim_id`), in the
 order of `Bundle.claims`, which is `refine.claims_of`'s, and so that of the claim indices
@@ -50,7 +57,7 @@ import hashlib
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cached_property
+from functools import cache, cached_property
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +73,7 @@ from pubmed_evidence.cache import (
     canonical,
     claim_id,
 )
-from pubmed_evidence.records import Entity, LabelRun
+from pubmed_evidence.records import Entity, LabelRun, Pair
 from shared.pubmed import PubmedRecord, default_cache_path
 from shared.schema import (
     ClaimContext,
@@ -102,6 +109,7 @@ class Bundle:
     evidence: tuple[PublicationEvidence, ...]
     keys: tuple[ClaimKey, ...]
     others: tuple[Edge, ...] = ()
+    screened: tuple[str, ...] = ()  # PMIDs with text the source screen left unread
 
     @cached_property
     def claims(self) -> list[refine.Claim]:
@@ -128,6 +136,11 @@ class Bundles:
         return {e.id: list(e.category) for e in self.entities.values()}
 
 
+@cache
+def _qualifiers() -> label.Qualifiers:
+    return label.Qualifiers()
+
+
 def claim_record(
     stored: Mapping[str, Any],
     *,
@@ -141,21 +154,22 @@ def claim_record(
     """A claim as `abstract_claims` stores it, as the shared schema's record: its sentence the
     repair's (`repaired`) when its own wasn't found, its anatomy grounded (`grounding`, the
     cached grounding of the name it gives) and its review (`verdict`, a (verdict, reason)).
-    With the nodes' `categories`, each statement is the way round Biolink reads it
-    (`refine.directed`), as the label step checked it; one whose predicate fits neither way
-    raises ValueError."""
+    With the nodes' `categories`, the claim is read as the label step checked it
+    (`label.read_claim`): each statement the way round Biolink reads it (`refine.directed`),
+    with the repairs `label.SALVAGE` names where they make it pass; one whose predicate fits
+    neither way raises ValueError."""
     context = stored.get("context") or {}
     name = ground.claim_anatomy(stored)
     use_repair = not sentence_found and repaired is not None
     review, reason = verdict if verdict is not None else (None, None)
-    statements = []
-    for entry in [stored["statement"], *(stored.get("also_supports") or ())]:
-        statement = Statement.model_validate(entry)
-        if categories is not None:
-            statement = refine.directed(statement, categories)
-            if statement is None:
-                raise ValueError(label.misfit(entry, categories))
-        statements.append(statement)
+    if categories is None:
+        entries = [stored["statement"], *(stored.get("also_supports") or ())]
+        statements = [Statement.model_validate(entry) for entry in entries]
+    else:
+        read = label.read_claim(stored, categories, _qualifiers())
+        if None in read.statements:
+            raise ValueError("; ".join(read.errors))
+        statements = read.statements
     return ClaimRecord(
         polarity=stored["polarity"],
         statement=statements[0],
@@ -222,6 +236,20 @@ def edges_of(
     return dict(out), dict(others)
 
 
+def mass_cited(work: Path) -> dict[str, frozenset[str]]:
+    """Pair id -> its source PMIDs that the source screen may leave unread (`label.mass_cited`),
+    for the pairs with any, from the counts select recorded in pairs.jsonl: none without the
+    file or the counts, as the label step finds then too."""
+    path = Path(work) / records.PAIRS
+    if not path.exists():
+        return {}
+    out = {}
+    for pair in records.read_records(path, Pair):
+        if cited := label.mass_cited(pair):
+            out[pair.pair_id] = cited
+    return out
+
+
 def load(
     work: Path,
     cache_dir: Path,
@@ -258,6 +286,7 @@ def load(
     entities = {e.id: e for e in records.read_records(work / records.ENTITIES, Entity)}
     edges, others = edges_of(edges_file, scope, set(searched))
     pair_ids = sorted(p for p in searched if p in edges)
+    cited = mass_cited(work)
     release = uberon.load(cache_dir / config.UBERON_FILE)
     out = Bundles([], entities, refine.Lattice(anatomy=release.ancestors), release.version)
     if len(searched) > len(pair_ids):
@@ -268,7 +297,9 @@ def load(
     with LabelCache(cache_dir / config.LABEL_CACHE) as labels, PubMedCache() as cache:
         for chunk in graphio.chunks(pair_ids, CHUNK):
             records_ = {p: searched[p] for p in chunk}
-            _load_chunk(list(chunk), records_, edges, others, labels, cache, run, review, out)
+            _load_chunk(
+                list(chunk), records_, edges, others, labels, cache, run, review, cited, out
+            )
     return out
 
 
@@ -281,10 +312,20 @@ def _load_chunk(
     cache: PubMedCache,
     run: LabelRun,
     review: tuple[str, str] | None,
+    cited: Mapping[str, frozenset[str]],
     out: Bundles,
 ) -> None:
     texts = cache.get_abstracts(p.pmid for r in searched.values() for p in r.pmids)
-    asked = {pid: label.pair_pmids(searched[pid], texts) for pid in pair_ids}
+    asked = {pid: label.pair_pmids(searched[pid], texts, cited.get(pid, ())) for pid in pair_ids}
+    screened = {
+        pid: tuple(p for p in label.pair_pmids(searched[pid], texts) if p not in asked[pid])
+        for pid in pair_ids
+        if pid in cited
+    }
+    if n := sum(map(len, screened.values())):
+        out.counts["source abstracts screened out"] += n
+    if n := sum(bool(s) and not asked[pid] for pid, s in screened.items()):
+        out.counts["pairs left without abstracts by the source screen"] += n
     del texts
     pv, model = run.prompt_version, run.model
     answers = {(a.pair_id, a.pmid): a for a in labels.abstract_claims(pv, model, pair_ids)}
@@ -337,7 +378,11 @@ def _load_chunk(
                 out.counts["abstracts without publication types"] += 1
             evidence.append(_evidence(answer, article, found.get(pmid, False), claims))
         outside = tuple(others.get(pid, ()))
-        out.pairs.append(Bundle(pid, tuple(edges[pid]), tuple(evidence), tuple(keys), outside))
+        out.pairs.append(
+            Bundle(
+                pid, tuple(edges[pid]), tuple(evidence), tuple(keys), outside, screened.get(pid, ())
+            )
+        )
 
 
 def _record(

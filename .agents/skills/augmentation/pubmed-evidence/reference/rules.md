@@ -18,7 +18,9 @@ Each edge is decided in three steps:
 
 1. Its **statement rule** is the first statement rule that matches it. If none does, the edge
    is `unmatched`. If it is a skip rule, the edge is skipped as `skip:<statement rule>`,
-   whatever its provenance: a text-mined GO `located_in` edge is `skip:pathway-go`.
+   whatever its provenance: a GO `located_in` edge that a text-mining pipeline read is
+   `skip:pathway-go`, though the `text-mined` provenance rule matches it. (One that is a text
+   co-occurrence is another matter: `text-mined-location`, before `pathway-go`, keeps it.)
 2. Otherwise, if the first provenance rule whose knowledge levels and agent types the edge's
    are among has a tier no higher than the statement rule's (skip < capped < query), the edge
    takes that tier: a `skip` provenance rule skips it as `skip:<provenance rule>`, and a
@@ -78,10 +80,14 @@ shows as `unmatched`.
 | `text-mined` | capped (provenance rule) | | | | | `agent_type: text_mining_agent` |
 | `literature-co-occurrence` | skip | any | `occurs_together_in_literature_with` | any | yes | |
 | `chemical-treats-disease` | query | ChemicalEntity | `treats`, `contraindicated_in`, `treats_or_applied_or_studied_to_treat` | Disease | | |
+| `chemical-treats-phenotype` | query | ChemicalEntity | `treats`, `treats_or_applied_or_studied_to_treat`, `contraindicated_in` | PhenotypicFeature | | |
 | `chemical-affects-gene` | query | ChemicalEntity | `affects`, `directly_physically_interacts_with`, `binds` | GeneOrGeneProduct | | |
+| `drug-target` | query | ChemicalEntity | `interacts_with` | GeneOrGeneProduct | | |
 | `gene-disease` | query | GeneOrGeneProduct | `associated_with`, `contributes_to` | Disease | | |
 | `gene-gene` | capped | GeneOrGeneProduct | `physically_interacts_with`, `interacts_with` | GeneOrGeneProduct | yes | |
 | `gene-phenotype` | capped | GeneOrGeneProduct | `has_phenotype` | PhenotypicFeature | | |
+| `gene-trait` | capped | GeneOrGeneProduct | `associated_with`, `contributes_to` | PhenotypicFeature, DiseaseOrPhenotypicFeature | | |
+| `text-mined-location` | capped | GeneOrGeneProduct | `located_in` | CellularComponent | | `knowledge_level: text_co_occurrence` |
 | `pathway-go` | skip | GeneOrGeneProduct | `participates_in`, `enables`, `located_in` | BiologicalProcessOrActivity, CellularComponent | | |
 | `expression` | skip | GeneOrGeneProduct | `expressed_in` | AnatomicalEntity | | |
 | `by-construction` | skip | any | `orthologous_to`, `has_part`, `part_of`, `subclass_of`, `superclass_of`, `member_of`, `has_member` | any | yes | |
@@ -103,13 +109,42 @@ All CURIEs are `biolink:`. Notes:
   `gene_associated_with_condition`, under `gene-disease`'s `associated_with`, on 113,706 text
   co-occurrence edges, and the Nov 12 2026 run, which skipped only
   `occurs_together_in_literature_with`, put 127,774 of its 131,195 pairs in the query tier that
-  way. How many pairs the capped default keeps on the whole graph needs a rerun. A text-mined
+  way. In the cleaned Nov 9 2026 graph, the edges these rules take are all COMPARTMENTS'
+  text-mined locations (`text-mined-location`, below): 4,782,056 pairs in the
+  `text-co-occurrence` cap, which keeps 10,000, and none in `text-mined`'s. A text-mined
   edge that a skip statement rule covers stays skipped by it (`skip:pathway-go`), and a
   text-mined edge in a statement that a curated edge keeps in its query tier is checked with
   it. To skip them instead, as before, set these two rules' `tier` to `skip` in a rules file.
 - **`literature-co-occurrence`** comes next because its predicate is also below
   `associated_with`: two entities mentioned together is not a claim, and checking co-mention
   against PubMed would be circular.
+- **Four rules joined the defaults on 2026-11-16:** `chemical-treats-phenotype`, `drug-target`,
+  `gene-trait` and `text-mined-location`. The PubMed search of 2026-11-13 and the label run of
+  2026-11-16 had used them in a rules file, and the defaults are now that file's rules, in its
+  order. Counts below are pairs in the cleaned Nov 9 2026 graph (`data/cleaning`), before
+  any cap.
+  - **`chemical-treats-phenotype`:** DrugCentral writes some indications to an HP phenotype
+    rather than a disease (920 `treats` pairs). Disease and PhenotypicFeature are siblings, so
+    it takes nothing from `chemical-treats-disease`.
+  - **`drug-target`:** drug-target activity, which ChEMBL, WOMBAT-PK, DrugMatrix, DrugCentral,
+    GtoPdb, PDSP and others write as `interacts_with`, a quarter of them with a
+    `causal_mechanism_qualifier` such as inhibition or agonism (25,148 pairs; the earlier
+    defaults left them `unmatched`).
+    It comes after `chemical-affects-gene`, which keeps `binds` and
+    `directly_physically_interacts_with`: both are below `interacts_with`. Biolink marks
+    `interacts_with` symmetric, so the rule also matches Protein `interacts_with` chemical.
+  - **`gene-trait`:** TIGA's GWAS gene-trait associations to EFO traits (564,067 pairs, and
+    ClinVar's 31; all `unmatched` before), which NodeNorm types PhenotypicFeature or only
+    DiseaseOrPhenotypicFeature. Capped like `gene-phenotype`. It comes after `gene-disease`,
+    since Disease is below DiseaseOrPhenotypicFeature.
+  - **`text-mined-location`:** COMPARTMENTS' text mining, a protein `located_in` a cellular
+    component that abstracts mention together (4,782,056 scored pairs with no publications,
+    `skip:pathway-go` before). It comes before `pathway-go`, whose skip covers `located_in`
+    CellularComponent, and names the knowledge level, so curated GO locations stay skipped.
+    Its edges are all text co-occurrence, so the `text-co-occurrence` provenance rule puts
+    them in its cap, and the report counts them there: `text-mined-location`'s own entry
+    stays at 0. The rule sets what their pairs' claims may say: `located_in`, `active_in`
+    and `expressed_in`.
 - **Skips:** pathway and GO names rarely appear verbatim in abstracts, and GO annotations
   carry their own references and evidence codes. Expression edges are measurements rather than
   claims and are very numerous. The rest are true by construction.
@@ -117,8 +152,8 @@ All CURIEs are `biolink:`. Notes:
 ## Capped rules
 
 Gene–gene interactions are numerous and symmetric, and many come from one high-throughput
-screen; phenotype names are long and rarely found; edges mined from the literature are
-numerous and the least trustworthy (above). So a `capped` rule keeps at most
+screen; phenotype and trait names are long and rarely found, and TIGA's traits are numerous;
+edges mined from the literature are numerous and the least trustworthy (above). So a `capped` rule keeps at most
 `--capped-limit` pairs (default 10,000, `config.CAPPED_LIMIT`), per rule. A statement is in
 the cap of its provenance rule if it has one, else in its statement rule's; a query statement
 is never capped, and a statement a provenance rule took is never in its statement rule's cap.
@@ -195,6 +230,13 @@ version, so a rules file that changes a predicate list starts fresh claims. Skip
 provenance rules have no reply schema, so adding, removing or changing a provenance rule
 leaves the version, and the claims already cached, as they were.
 
+Changing the built-in rules changes the version of a run without a rules file. The four rules
+added on 2026-11-16 moved it, for gpt-6-luna at low effort, from `label@af415068` (the
+labels of the Nov 6 2026 runs) to `label@d2246608`, which a run with the 2026-11-13 search's
+rules file (`rules-search.json`) gives too, so the two share cached claims. A work dir keeps the version of its own
+label run in `label_run.json`, so ground, review and apply still find an earlier run's
+claims; a new label run there, though, asks again under the new version.
+
 ## `scope_report.json`
 
 Written next to the step's other files:
@@ -206,7 +248,7 @@ Written next to the step's other files:
 | `invalid_edges` | Edges that aren't valid `Edge` records, skipped: `edges`, `by_reason` (count per reason, most common first), `examples` (the first 10, `line` and `reason`) |
 | `kept` | `edges`, `statements`, `pairs`, `entities` kept in all; `negated_edges` among the edges; `misdirected_edges` (below) |
 | `rules` | Per rule id, statement and provenance rules alike. Query and capped: `tier`, `matched_edges`, `matched_statements`, and the `edges`, `statements` and `pairs` kept; capped rules add `dropped_by_min_score` (`statements`, `edges`) and `dropped_by_cap` (`pairs`, `statements`, `edges`). Skip: `tier`, `skipped_edges`. A statement counts under its provenance rule if it has one, else under its statement rule, with all its edges: so a statement rule's counts leave out the statements a provenance rule took, and include the lowered edges of the statements it kept in its own tier |
-| `skipped` | One entry per (subject category, predicate, object category) not kept, using each node's first (most specific) category: `edges` and `rule` (`skip:<id>` or `unmatched`), most edges first |
+| `skipped` | One entry per (subject category, predicate, object category) not kept, naming each node by its most specific category (`biolink.shown_category`, as the label and review messages show it; the cleaned graph lists categories alphabetically): `edges` and `rule` (`skip:<id>` or `unmatched`), most edges first |
 
 Read the largest `unmatched` entries: one that states a claim a paper could contradict (a
 predicate or category no rule lists) may deserve a rule.

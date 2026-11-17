@@ -12,7 +12,17 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClient, Sent
-from pubmed_evidence import biolink, config, label, llm, quote_align, records, repair, scope
+from pubmed_evidence import (
+    biolink,
+    config,
+    label,
+    llm,
+    quote_align,
+    records,
+    refine,
+    repair,
+    scope,
+)
 from pubmed_evidence.cache import (
     AbstractClaimsRow,
     ClaimCheckRow,
@@ -351,6 +361,24 @@ def test_message_names_the_pair_and_never_its_edges(w):
     assert "treats" in enums[1] and "treats" not in enums[0]
 
 
+def test_message_shows_each_nodes_most_specific_category_whatever_the_order():
+    # The cleaned graph lists categories alphabetically, BiologicalEntity before Gene.
+    gene = ["biolink:BiologicalEntity", *GENE, "biolink:GeneOrGeneProduct", "biolink:NamedThing"]
+
+    def message(chemical: list[str], gene: list[str]) -> str:
+        entities = [Entity(id=IMATINIB, category=chemical), Entity(id=ABL1, category=gene)]
+        job = label.PairJob(GENE_PAIR, entities, {}, {}, (), ("biolink:affects",), ["1001"])
+        return label.build_message(label.Request(job, ["1001"]), ABSTRACTS, [])
+
+    user = message(sorted(CHEMICAL), gene)
+    assert "X: CHEBI:45783 (CHEBI:45783)\n  category: SmallMolecule\n" in user
+    assert "Y: NCBIGene:25 (NCBIGene:25)\n  category: Gene\n" in user
+    # The same message as with the most specific category first, which the Nov 16 run's
+    # entities were reordered to: its labels stay under the same FORMAT_VERSION.
+    assert user == message(CHEMICAL, [*GENE, *(c for c in gene if c not in GENE)])
+    assert "  category: unknown\n" in message([], gene)
+
+
 # --- Schemas and versions -------------------------------------------------------------------
 
 
@@ -436,9 +464,10 @@ def test_prompt_version_covers_rules_effort_and_the_included_rules(tmp_path, mon
     low = label.label_prompt(model=MODEL)[1]
     assert label.label_prompt(model=MODEL, reasoning_effort="low")[1] == low
     assert label.label_prompt(model=MODEL, reasoning_effort="medium")[1] != low
-    # A model that takes no effort sends none, as 'none' does.
-    none = label.label_prompt(model=MODEL, reasoning_effort="none")[1]
-    assert label.label_prompt(model="gpt-oss-120b")[1] == none
+    # A model that takes no effort sends none, as 'omit' does; the level 'none' is another.
+    omitted = label.label_prompt(model=MODEL, reasoning_effort="omit")[1]
+    assert label.label_prompt(model="gpt-oss-120b")[1] == omitted
+    assert label.label_prompt(model=MODEL, reasoning_effort="none")[1] not in (omitted, low)
     # Another set of scope rules means other schemas.
     fewer = tuple(r for r in scope.DEFAULT_RULES if r.id != "gene-gene")
     assert label.label_prompt(model=MODEL, rules=fewer)[1] != low
@@ -457,7 +486,8 @@ def test_provenance_rules_have_no_schema_and_leave_the_version_alone():
     """A provenance rule names no predicates: it has no reply schema (its predicate enum would
     be empty), a pair never names it, and adding one, in any tier, leaves the prompt version
     and so the cached claims as they were. Only the statement rules that aren't skips make
-    the version, the same five as before provenance rules existed."""
+    the version: nine of the defaults, text-mined-location among them, since it is a statement
+    rule that also names a knowledge level."""
     statement_rules = tuple(r for r in scope.DEFAULT_RULES if not r.is_provenance)
     more = (
         scope.Rule(id="mined", tier="capped", agent_type=("text_mining_agent",)),
@@ -467,10 +497,14 @@ def test_provenance_rules_have_no_schema_and_leave_the_version_alone():
     schemas = label.rule_schemas(more)
     assert set(schemas) == {
         "chemical-treats-disease",
+        "chemical-treats-phenotype",
         "chemical-affects-gene",
+        "drug-target",
         "gene-disease",
         "gene-gene",
         "gene-phenotype",
+        "gene-trait",
+        "text-mined-location",
     }
     for schema in schemas.values():
         assert schema.body["$defs"]["statement"]["properties"]["predicate"]["enum"]
@@ -485,7 +519,11 @@ def test_provenance_rules_have_no_schema_and_leave_the_version_alone():
 NODES = {"X": IMATINIB, "Y": ABL1}
 CML_NODES = {"X": IMATINIB, "Y": CML}
 GENE_CML_NODES = {"X": ABL1, "Y": CML}
-CATEGORIES = {IMATINIB: CHEMICAL, ABL1: GENE, CML: DISEASE}
+# ABL1's protein: a gene product NodeNorm keeps apart from its gene.
+ABL1_PROTEIN = "UniProtKB:P00519"
+PROTEIN_CML_NODES = {"X": ABL1_PROTEIN, "Y": CML}
+CHEMICAL_PROTEIN_NODES = {"X": IMATINIB, "Y": ABL1_PROTEIN}
+CATEGORIES = {IMATINIB: CHEMICAL, ABL1: GENE, CML: DISEASE, ABL1_PROTEIN: ["biolink:Protein"]}
 GOF = {"subject_form_or_variant_qualifier": "gain_of_function_variant_form"}
 OGOF = {"object_form_or_variant_qualifier": "gain_of_function_variant_form"}
 INHIBITS = stmt(
@@ -501,15 +539,21 @@ INHIBITS = stmt(
     "nodes, item, expected",
     [
         (NODES, claim(INHIBITS, BOUND), []),
+        # What a negative claim denies is never read as less than written (`label.SALVAGE`).
         (
             NODES,
-            claim(stmt("X", "affects", "causes", causal_mechanism_qualifier="inhibition"), BOUND),
+            claim(
+                stmt("X", "affects", "causes", causal_mechanism_qualifier="inhibition"),
+                NOT_BOUND,
+                "negative",
+            ),
             ["qualified_predicate causes needs an aspect or a direction"],
         ),
+        # Moved onto the chemical, an aspect still has no place on treats.
         (
             CML_NODES,
-            claim(stmt("X", "treats", object_direction_qualifier="decreased"), RESPONSE),
-            ["object_direction_qualifier doesn't apply to treats between these entities"],
+            claim(stmt("X", "treats", object_aspect_qualifier="activity"), RESPONSE),
+            ["object_aspect_qualifier doesn't apply to treats between these entities"],
         ),
         (
             NODES,
@@ -520,15 +564,6 @@ INHIBITS = stmt(
             CML_NODES,
             claim(stmt("X", "treats"), RESPONSE, finding="demonstrated_absence"),
             ["negative_finding_type is for negative claims only"],
-        ),
-        (
-            CML_NODES,
-            claim(
-                stmt("X", "treats"),
-                RESPONSE,
-                also=[stmt("X", "treats_or_applied_or_studied_to_treat")],
-            ),
-            ["also_supports[0] is already supported by the claim's statement"],
         ),
         (
             CML_NODES,
@@ -546,11 +581,11 @@ INHIBITS = stmt(
                 stmt("X", "treats"),
                 RESPONSE,
                 "negative",
-                also=[stmt("X", "in_clinical_trials_for", object_direction_qualifier="decreased")],
+                also=[stmt("X", "in_clinical_trials_for", object_aspect_qualifier="activity")],
                 finding="demonstrated_absence",
             ),
             [
-                "also_supports[0]: object_direction_qualifier doesn't apply to "
+                "also_supports[0]: object_aspect_qualifier doesn't apply to "
                 "in_clinical_trials_for between these entities"
             ],
         ),
@@ -615,6 +650,177 @@ def test_a_misdirected_claim_is_checked_turned_and_stored_as_given():
     assert stored["statement"]["subject"] == CML and claim_id(stored) == before
 
 
+# --- Post-label salvage (label.SALVAGE) -------------------------------------------------------
+
+FORM = {"subject_form_or_variant_qualifier": "gain_of_function_variant_form"}
+MORE_EXPRESSED = {
+    "subject_aspect_qualifier": "expression",
+    "subject_direction_qualifier": "increased",
+}
+ON_THE_DISEASE = {
+    "object_aspect_qualifier": "expression",
+    "object_direction_qualifier": "increased",
+}
+
+
+def read(nodes, item, salvage=None) -> label.ReadClaim:
+    stored = label.stored_claim(item, nodes)
+    return label.read_claim(stored, CATEGORIES, label.Qualifiers(), salvage=salvage)
+
+
+def as_read(subject, predicate, object, qualified=None, **qualifiers) -> dict:
+    """A statement as `read_claim` reads it."""
+    return {
+        "subject": subject,
+        "predicate": f"biolink:{predicate}",
+        "object": object,
+        "qualified_predicate": qualified and f"biolink:{qualified}",
+        "qualifiers": qualifiers,
+    }
+
+
+@pytest.mark.parametrize(
+    "nodes, item, strict, statements, fixes",
+    [
+        # A. `causes` with no aspect or direction to qualify says nothing `affects` doesn't.
+        (
+            NODES,
+            claim(stmt("X", "affects", "causes", causal_mechanism_qualifier="inhibition"), BOUND),
+            ["qualified_predicate causes needs an aspect or a direction"],
+            [as_read(IMATINIB, "affects", ABL1, causal_mechanism_qualifier="inhibition")],
+            ["bare_qualified_predicate"],
+        ),
+        # B. A Protein fits a gene's predicate.
+        (
+            PROTEIN_CML_NODES,
+            claim(stmt("X", "gene_associated_with_condition"), RESPONSE),
+            [
+                "gene_associated_with_condition fits neither way between Protein and Disease "
+                "by its Biolink domain and range"
+            ],
+            [as_read(ABL1_PROTEIN, "gene_associated_with_condition", CML)],
+            ["gene_product"],
+        ),
+        # C. Biolink 4.4.6 puts a Gene under regulates' range, but not a Protein.
+        (
+            CHEMICAL_PROTEIN_NODES,
+            claim(stmt("X", "regulates", "causes", **INHIBITS["qualifiers"]), BOUND),
+            [
+                "regulates fits neither way between SmallMolecule and Protein by its Biolink "
+                "domain and range"
+            ],
+            [as_read(IMATINIB, "regulates", ABL1_PROTEIN, "causes", **INHIBITS["qualifiers"])],
+            ["gene_product"],
+        ),
+        # D. The gene's qualifiers written on the disease's side move to the gene's...
+        (
+            GENE_CML_NODES,
+            claim(stmt("X", "causes", **OGOF), RESPONSE),
+            ["object_form_or_variant_qualifier doesn't apply to causes between these entities"],
+            [as_read(ABL1, "causes", CML, **FORM)],
+            ["wrong_side"],
+        ),
+        (
+            GENE_CML_NODES,
+            claim(stmt("X", "associated_with", **ON_THE_DISEASE), RESPONSE),
+            [
+                "object_aspect_qualifier doesn't apply to associated_with between these entities",
+                "object_direction_qualifier doesn't apply to associated_with between these "
+                "entities",
+            ],
+            [as_read(ABL1, "associated_with", CML, **MORE_EXPRESSED)],
+            ["wrong_side"],
+        ),
+        # ... but a direction alone might be the disease's own: it's dropped, not moved.
+        (
+            GENE_CML_NODES,
+            claim(stmt("X", "associated_with", object_direction_qualifier="increased"), RESPONSE),
+            ["object_direction_qualifier doesn't apply to associated_with between these entities"],
+            [as_read(ABL1, "associated_with", CML)],
+            ["wrong_side"],
+        ),
+        # E. A symmetric statement from the disease, the gene's qualifiers on the object, reads
+        # from the gene.
+        (
+            GENE_CML_NODES,
+            claim(stmt("Y", "associated_with", **ON_THE_DISEASE), RESPONSE),
+            ["object_direction_qualifier doesn't apply to associated_with between these entities"],
+            [as_read(ABL1, "associated_with", CML, **MORE_EXPRESSED)],
+            ["symmetric_turn"],
+        ),
+        # F. An also_supports entry the claim's own statement entails is dropped, not the claim.
+        (
+            CML_NODES,
+            claim(
+                stmt("X", "treats"),
+                RESPONSE,
+                also=[stmt("X", "treats_or_applied_or_studied_to_treat")],
+            ),
+            ["also_supports[0] is already supported by the claim's statement"],
+            [as_read(IMATINIB, "treats", CML)],
+            ["redundant_also_supports"],
+        ),
+    ],
+)
+def test_the_post_label_salvage(nodes, item, strict, statements, fixes):
+    """Each cause of a claim failing a check that `read_claim` repairs: the strict checks still
+    fail it, and the claim passes, read as the repair reads it."""
+    assert read(nodes, item, salvage=frozenset()).errors == strict
+    stored = label.stored_claim(item, nodes)
+    assert label.check_claim(stored, CATEGORIES, label.Qualifiers()) == []
+    salvaged = read(nodes, item)
+    assert [s.model_dump(exclude={"negated"}) for s in salvaged.statements] == statements
+    assert (salvaged.errors, salvaged.fixes) == ([], fixes)
+
+
+@pytest.mark.parametrize(
+    "nodes, item",
+    [
+        (NODES, claim(INHIBITS, BOUND, also=[stmt("Y", "binds")], species="human")),
+        (GENE_CML_NODES, claim(stmt("Y", "gene_associated_with_condition", **OGOF), RESPONSE)),
+        (PROTEIN_CML_NODES, claim(stmt("X", "causes", **GOF), RESPONSE)),
+        (NODES, claim(stmt("Y", "binds"), NOT_BOUND, "negative", finding="failed_to_detect")),
+    ],
+)
+def test_a_claim_that_passes_as_written_reads_as_written(nodes, item):
+    """The salvage only reads claims that fail as written: one that passes reads exactly as
+    before, each statement the way round Biolink reads it, and nothing is repaired."""
+    stored = label.stored_claim(item, nodes)
+    strict = read(nodes, item, salvage=frozenset())
+    salvaged = read(nodes, item)
+    assert strict.errors == [] and salvaged == strict and salvaged.fixes == []
+    entries = [stored["statement"], *stored["also_supports"]]
+    directed = [refine.directed(label.statement_of(e), CATEGORIES) for e in entries]
+    assert salvaged.statements == directed
+
+
+def test_a_negative_claim_denies_no_more_than_it_says():
+    """A slot dropped from what a negative claim denies would deny more, so no repair drops one:
+    its qualifiers may move to the gene, but a lone direction on the disease still fails it."""
+    moved = claim(stmt("X", "causes", **OGOF), RESPONSE, "negative")
+    salvaged = read(GENE_CML_NODES, moved)
+    assert salvaged.errors == [] and salvaged.fixes == ["wrong_side"]
+    assert salvaged.statements[0].qualifiers == FORM
+    lone = stmt("X", "associated_with", object_direction_qualifier="increased")
+    assert read(GENE_CML_NODES, claim(lone, RESPONSE, "negative")).errors == [
+        "object_direction_qualifier doesn't apply to associated_with between these entities"
+    ]
+    # What it also supports is positive, and may lose one.
+    also = claim(stmt("X", "causes"), RESPONSE, "negative", also=[lone])
+    assert read(GENE_CML_NODES, also).errors == []
+
+
+def test_salvage_leaves_the_stored_claim_as_given():
+    """The repairs are a reading: the stored claim, which `claim_id` hashes, is unchanged."""
+    item = claim(stmt("X", "affects", "causes", causal_mechanism_qualifier="inhibition"), BOUND)
+    stored = label.stored_claim(item, NODES)
+    before, kept = claim_id(stored), json.dumps(stored, sort_keys=True)
+    assert read(NODES, item).statements[0].qualified_predicate is None
+    assert label.check_claim(stored, CATEGORIES, label.Qualifiers()) == []
+    assert claim_id(stored) == before and json.dumps(stored, sort_keys=True) == kept
+    assert stored["statement"]["qualified_predicate"] == "biolink:causes"
+
+
 @pytest.mark.parametrize(
     "sentence, found",
     [
@@ -641,7 +847,7 @@ def test_checks_are_stored_counted_and_recomputed(w):
                 {
                     "2001": [
                         claim(stmt(x, "treats"), "Imatinib cured everyone", "negative"),
-                        claim(stmt(x, "treats", object_direction_qualifier="increased"), RESPONSE),
+                        claim(stmt(x, "enables"), RESPONSE),
                     ]
                 },
             )
@@ -653,7 +859,9 @@ def test_checks_are_stored_counted_and_recomputed(w):
     assert (checked["valid"], checked["invalid"]) == (3, 1)
     # Of the valid claims, the made-up sentence; and a negative without a finding type.
     assert (checked["sentences_not_found"], checked["negatives_without_type"]) == (1, 1)
-    error = "object_direction_qualifier doesn't apply to treats between these entities"
+    error = (
+        "enables fits neither way between SmallMolecule and Disease by its Biolink domain and range"
+    )
     assert checked["errors"] == {error: 1}
     checks = w.checks()
     rows = {(k[1], c.valid, c.sentence_valid) for k, c in checks.items()}
@@ -836,6 +1044,108 @@ def test_the_rules_select_used_are_read_from_its_report(w):
         run_label(w, labeler())
 
 
+# --- The source screen ----------------------------------------------------------------------
+
+# Papers the gene pair's edges cite: a high-throughput study that names neither node (4001),
+# one that names both, as "STI-571" and "c-Abl" (4002), and one that names only imatinib (4003).
+SOURCE_ABSTRACTS = [
+    Abstract("4001", "A proteome-scale map", "Affinity purification found 120,000 interactions."),
+    Abstract("4002", "An interactome screen", "Among its hits, STI-571 bound c-Abl."),
+    Abstract("4003", "Kinase inhibitor profiling", "Imatinib was profiled against 400 kinases."),
+]
+
+
+def cite(w: Work, counts: dict[str, int], search: tuple[str, ...] = ("1001",)) -> None:
+    """The gene pair with the search's hits `search`, and the source PMIDs `counts` names, each
+    cited by that many pairs of the selection, as select records them (a PMID in both is
+    `source+search`). The work directory holds two pairs: the counts are the selection's."""
+    record = pubmed_record(GENE_PAIR, list(search))
+    for p in record.pmids:
+        p.origin = "source+search" if p.pmid in counts else "search"
+    record.pmids += [FetchedPmid(pmid=p, origin="source") for p in counts if p not in search]
+    write_jsonl(w.work / records.PUBMED, [record, pubmed_record(CML_PAIR, ["2001"])])
+    pairs = list(records.read_records(w.work / records.PAIRS, Pair))
+    update = {"source_pmids": list(counts), "source_pmid_pairs": counts}
+    pairs[0] = pairs[0].model_copy(update=update)
+    write_jsonl(w.work / records.PAIRS, pairs)
+    w.add_abstracts(SOURCE_ABSTRACTS)
+
+
+def gene_pmids(client: FakeClient) -> list[str]:
+    return sorted(p for s in client.sent for p in pmids_of(s) if not p.startswith("2"))
+
+
+def test_a_mass_cited_source_paper_is_read_only_where_it_names_both_nodes(w):
+    cite(w, {"4001": 100, "4002": 100, "4003": 167_351})
+    client = labeler()
+    summary = run_label(w, client)
+    assert gene_pmids(client) == ["1001", "4002"]
+    assert summary["skipped"] == {"source abstracts screened out": 2}
+
+
+def test_source_papers_cited_by_fewer_pairs_are_read(w):
+    cite(w, {"4001": 99, "4003": 1})
+    client = labeler()
+    summary = run_label(w, client)
+    assert gene_pmids(client) == ["1001", "4001", "4003"]
+    assert summary["skipped"] == {}
+
+
+def test_a_paper_the_search_found_is_read_however_many_pairs_cite_it(w):
+    cite(w, {"4001": 5000}, search=("1001", "4001"))
+    client = labeler()
+    run_label(w, client)
+    assert gene_pmids(client) == ["1001", "4001"]
+
+
+def test_a_pair_the_screen_leaves_without_abstracts_is_skipped(w):
+    cite(w, {"4001": 500, "4003": 500}, search=())
+    client = labeler()
+    summary = run_label(w, client)
+    assert gene_pmids(client) == []
+    assert summary["skipped"] == {
+        "source abstracts screened out": 2,
+        "pairs left without abstracts by the source screen": 1,
+    }
+    # The pair is labeled: it has nothing left to ask, so label_run.json is written.
+    assert summary["label_run_written"]
+
+
+def test_no_counts_or_the_screen_off_reads_every_paper(w, monkeypatch):
+    """A pairs.jsonl from before select counted citations screens nothing, nor does a run with
+    config.SOURCE_SCREEN_MIN_PAIRS None."""
+    cite(w, {"4001": 1000})
+    pairs = list(records.read_records(w.work / records.PAIRS, Pair))
+    pairs[0] = pairs[0].model_copy(update={"source_pmid_pairs": {}})
+    write_jsonl(w.work / records.PAIRS, pairs)
+    client = labeler()
+    run_label(w, client)
+    assert gene_pmids(client) == ["1001", "4001"]
+
+    cite(w, {"4001": 1000})
+    monkeypatch.setattr(config, "SOURCE_SCREEN_MIN_PAIRS", None)
+    assert label.mass_cited(next(records.read_records(w.work / records.PAIRS, Pair))) == set()
+    monkeypatch.setattr(config, "SOURCE_SCREEN_MIN_PAIRS", 1000)
+    assert label.mass_cited(next(records.read_records(w.work / records.PAIRS, Pair))) == {"4001"}
+
+
+@pytest.mark.parametrize(
+    ("text", "named"),
+    [
+        ("Imatinib inhibits ABL1.", True),
+        ("IMATINIB/ABL1 complexes", True),  # case and punctuation aside
+        ("STI-571 bound c-Abl.", True),  # squashed: "sti571"
+        ("Imatinib bound ABL.", False),  # ABL isn't ABL1
+        ("Imatinib bound the kinase.", False),  # one side only
+        ("Gleevec bound ABL1.", True),  # any term the search used
+        ("Imatinib bound ABL, ABL1's paralog.", True),  # "ABL1's": whole words "abl1 s"
+    ],
+)
+def test_names_both(text, named):
+    record = pubmed_record(GENE_PAIR, [])
+    assert label.names_both(record, Abstract("1", "", text)) is named
+
+
 # --- Failures -------------------------------------------------------------------------------
 
 
@@ -948,7 +1258,7 @@ def misquoted(sent: Sent):
     misquoted."""
     if "2001" in pmids_of(sent):
         x = side_of(sent, IMATINIB)
-        bad = claim(stmt(x, "treats", object_direction_qualifier="increased"), "Not a quote at all")
+        bad = claim(stmt(x, "enables"), "Not a quote at all")
         return reply(sent, {"2001": [bad]})
     claims = gene_claims(sent)
     claims["1001"] = [{**claims["1001"][0], "evidence_sentence": MADE_UP}]

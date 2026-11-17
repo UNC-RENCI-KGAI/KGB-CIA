@@ -17,8 +17,8 @@ final graph (nodes.jsonl, edges.jsonl) + transform_report.json files
   <- kgbcia-mcp (this server), run locally over stdio by each MCP client
 ```
 
-The server ships as its own package, `kgbcia-mcp`, so it can be installed from PyPI without the
-rest of the pipeline. Lineage beyond Biolink fields comes from each edge's
+The server ships as its own package, [`kgbcia-mcp` on PyPI](https://pypi.org/project/kgbcia-mcp/),
+so it runs without the rest of the pipeline. Lineage beyond Biolink fields comes from each edge's
 `kgbcia_source_records`, resolved against the `TransformReport`s (see `agents/AGENTS.md`).
 
 ## Run it alone
@@ -61,8 +61,8 @@ MCP server, against a running Neo4j:
 export NEO4J_URI=bolt://<host>:7687 NEO4J_USER=<user> NEO4J_PASSWORD=<password>
 export KGB_MCP_ARTIFACTS=<dir or URL of the artifacts tarball>
 export KGB_MCP_ARTIFACTS_SHA256=<required when artifacts is a URL>
-uv run kgbcia-mcp serve --enable-cypher            # stdio
-uvx kgbcia-mcp serve --enable-cypher               # once published to PyPI
+uvx kgbcia-mcp serve --enable-cypher               # stdio, the published package from PyPI
+uv run kgbcia-mcp serve --enable-cypher            # stdio, this checkout's code (for development)
 ```
 
 An artifacts URL is downloaded and unpacked once, by checksum, into `$KGB_CACHE_DIR/mcp-artifacts/`
@@ -131,10 +131,10 @@ Build-order steps 1–4 are complete: the standalone uv workspace package, offli
 artifact loading, TransformReport lineage, bounded Neo4j service, FastMCP tools, optional
 Cypher tool, dump preparation, precomputed statistics, indexes, Docker image, Helm chart,
 local-k8s sample deployment, AWS sample deployment, and AWS real-graph deployment. Step 5,
-publication to PyPI, remains open; until then teammates run from a checkout with
-`uv run kgbcia-mcp serve --enable-cypher`.
+publication to PyPI, is complete: `kgbcia-mcp` 0.1.0 was published on Nov 16, 2026, so
+anyone can run `uvx kgbcia-mcp serve --enable-cypher` without a checkout.
 
-A teammate can connect from a checkout by adding an MCP entry like this, with placeholders filled
+Anyone can connect by adding an MCP entry like this, with placeholders filled
 from the current release handoff. Update `KGB_MCP_ARTIFACTS_SHA256` every time a new
 `artifacts.tar.gz` is published.
 
@@ -142,8 +142,8 @@ from the current release handoff. Update `KGB_MCP_ARTIFACTS_SHA256` every time a
 {
   "mcpServers": {
     "kgbcia-mcp": {
-      "command": "uv",
-      "args": ["run", "kgbcia-mcp", "serve", "--enable-cypher"],
+      "command": "uvx",
+      "args": ["kgbcia-mcp", "serve", "--enable-cypher"],
       "env": {
         "NEO4J_URI": "bolt://<aws-bolt-host>:7687",
         "NEO4J_DATABASE": "neo4j",
@@ -176,7 +176,8 @@ Current verification:
 
 Known limits:
 
-- The package is not yet on PyPI; use `uv run` from a checkout.
+- `uvx kgbcia-mcp` runs the published release, not your checkout. To test local changes to the
+  server, use `"command": "uv", "args": ["run", "kgbcia-mcp", ...]` from the repository root.
 - `explain_edge(edge_id)` still unions over relationship types and can time out on the full
   graph for some edge IDs. Prefer `get_edges_between(include_lineage=true)` when endpoint IDs
   are known; it returns the same lineage for direct edges with an anchored query.

@@ -44,7 +44,13 @@ Fields by file:
   in their `publications`), `score` (capped rules; may be absent).
 - **`pairs.jsonl`** (`Pair`): `pair_id`, `nodes` (sorted), `statement_ids`, `source_pmids`
   (union of its statements'), `rules` (the statement rules its statements matched, never a
-  provenance rule, which set the predicates its claims may use).
+  provenance rule, which set the predicates its claims may use), `source_pmid_pairs` (each of
+  its `source_pmids` -> the number of pairs select kept that cite it, this one included).
+  - The counts are the whole selection's, written on every pair, so a part split from
+    `pairs.jsonl`, or parts merged back, keep them.
+  - Step 3's source screen reads them, and steps 5 and 6 read them again to ask the same
+    abstracts (`config.SOURCE_SCREEN_MIN_PAIRS`, DESIGN.md "Source papers many pairs cite").
+  - A `pairs.jsonl` written before them has none, and screens nothing.
 - **`pubmed.jsonl`** (`PubmedRecord`): `pair_id`; `query` (`""` for a pair not searched because a
   node has no usable name, kept for its source PMIDs); `retrieved` (ISO date of the search);
   `total` (ESearch hit count); `synonyms` and `mesh` (node id → the `[tiab]` terms and `[mh]`
@@ -53,7 +59,8 @@ Fields by file:
   without abstract text). Titles, abstracts and publication types are in the PubMed cache.
 - **`label_run.json`** (`LabelRun`): the run that ground, review, apply and the full run use.
   - `model`, `prompt_version`, `prompt` (path of the prompt file) and `reasoning_effort` (the
-    effort the run sent, `none` for none) of the label run;
+    effort the run sent: `omit` when it sent none, and `none` when it sent the level `none`) of
+    the label run;
   - `repairers`: the sentence repairs that count, as `[repairer, version]` pairs in priority
     order, `[["code", "align-2"], ["gpt-5.6-terra", "repair@..."]]`: a claim's sentence is the
     first of their repairs that was found. Those of the label run's repair pass: the code's,
@@ -85,7 +92,11 @@ Fields by file:
   labeled, gets none.
   - `pair_id`;
   - `abstracts_read`: the number of abstracts read for the pair (those step 2 found with
-    text); `evaluate --draw` leaves out the pairs with 0;
+    text, but those the source screen left unread); `evaluate --draw` leaves out the pairs
+    with 0;
+  - `abstracts_screened`: the source papers with text the source screen left unread, as
+    `PMID:` CURIEs (`[]` for none). A pair with 0 abstracts read and some here had only
+    mass-cited source papers to read;
   - `edges`: each in-scope edge of the pair, once: `edge_id`, `statement` (subject, predicate,
     object, `qualified_predicate` and qualifiers, `negated`), `supported`, `support_score`
     (its distinct supporting PMIDs), `supporting_publications`, `added_publications` (those its
@@ -121,7 +132,8 @@ Fields by file:
     `sentences_repaired`; and `counting`, those that support an edge of a refined pair;
   - `skipped`: pairs searched with no edge in scope, pairs with claims never checked and pairs
     with anatomy names never grounded, abstracts without publication types, claims failing a
-    check;
+    check, `source abstracts screened out` and `pairs left without abstracts by the source
+    screen` (each counted only when there is one);
   - `refinements` (lines written to `refinements.jsonl`) and `edges_written`.
   - `invalid_edges`: edges that aren't valid `Edge` records, written as read and unchecked:
     `edges`, `by_reason` (count per reason), `examples` (the first 10, `line` and `reason`).
@@ -228,9 +240,10 @@ cache's years, publication types and groundings, the UBERON file, the graph,
   `{{include NAME}}` line replaced by the file it names (`claim-rules.md`: beside the prompt,
   else the skill's `prompts/`). `extra` is the step's `FORMAT_VERSION`, its reply schema (for
   label, every scope rule's schema; skip and provenance rules have none) and the reasoning
-  effort sent, so answers made at one effort are never reused at another. `FORMAT_VERSION` is the version of the request layout
-  the code builds: `label-message-5` in `label.py`, `review-message-5` in `review.py` and
-  `repair-message-2` in `repair.py`. Any edit to a prompt file or a schema starts fresh
+  effort sent (`omit` when none is sent), so answers made at one effort are never reused at
+  another. `FORMAT_VERSION` is the version of the request layout the code builds:
+  `label-message-5` in `label.py`, `review-message-5` in `review.py` and `repair-message-2` in
+  `repair.py`. Any edit to a prompt file or a schema starts fresh
   answers (or reviews, or repairs); bump `FORMAT_VERSION` when the code that writes the request
   changes.
 - **Code repair version** (`quote_align.VERSION`, `align-2`): the version code's quote repairs

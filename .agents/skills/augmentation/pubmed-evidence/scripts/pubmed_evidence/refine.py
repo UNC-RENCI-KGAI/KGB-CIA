@@ -153,6 +153,12 @@ def _turned(statement: Statement, predicate: str | None = None) -> Statement:
     return statement.model_copy(update=update)
 
 
+def turned(statement: Statement) -> Statement:
+    """The statement read from its object, with the same predicate: for a symmetric one, the
+    same statement."""
+    return _turned(statement)
+
+
 def readings(statement: Statement) -> tuple[Statement, ...]:
     """The ways the statement can be written: itself, and for a symmetric predicate between two
     nodes, the same statement read from its object ('Y interacts with X' says 'X interacts with
