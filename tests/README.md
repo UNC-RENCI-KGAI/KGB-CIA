@@ -1,6 +1,6 @@
 # Tests
 
-`make test` runs lint, then about 835 tests in roughly 15 seconds, then the metadata skill's
+`make test` runs lint, then about 960 tests in roughly 15 seconds, then the metadata skill's
 136 tests. No test touches the network. Every outside service (PubMed, NodeNorm, the Name
 Resolver, the language models) is faked, so the tests pass offline and cost nothing.
 `make test-neo4j` runs the MCP server against a toy graph in a real Neo4j. CI runs both on every
@@ -15,9 +15,9 @@ the skill can be copied on its own and keep its tests.
 | --- | --- | --- |
 | Pipeline and schema | `test_smoke.py`, `test_paths.py`, `test_env_example.py` | 40 |
 | Transformation | `test_transformation_cli.py`; the generate-graph skill's `tests/` | 60 |
-| Cleaning | `test_cleaning.py`, `test_evidence_check.py` | 75 |
+| Cleaning | `test_cleaning.py`, `test_evidence_check.py` | 85 |
 | Filter | `test_filter.py`, `test_describe_graph.py` | 40 |
-| Augmentation | the pubmed-evidence skill's `tests/` | 510 |
+| Augmentation | the pubmed-evidence skill's `tests/` | 615 |
 | PubMed client (`shared/pubmed`) | `test_pubmed.py` | 45 |
 | MCP interface | `test_mcp_interface.py`; `make test-neo4j` | 60 |
 | Skill conventions | `test_skill_sync.py`, `test_skill_flags.py` | 20 |

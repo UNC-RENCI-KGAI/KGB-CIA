@@ -1,7 +1,8 @@
 # Known limitations of the submitted graph
 
-The submitted graph is the Nov 9, 2026 build of 26 sources. After the build, we chose to fix
-problems in code and record them here rather than rebuild before the deadline. The list below
+The submitted graph is the Nov 9, 2026 build. Of the 26 sources that build ran, 22 merged into
+the graph; Harmonizome, IMPC phenotypes, MGI and RGD failed in ORION. After the build, we chose
+to fix problems in code and record them here rather than rebuild before the deadline. The list below
 is what that graph is known to get wrong or leave out. Fixes are tracked in #104.
 
 ## Record sets that wrote no edges

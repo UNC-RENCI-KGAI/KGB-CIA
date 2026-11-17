@@ -94,5 +94,6 @@ describes every file.
 - No curator gold set exists yet, so the default models haven't been validated.
 - `kgb-augment` only runs from a clone of the repo, because the skill's code isn't installed
   with the package (#79).
-- COMPARTMENTS' roughly 5 million text-mined `located_in` edges are never checked (#97).
+- Of COMPARTMENTS' roughly 4.8 million text-mined `located_in` pairs, a default run checks only
+  the top-scoring ones, inside the 10,000-pair cap shared by all text co-occurrence edges (#97).
 - The open design questions are in the skill's `DESIGN.md`.

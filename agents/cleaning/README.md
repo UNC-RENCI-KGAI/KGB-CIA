@@ -19,25 +19,21 @@ uv run kgb-clean --input <dir> --output <dir>   # a graph somewhere else
 uv run kgb-clean --input data/augmentation --output data/final --drop-lists data/cleaning/drop_lists
 ```
 
-There are no rules to switch on or off: every rule always applies. To drop more edges, put a
-drop list in `<output>/drop_lists/` (see [Drop and flag lists](#drop-and-flag-lists)). The third
-line is the final pass. `--drop-lists` points it at the lists the evidence check wrote for the
-first pass, and the flag lists in `data/cleaning/flag_lists` beside them.
+Every rule always applies; there's nothing to switch on or off. The third line is the final
+pass: `--drop-lists` points it at `data/cleaning/drop_lists`, where the evidence check writes,
+and it reads the flag lists in `data/cleaning/flag_lists` beside them.
 
-The evidence check runs between augmentation and the final pass as its own pipeline stage:
+The evidence check runs between augmentation and the final pass, as its own stage:
 
 ```bash
 uv run kgb-evidence --graph data/augmentation          # every question; what the pipeline runs
 uv run kgb-evidence --question data/cleaning/evidence/my_question.json   # one question
 ```
 
-It runs the evidence-check skill's three scripts (gather, judge with Jev, build the lists) for
-each question: the ones the skill ships in its `questions/` folder, and any an agent wrote in
-`data/cleaning/evidence/*.json` (same `name` replaces the shipped one). Without
-`TYPESAFE_API_KEY` it asks Jev nothing, writes each question's requests, leaves its lists as
-they were, and the pipeline carries on. A question whose step fails (NCBI unreachable, TypeSafe
-down, `uv` missing) is reported and its lists left as they were; the stage still returns 0 so the
-final pass runs. `--strict` returns nonzero instead, for running a question by hand.
+For each question (those the skill ships, plus any an agent wrote in
+`data/cleaning/evidence/`), it gathers the cited abstracts, asks Jev about each edge, and writes
+the lists. Without `TYPESAFE_API_KEY`, or if a step fails, it reports why, leaves the lists as
+they were, and the pipeline carries on; `--strict` makes a failure stop it instead.
 
 ## Input / output
 
@@ -52,7 +48,7 @@ final pass runs. `--strict` returns nonzero instead, for running a question by h
 | `cleaning_report.json` | Counts in and out. `attention`: the sources that lost at least half their edges, with the prefixes that didn't resolve. Every dropped edge and node by reason and by source. Unresolved nodes by prefix, flags on kept edges, and a few examples of each. |
 | `flagged_edges.jsonl` | The kept edges worth a look, one per line, keyed like a drop list. |
 | `unresolved_nodes.tsv` | Every node NodeNorm couldn't resolve: its prefix and name, the edges it took down or that were kept with a flag, and their sources and predicates, most costly first. |
-| `pruned_edges.tsv` | The record of what cleaning removed and why: one KGX TSV row per dropped edge (`subject`, `predicate`, `object`, `primary_knowledge_source`, `statement_id`, `publications`, `reason`, a plain-words `explanation`, and a `confidence` where an evidence-check drop line carries one). It is not a gold set: a rule that drops an edge because its ids don't resolve says nothing about whether the claim is true. The scored gold set is the evidence check's `gold_set.tsv`. `malformed` and `no_primary_knowledge_source` edges are counted in the report but not listed, since their rows wouldn't be valid KGX. |
+| `pruned_edges.tsv` | Every dropped edge, one KGX TSV row each, with its `reason` and a plain-words `explanation` (and the evidence check's `confidence`, where it gave one). It records what was removed, not whether the claim is false: the scored gold set is the evidence check's `gold_set.tsv`. |
 
 ### Reading the result
 

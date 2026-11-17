@@ -33,9 +33,9 @@ that directory's team for review.
 
 ## Branches and pull requests
 
-**Nothing lands on `main` except through a pull request.** No direct pushes, no admin bypass,
-no "it's just a typo". The pull request is what asks the right team for review and runs CI
-before the merge.
+**Nothing lands on `main` except through a pull request**, not even a typo fix. The pull
+request is what asks the right team for review and runs CI before the merge. An admin merge
+that skips a review is for emergencies only, and the pull request says why in a comment.
 
 ```bash
 git checkout -b <team>/<short-description>    # e.g. filter/affinity-defaults
@@ -76,30 +76,11 @@ gh pr create
 
 ## Agent skills
 
-Shared skills go in **`.agents/skills/<category>/<skill-name>/SKILL.md`**. The categories match
-the agent packages: `metadata`, `transformation`, `filter`, `augmentation`, `cleaning` and
-`mcp_interface`. Keep each skill's scripts, references and assets inside its own directory, for
-example `.agents/skills/transformation/biolink-mapping/SKILL.md`.
+Skills live in `.agents/skills/<category>/<skill-name>/SKILL.md`, one category per agent
+package, with each skill's scripts, references and tests inside its own folder. The `name` in
+`SKILL.md`'s frontmatter must match the folder and be unique across categories.
 
-Start `SKILL.md` with frontmatter containing a `name` that matches the leaf directory
-(`biolink-mapping` in this example) and a nonempty `description`. Skill names must be unique
-across all categories; category prefixes aren't required. Remove the category's `.gitkeep` when
-you add its first skill.
-
-Pi discovers the grouped skills directly. For Claude Code, run the sync script, which creates
-flat, relative symlinks in `.claude/skills/` pointing to the originals:
-
-```bash
-python3 scripts/sync_claude_skills.py --prune --dry-run   # preview new links and cleanup
-python3 scripts/sync_claude_skills.py --prune             # create links, remove broken ones
-```
-
-Run the sync after adding, moving, renaming or deleting a skill. Edit the originals in
-`.agents/skills/`, not the links in `.claude/skills/`. The script rejects duplicate names and
-won't overwrite existing content; unrelated links and real files are left alone.
-
-Both harnesses can preload a skill by its leaf name: Pi subagent frontmatter uses
-`skills: biolink-mapping`, and Claude subagent frontmatter uses `skills: [biolink-mapping]`.
-After a change, run `/reload` in Pi or restart Claude Code, then check that the skill is found.
-[The skills guide](.agents/skills/README.md) has a complete `SKILL.md` example, loader details
-and pruning limitations.
+Pi finds them directly. For Claude Code, run `python3 scripts/sync_claude_skills.py --prune`
+after adding, moving or removing a skill; it links them into `.claude/skills/`. Edit the
+originals, not the links. [The skills guide](.agents/skills/README.md) has a full example and
+the details.

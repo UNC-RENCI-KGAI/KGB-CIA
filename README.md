@@ -17,8 +17,8 @@ through the MCP server. That run is a smaller build than the submitted graph des
 
 ## What it produces
 
-The submitted graph comes from the Nov 9, 2026 build of 26 sources (45 primary knowledge
-sources):
+The submitted graph comes from the Nov 9, 2026 build: 22 sources merged into one graph, citing
+45 primary knowledge sources.
 
 - **943,412 nodes and 11,701,010 edges** after cleaning. Every node ID is normalized with
   [NodeNorm](https://github.com/TranslatorSRI/NodeNormalization).
@@ -41,54 +41,25 @@ What the submitted graph is known to be missing is in
 
 ## Pipeline
 
-```
-Pharos / TCRD files
-        |
-        v
-1. Metadata agent        agents/metadata/        Croissant metadata per file (RoboCroissant), plus Biolink semantics
-        |
-        v
-2. Transformation agent  agents/transformation/  one ORION parser per source, built and NodeNorm'd, then merged into one graph
-        |
-        v
-3. Cleaning agent        agents/cleaning/        drops edges that can't be right; flags suspicious ones, with the reason on the edge
-        |
-        v
-4. Filter                agents/filter/          the subgraph the user asks for; with no request, the whole graph
-        |
-        v
-5. Augmentation agent    agents/augmentation/    PubMed evidence for edges, and more specific edges it supports
-        |
-        v
-6. Evidence check        agents/cleaning/        checks edges against the abstracts they cite; writes drop and flag lists
-        |
-        v
-7. Final cleaning        agents/cleaning/        the same kgb-clean, applying the evidence check's drop and flag lists
-        |
-        v
-8. MCP interface         agents/mcp_interface/   lets any local agent query the graph (OKN MCP pattern)
-
-Evaluation pipeline      evaluation/             GNN link prediction vs. Pharos baseline (not an agent)
-Shared code              shared/                 record schema, NodeNorm client, PubMed cache, pipeline runner
-```
+Eight stages, in this order. `uv run kgb-pipeline` runs them all; `make demo` prints what each
+does without running anything. Each stage's README says how to run it on its own.
 
 | Stage | Command | What it does |
 | --- | --- | --- |
-| 1. Metadata | the [`croissant-semantics`](.agents/skills/metadata/) skill | Adds Biolink semantics to each source's [Croissant](https://mlcommons.org/croissant/) metadata, one source at a time. (`kgb-metadata` is not implemented yet.) |
-| 2. Transformation | `kgb-transform` | Generates an [ORION](https://github.com/RobokopU24/ORION) parser per source, builds each one, and merges them into one graph. |
-| 3. Cleaning | `kgb-clean` | Drops edges that can't be right, flags suspicious ones, and writes the reason onto each edge. |
-| 4. Filter | `kgb-filter` | Gives a plain-language overview of the graph, then cuts the subgraph the user asks for. With no request, it keeps the whole graph. |
-| 5. Augmentation | `kgb-augment` | Adds PubMed evidence to edges, and proposes more specific edges that the abstracts support. |
-| 6. Evidence check | `kgb-evidence` | Asks a model (Jev) whether each edge's cited abstract supports it, and writes drop and flag lists. Skipped without a TypeSafe key. |
-| 7. Final cleaning | `kgb-clean` | Applies the evidence check's drop and flag lists. |
-| 8. MCP interface | `kgb-mcp` | A read-only [MCP](https://modelcontextprotocol.io/) server over a Neo4j copy of the graph, for any MCP client. |
-| Evaluation | not a stage | Link prediction against the Pharos baseline, run outside the agents. |
+| 1. [Metadata](agents/metadata/) | the [`croissant-semantics`](.agents/skills/metadata/) skill | Adds Biolink meaning to each source's [Croissant](https://mlcommons.org/croissant/) metadata, one source at a time. (`kgb-metadata` is not implemented yet.) |
+| 2. [Transformation](agents/transformation/) | `kgb-transform` | Generates an [ORION](https://github.com/RobokopU24/ORION) parser per source, builds each one, and merges them into one graph. |
+| 3. [Cleaning](agents/cleaning/) | `kgb-clean` | Drops edges that can't be right, flags suspicious ones, and writes the reason onto each edge. |
+| 4. [Filter](agents/filter/) | `kgb-filter` | Gives a plain-language overview of the graph, then cuts the subgraph the user asks for. With no request, it keeps the whole graph. |
+| 5. [Augmentation](agents/augmentation/) | `kgb-augment` | Adds PubMed evidence to edges, and proposes more specific edges that the abstracts support. |
+| 6. [Evidence check](agents/cleaning/) | `kgb-evidence` | Asks a model (Jev) whether each edge's cited abstract supports it, and writes drop and flag lists. Skipped without a TypeSafe key. |
+| 7. [Final cleaning](agents/cleaning/) | `kgb-clean` | Applies the evidence check's drop and flag lists. |
+| 8. [MCP interface](agents/mcp_interface/) | `kgb-mcp` | A read-only [MCP](https://modelcontextprotocol.io/) server over a Neo4j copy of the graph, for any MCP client. |
 
-Each stage's README, in its directory under `agents/`, says how to run the stage on its own.
 Cleaning runs before the filter and augmentation, so the paid steps never spend money on edges
-cleaning would drop. The filter runs before augmentation, so those steps only see what the user
-asked for. The evidence check then judges those edges, and cleaning runs again to apply its
-lists.
+cleaning would drop. The filter runs before augmentation, so the paid steps only see what the
+user asked for. Link prediction against the Pharos baseline ([`evaluation/`](evaluation/)) runs
+outside the pipeline, and shared code (record schema, NodeNorm client, PubMed cache) is in
+[`shared/`](shared/).
 
 ## Quick start
 
@@ -132,10 +103,12 @@ too. To use the models from the Pi agent harness, see [`.pi/README.md`](.pi/READ
 
 ## Querying the graph
 
-[`agents/mcp_interface/README.md`](agents/mcp_interface/README.md) explains how to load the
-graph into Neo4j and connect an MCP client (Claude Code, Pi, or any other) to the server. The
-server can search nodes, explore neighbors and paths, explain an edge down to the source record
-it came from, and tell the user when cleaning flagged an edge, and why.
+The MCP server is on PyPI as [`kgbcia-mcp`](https://pypi.org/project/kgbcia-mcp/), so any MCP
+client (Claude Code, Pi, or another) can run it with `uvx kgbcia-mcp serve`, no checkout needed.
+It searches nodes, explores neighbors and paths, explains an edge down to the source record it
+came from, and says when cleaning flagged an edge, and why.
+[`agents/mcp_interface/README.md`](agents/mcp_interface/README.md) has the client configuration,
+and how to load the graph into a Neo4j of your own.
 
 ## Agent skills
 
