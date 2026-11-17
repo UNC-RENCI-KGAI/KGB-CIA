@@ -90,5 +90,5 @@ describes every field.
 - The claims and the refinement haven't run live yet: a tuning sample, which also measures the
   cost, and a relabel of both graphs (Monarch and DrugCentral) are next.
 - No gold set yet, so the models are still unvalidated defaults.
-- Open items (scope with the filter team, `negated` handling team-wide, what's not built yet)
+- Open items (`negated` handling team-wide, what's not built yet)
   are in the skill's `DESIGN.md`, "Open items".

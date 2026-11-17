@@ -674,12 +674,8 @@ location is used, with a warning to move it, until the new one exists.
 
 Measured:
 
-- On the Nov 12 2026 run, labeling was 58% of the total, review 35% (with gpt-5.6-terra) and
-  repair 7%, and the labeling estimate was 20% over the actual ($3.44 against $2.81).
 - Review with gpt-6-luna at medium costs 18-24x less than with terra ("Second pass").
 - Quote repair, now code first, calls the model for about 4% of the sentences not found.
-- The last relabel of both graphs, in an earlier label format with smaller replies, cost $2.12
-  (Monarch) and $11.14 (DrugCentral) for labeling and review together.
 
 Not built: lowering `ABSTRACTS_PER_CALL` to 10 if the 95th percentile of a 20-abstract call's
 output tokens exceeds 70% of the model's 16,000-token cap.
@@ -718,20 +714,3 @@ Limits of the design as built:
   it); flat fields beside `lit_evidence` for a store such as Neo4j that can't hold a list of
   objects; attaching the evidence through Biolink's `has_supporting_studies`; and Message
   Batches for Claude bulk runs (half price, but a submit-then-collect flow).
-
-To confirm, since the repository can't show them:
-
-- **Not run yet:** the tuning sample and the relabel of both graphs on claims. The sample
-  measures output tokens per abstract (`ESTIMATED_OUTPUT_TOKENS`), how often one bad
-  `also_supports` entry invalidates a claim, how often the model puts the wrong node first, and
-  how many claims review gets.
-- **Claude models have run only offline here:** the label schema has yet to meet Anthropic's
-  structured-output limits live, and how often Haiku refuses biomedical abstracts is
-  unmeasured.
-- **The checked Monarch and DrugCentral edges carry no qualifiers** today, so the unstated
-  qualifiers above cost nothing yet.
-- **Filter team:** which of these edge types the filter keeps by default, and how many there
-  are. This sets the scale.
-- **Transformation team:** whether TCRD's PMID columns (likely GeneRIF, ChEMBL activity
-  references and DrugCentral references) are carried into `publications`.
-- **Who holds the NCBI API key.**
