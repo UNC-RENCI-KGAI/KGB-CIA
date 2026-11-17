@@ -93,7 +93,6 @@ describes every file.
 
 ## Limitations
 
-- No curator gold set exists yet, so the default models haven't been validated.
 - `kgb-augment` only runs from a clone of the repo, because the skill's code isn't installed
   with the package (#79).
 - Of COMPARTMENTS' roughly 4.8 million text-mined `located_in` pairs, a default run checks only
