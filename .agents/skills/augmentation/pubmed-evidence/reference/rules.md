@@ -1,10 +1,11 @@
 # Scope rules (step 1)
 
 `augment.py select` (`kgb-augment select`) keeps the edges worth checking in the literature:
-those whose relationship abstracts state as a claim that a paper could contradict. Rules choose them
-by (subject category, predicate, object category), and by how the edge was made (its
+those whose relationship abstracts state as a claim that a paper could contradict. Rules choose
+them by (subject category, predicate, object category), and by how the edge was made (its
 `knowledge_level` and `agent_type`). The rules are data: the built-in ones are `DEFAULT_RULES`
-in `scripts/pubmed_evidence/scope.py`, and `--rules FILE` replaces them.
+in `scripts/pubmed_evidence/scope.py`, and `--rules FILE` replaces them. DESIGN.md, "Step 1:
+Which edges to query", gives the reasons for each rule and the pair counts behind them.
 
 ## Two kinds of rule
 
@@ -101,50 +102,37 @@ All CURIEs are `biolink:`. Notes:
   forms, and `biomarker_for`. `contributes_to` covers `causes`.
 - **`text-co-occurrence`** and **`text-mined`** are provenance rules: they cap an edge mined
   from the literature (a co-mention, or a text-mining pipeline's reading of one) that a
-  statement rule keeps, whatever predicate its source writes it as. Such edges are the least
-  trustworthy in the graph, and they carry no publications or supporting sentence, so the
-  cleaning stage's evidence check can't judge them; this step is the only one that can. Nor is
-  checking them circular: the label step asks whether an abstract states the relationship as a
-  claim, not whether it mentions both entities. The cap bounds the cost. eRAM writes
-  `gene_associated_with_condition`, under `gene-disease`'s `associated_with`, on 113,706 text
-  co-occurrence edges, and the Nov 12 2026 run, which skipped only
-  `occurs_together_in_literature_with`, put 127,774 of its 131,195 pairs in the query tier that
-  way. In the cleaned Nov 9 2026 graph, the edges these rules take are all COMPARTMENTS'
-  text-mined locations (`text-mined-location`, below): 4,782,056 pairs in the
-  `text-co-occurrence` cap, which keeps 10,000, and none in `text-mined`'s. A text-mined
-  edge that a skip statement rule covers stays skipped by it (`skip:pathway-go`), and a
-  text-mined edge in a statement that a curated edge keeps in its query tier is checked with
-  it. To skip them instead, as before, set these two rules' `tier` to `skip` in a rules file.
+  statement rule keeps, whatever predicate its source writes it as.
+  - Such edges carry no publications or supporting sentence, so no other stage can check
+    them. Checking them isn't circular: the label step asks whether an abstract states the
+    relationship as a claim, not whether it mentions both entities. The cap bounds the cost.
+  - A text-mined edge that a skip statement rule covers stays skipped by it
+    (`skip:pathway-go`), and one in a statement that a curated edge keeps in its query tier is
+    checked with it.
+  - To skip them instead, set these two rules' `tier` to `skip` in a rules file.
 - **`literature-co-occurrence`** comes next because its predicate is also below
   `associated_with`: two entities mentioned together is not a claim, and checking co-mention
   against PubMed would be circular.
-- **Four rules joined the defaults on 2026-11-16:** `chemical-treats-phenotype`, `drug-target`,
-  `gene-trait` and `text-mined-location`. The PubMed search of 2026-11-13 and the label run of
-  2026-11-16 had used them in a rules file, and the defaults are now that file's rules, in its
-  order. Counts below are pairs in the cleaned Nov 9 2026 graph (`data/cleaning`), before
-  any cap.
-  - **`chemical-treats-phenotype`:** DrugCentral writes some indications to an HP phenotype
-    rather than a disease (920 `treats` pairs). Disease and PhenotypicFeature are siblings, so
-    it takes nothing from `chemical-treats-disease`.
-  - **`drug-target`:** drug-target activity, which ChEMBL, WOMBAT-PK, DrugMatrix, DrugCentral,
-    GtoPdb, PDSP and others write as `interacts_with`, a quarter of them with a
-    `causal_mechanism_qualifier` such as inhibition or agonism (25,148 pairs; the earlier
-    defaults left them `unmatched`).
-    It comes after `chemical-affects-gene`, which keeps `binds` and
-    `directly_physically_interacts_with`: both are below `interacts_with`. Biolink marks
-    `interacts_with` symmetric, so the rule also matches Protein `interacts_with` chemical.
-  - **`gene-trait`:** TIGA's GWAS gene-trait associations to EFO traits (564,067 pairs, and
-    ClinVar's 31; all `unmatched` before), which NodeNorm types PhenotypicFeature or only
-    DiseaseOrPhenotypicFeature. Capped like `gene-phenotype`. It comes after `gene-disease`,
-    since Disease is below DiseaseOrPhenotypicFeature.
-  - **`text-mined-location`:** COMPARTMENTS' text mining, a protein `located_in` a cellular
-    component that abstracts mention together (4,782,056 scored pairs with no publications,
-    `skip:pathway-go` before). It comes before `pathway-go`, whose skip covers `located_in`
-    CellularComponent, and names the knowledge level, so curated GO locations stay skipped.
-    Its edges are all text co-occurrence, so the `text-co-occurrence` provenance rule puts
-    them in its cap, and the report counts them there: `text-mined-location`'s own entry
-    stays at 0. The rule sets what their pairs' claims may say: `located_in`, `active_in`
-    and `expressed_in`.
+- **`chemical-treats-phenotype`:** DrugCentral writes some indications to an HP phenotype
+  rather than a disease. Disease and PhenotypicFeature are siblings, so it takes nothing from
+  `chemical-treats-disease`.
+- **`drug-target`:** drug-target activity, which ChEMBL, WOMBAT-PK, DrugMatrix, DrugCentral,
+  GtoPdb, PDSP and others write as `interacts_with`, some with a `causal_mechanism_qualifier`
+  such as inhibition or agonism. It comes after `chemical-affects-gene`, which keeps `binds`
+  and `directly_physically_interacts_with`: both are below `interacts_with`. Biolink marks
+  `interacts_with` symmetric, so the rule also matches Protein `interacts_with` chemical.
+- **`gene-trait`:** TIGA's GWAS gene-trait associations to EFO traits, which NodeNorm types
+  PhenotypicFeature or only DiseaseOrPhenotypicFeature. Capped like `gene-phenotype`. It comes
+  after `gene-disease`, since Disease is below DiseaseOrPhenotypicFeature.
+- **`text-mined-location`:** COMPARTMENTS' text mining, a protein `located_in` a cellular
+  component that abstracts mention together, scored and without publications.
+  - It comes before `pathway-go`, whose skip covers `located_in` CellularComponent, and names
+    the knowledge level, so curated GO locations stay skipped.
+  - Its edges are all text co-occurrence, so the `text-co-occurrence` provenance rule puts
+    them in its cap, and the report counts them there: `text-mined-location`'s own entry stays
+    at 0.
+  - The rule sets what their pairs' claims may say: `located_in`, `active_in` and
+    `expressed_in`.
 - **Skips:** pathway and GO names rarely appear verbatim in abstracts, and GO annotations
   carry their own references and evidence codes. Expression edges are measurements rather than
   claims and are very numerous. The rest are true by construction.
@@ -153,10 +141,11 @@ All CURIEs are `biolink:`. Notes:
 
 Gene–gene interactions are numerous and symmetric, and many come from one high-throughput
 screen; phenotype and trait names are long and rarely found, and TIGA's traits are numerous;
-edges mined from the literature are numerous and the least trustworthy (above). So a `capped` rule keeps at most
-`--capped-limit` pairs (default 10,000, `config.CAPPED_LIMIT`), per rule. A statement is in
-the cap of its provenance rule if it has one, else in its statement rule's; a query statement
-is never capped, and a statement a provenance rule took is never in its statement rule's cap.
+edges mined from the literature are numerous and the least trustworthy. So a `capped` rule
+keeps at most `--capped-limit` pairs (default 10,000, `config.CAPPED_LIMIT`), per rule. A
+statement is in the cap of its provenance rule if it has one, else in its statement rule's; a
+query statement is never capped, and a statement a provenance rule took is never in its
+statement rule's cap.
 
 1. **`--min-score X`** (default: none), if given, first drops the rule's statements whose score
    is below X **or that have no score**.
@@ -175,8 +164,7 @@ the rule's statements in it widen what the review step sends, which costs money.
 A statement's score is the highest numeric value in any of these slots on any of the edges
 that make it: `score`, `confidence_score`, `has_confidence_score`, `combined_score`,
 `stringdb_combined_score` (`SCORE_SLOTS`); not the `lit_support_score` step 6 writes. Booleans
-and NaN don't count.
-Scales differ between sources (STRING's raw combined score is 0–1000), and
+and NaN don't count. Scales differ between sources (STRING's raw combined score is 0–1000), and
 `--min-score` compares against the raw value.
 
 ## `--rules FILE`
@@ -230,12 +218,11 @@ version, so a rules file that changes a predicate list starts fresh claims. Skip
 provenance rules have no reply schema, so adding, removing or changing a provenance rule
 leaves the version, and the claims already cached, as they were.
 
-Changing the built-in rules changes the version of a run without a rules file. The four rules
-added on 2026-11-16 moved it, for gpt-6-luna at low effort, from `label@af415068` (the
-labels of the Nov 6 2026 runs) to `label@d2246608`, which a run with the 2026-11-13 search's
-rules file (`rules-search.json`) gives too, so the two share cached claims. A work dir keeps the version of its own
-label run in `label_run.json`, so ground, review and apply still find an earlier run's
-claims; a new label run there, though, asks again under the new version.
+Changing the built-in rules' predicates changes the version of a run without a rules file. A
+work directory keeps the version of its own label run in `label_run.json`, so ground, review
+and apply still find an earlier run's claims; a new label run there asks again under the new
+version. For gpt-6-luna at low effort the built-in rules give `label@d2246608`; claims cached
+under the earlier defaults are `label@af415068`.
 
 ## `scope_report.json`
 

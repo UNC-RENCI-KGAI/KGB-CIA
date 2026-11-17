@@ -88,8 +88,10 @@ The caches are kept between runs, so a rerun costs nothing for pairs already don
   the cleaning stage's evidence check.
 - **Labels:** `--cache-dir` or `KGB_AUGMENT_CACHE_DIR`, default `data/cache/augmentation`.
 
-The skill's [`reference/work-files.md`](../../.agents/skills/augmentation/pubmed-evidence/reference/work-files.md)
-describes every file.
+The skill's [`reference/formats.md`](../../.agents/skills/augmentation/pubmed-evidence/reference/formats.md)
+describes every field of the output graph, and
+[`reference/work-files.md`](../../.agents/skills/augmentation/pubmed-evidence/reference/work-files.md)
+every work file and cache.
 
 ## Limitations
 

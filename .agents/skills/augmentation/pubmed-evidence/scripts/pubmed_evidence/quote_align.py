@@ -1,11 +1,11 @@
 """The code half of step 3's quote repair: put back, in code, an evidence sentence the label
-model misquoted. Standard library only, and no model.
+model misquoted. Standard library only, and no model. DESIGN.md, "Quotes and repair", has the
+design and its measurements.
 
-When the bulk model's quote isn't in its abstract (`quotes.quote_found`), it is almost always
-the abstract's own words, slightly off: sentences stitched together without '...', words
-dropped, one to three words changed, punctuation, hyphens or a 'Title:' prefix (93% of the 409
-failures measured on 2026-11-16). So `repair` finds the sentences the quote was taken from and
-quotes them whole:
+A quote that isn't in its abstract (`quotes.quote_found`) is almost always the abstract's own
+words, slightly off: sentences stitched together without '...', words dropped, one to three
+words changed, punctuation, hyphens or a 'Title:' prefix. So `repair` finds the sentences the
+quote was taken from and quotes them whole:
 
 1. Split the title and the abstract into sentences, keeping each one's offsets so that a choice
    is cut verbatim from the text (`split_sentences`).
@@ -35,9 +35,8 @@ from typing import Any
 
 from pubmed_evidence.quotes import _ELLIPSIS, MAX_PARTS, MIN_PART_CHARS, normalize
 
-# The repair version code repairs are cached under (`claim_repairs.repair_prompt_version`, with
-# the repairer 'code'). Bump it on any change to what `repair` returns: repairs made under
-# another version are made again.
+# The version code repairs are cached under, with the repairer 'code'. Bump it on any change to
+# what `repair` returns: repairs made under another version are made again.
 VERSION = "align-2"
 # Least share of the quote's (weighted) words the passage must cover, else no repair.
 FLOOR = 0.5

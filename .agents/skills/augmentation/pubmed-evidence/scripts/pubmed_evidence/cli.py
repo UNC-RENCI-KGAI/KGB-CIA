@@ -1,13 +1,14 @@
 """The command line shared by `kgb-augment` and the skill's `scripts/augment.py`.
 
 `main` is both (`agents/augmentation/cli.py` hands it `kgb-augment`'s arguments): with no
-subcommand it runs every step in order with its defaults, which is what `shared/pipeline.py`
-calls, as `main([])`; each step is also a subcommand:
+subcommand it runs every step but evaluate, in order, with its defaults, which is what
+`shared/pipeline.py` calls, as `main([])`; each step is also a subcommand:
 
     kgb-augment select | pubmed | label | ground | review | apply | evaluate
 
 The common options (`--input`, `--output`, `--work`, `--cache-dir`) go before or after the
-subcommand. Step modules are imported only when they run.
+subcommand. Building the parser imports every step module, for its `add_arguments`. README.md,
+"Options", lists every option, and DESIGN.md, "How the agent runs", describes the full run.
 """
 
 from __future__ import annotations
@@ -167,13 +168,12 @@ FULL_RUN_OPTIONS = (
 
 
 def _overrides(name: str, common: argparse.Namespace, run) -> dict:
-    """What the full run sets on a step, beyond its defaults.
+    """What the full run sets on a step, beyond its defaults; a None leaves the default.
 
-    It continues the run `label_run.json` names, if any: that run's model, prompt, effort,
-    reviewer and review effort, so after the skill has tuned a run, `main([])` reuses its cached
-    claims and reviews instead of relabeling everything with the defaults. `--model`,
-    `--reasoning-effort` and `--review-model` override; the run's effort carries over only
-    while its model is labeling, and the review's while its reviewer is reviewing.
+    It continues `run`, the run `label_run.json` names, if any: its model, prompt, effort,
+    reviewer and review effort. `--model`, `--reasoning-effort` and `--review-model` override;
+    the run's effort carries over only while its model is labeling, and the review's while its
+    reviewer is reviewing.
     """
     if name == "pubmed":
         return {"limit": common.full_limit}
@@ -283,13 +283,10 @@ def _label_limit(common: argparse.Namespace, estimate: dict) -> int | None:
 
 
 def _finish_labeling(common: argparse.Namespace, run, label, args: argparse.Namespace) -> int:
-    """After a label run that returned 0: if pairs are still not fully labeled (a call failed,
-    or a reply left an abstract out), run label once more, since answers already made are
-    cached. If pairs still are, warn and return 0, so ground, review and apply go on: apply
-    writes their edges unchecked and counts them, and a call that fails the same way every
-    time would otherwise stop every full run here. Label's own share of failed calls
-    (`llm.too_many_failed`) still fails the step. The count is the dry run's `pairs_to_call`
-    on the same pairs."""
+    """After a label run that returned 0: if pairs are still not fully labeled, run label once
+    more, and return its exit code if it fails. If pairs still are, warn and return 0, so the
+    later steps go on (DESIGN.md, "How the agent runs", "The full run"). The count is the dry
+    run's `pairs_to_call` on the same pairs."""
     left = _label_estimate(common, run, args.limit)["pairs_to_call"]
     if not left:
         return 0

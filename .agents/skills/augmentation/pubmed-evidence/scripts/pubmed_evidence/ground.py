@@ -1,22 +1,10 @@
 """Step 4: ground the anatomy the claims name to UBERON terms, and pin UBERON's release.
 
-A claim gives its anatomical context as the abstract names it ("liver", "kidneys"). This step
-looks each name up in the RENCI Name Resolver among anatomical entities, then normalizes the
-matches with NodeNorm. The name is grounded to the first match whose label or one of whose
-synonyms *is* the name, case and whitespace aside, and whose NodeNorm clique has an UBERON term.
-So a near match never grounds a name, and neither does a cell type (CL) or a cell line. A name
-that isn't grounded stays on its claim as text, for `lit_context_notes`; a grounded one goes on
-the claim's statements as `anatomical_context_qualifier`, which can make them narrower than an
-edge (`refine.statements_of`).
-
-Groundings are cached by name in the PubMed cache, misses too, and NodeNorm's answers in its
-`nodenorm` table, so a rerun asks nothing. Names are cached in their `anatomy_key` form, so
-"Liver" and "liver " share a row; `groundings` reads them back for the names as claims give
-them. A lookup that fails isn't cached, and a rerun retries it.
-
-The step also makes sure the cache directory has the UBERON release config.UBERON_URL pins,
-whose is_a/part_of closure step 6 uses (`uberon.py`), and records its `data-version` in
-`label_run.json`. No model calls.
+Each name is looked up in the RENCI Name Resolver and its matches are normalized with NodeNorm
+(DESIGN.md, "Step 4: Grounding anatomy"). Groundings are cached by name in its `anatomy_key`
+form, so "Liver" and "liver " share a row; `groundings` reads them back for the names as claims
+give them. The step also makes sure the cache directory has the UBERON release
+config.UBERON_URL pins and records its `data-version` in `label_run.json`. No model calls.
 """
 
 from __future__ import annotations
@@ -234,6 +222,5 @@ def run(args: argparse.Namespace) -> int:
         )
     if s["failed"]:
         _warn(f"{s['failed']} names failed and aren't cached; rerun to retry")
-    # As in step 2: a few failures leave those contexts as notes until a rerun, but many mean
-    # the Name Resolver or NodeNorm is down, and the graph shouldn't be built on that.
+    # The 5% rule (DESIGN.md, "How the agent runs").
     return 1 if s["failed"] > MAX_FAILED_SHARE * max(s["names"], 1) else 0

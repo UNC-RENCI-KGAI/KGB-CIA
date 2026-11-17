@@ -1,23 +1,8 @@
-"""The files the steps hand each other, in the work directory (`<output>/work` by default).
+"""The records of the files the steps hand each other in the work directory, and their readers.
 
-Each step reads the files of the steps before it and writes its own, so any step can be rerun
-alone. The caches (`cache.py`) hold what costs requests or tokens; these files are cheap to
-rebuild.
-
-| File | Written by | One line per |
-| --- | --- | --- |
-| `entities.jsonl` | select (step 1) | node in a kept pair (`Entity`) |
-| `statements.jsonl` | select (step 1) | distinct statement of a kept edge (`SelectedStatement`) |
-| `pairs.jsonl` | select (step 1) | kept node pair (`Pair`) |
-| `scope_report.json` | select (step 1) | counts per rule and per skipped edge type |
-| `pubmed.jsonl` | pubmed (step 2) | pair searched (`shared.pubmed.PubmedRecord`) |
-| `label_run.json` | label (step 3), ground, review | the run step 6 applies (`LabelRun`) |
-| `refinements.jsonl` | apply (step 6) | refined pair: its edges' support, its proposals and links |
-| `apply_report.json` | apply (step 6) | counts of what step 6 checked, added and held, and why |
-
+reference/work-files.md, "Work directory", lists each file, who writes it and its fields.
 `Entity` and `Pair` are `shared.pubmed`'s, with the fields step 1 adds; step 2's records are
-`shared.pubmed`'s own. PMIDs are bare digits ('12345') everywhere in the work files and caches,
-and 'PMID:12345' in the graph's `publications`.
+`shared.pubmed`'s own.
 """
 
 from __future__ import annotations
@@ -44,8 +29,8 @@ APPLY_REPORT = "apply_report.json"
 
 class Entity(shared.pubmed.Entity):
     """A node in a kept pair, with what step 2 needs to search for it and step 3 to name it.
-    Its `synonyms` are the node's own `symbol`, `synonym` and `full_name` slots; step 2 adds
-    NodeNorm's labels and records the final list in `PubmedRecord.synonyms`."""
+    Its `synonyms` are the node's own; step 2 adds NodeNorm's labels and records the final list
+    in `PubmedRecord.synonyms`."""
 
     category: list[str] = Field(default_factory=list)
 
@@ -86,8 +71,7 @@ class SelectedStatement(BaseModel):
 
 class Pair(shared.pubmed.Pair):
     """A kept node pair, with its statements; its `source_pmids` are the union of theirs, and
-    its `rules` their statement rules (never a provenance rule), which set the predicates its
-    claims may use."""
+    its `rules` their statement rules (never a provenance rule)."""
 
     statement_ids: list[str]
     rules: list[str] = Field(default_factory=list)
@@ -101,10 +85,9 @@ class Pair(shared.pubmed.Pair):
 
 
 class LabelRun(BaseModel):
-    """Which claims step 6 applies: the model, prompt and effort of the last label run, the
-    quote repairs that count (its repair pass's: the code's, then the repair model's), the
-    model, prompt and effort of the review that followed it, if any; and the UBERON release the
-    ground step pinned."""
+    """The run that steps 4 to 6 and the full run use: the last label run, the quote repairs
+    that count, the review that followed it, if any, and the UBERON release the ground step
+    pinned (reference/work-files.md, "`label_run.json` (`LabelRun`)")."""
 
     model: str
     prompt_version: str
@@ -145,7 +128,7 @@ class LabelRun(BaseModel):
 
     def repair_order(self) -> list[tuple[str, str]]:
         """(repairer, repair prompt version) of the repairs that count, in priority order:
-        `repairers`, or in a file from before it, the one `repairer` it names; [] for none."""
+        `repairers`, or in a file without it, the one `repairer` it names; [] for none."""
         if self.repairers is not None:
             return [(r, v) for r, v in self.repairers]
         if self.repairer and self.repair_prompt_version:
@@ -154,7 +137,7 @@ class LabelRun(BaseModel):
 
     def set_repairs(self, order: list[tuple[str, str]]) -> None:
         """Name the repairs that count, in priority order, with the last of them in `repairer`
-        and `repair_prompt_version` too, for readers from before `repairers`."""
+        and `repair_prompt_version` too, for a reader of those two alone."""
         self.repairers = [(r, v) for r, v in order] or None
         self.repairer, self.repair_prompt_version = order[-1] if order else (None, None)
 
