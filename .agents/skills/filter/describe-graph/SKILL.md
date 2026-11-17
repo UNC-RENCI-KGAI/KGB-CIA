@@ -21,11 +21,13 @@ rest itself: the merged graph in `data/transformation/merged`, and the cleaned g
 these, then from the sum over sources, which counts shared nodes twice and says so. Pass a
 directory only when the run lives elsewhere: `kgb-transform`'s output directory or its `graphs/`.
 
-Two flags, each for one situation:
+Four flags, each for one situation:
 
 | Flag | Use it when |
 |---|---|
 | `--user NAME ...` | The user has brought their own data, built through the same metadata and transformation steps. Name it as they would ("human protein atlas"); the script matches it to a source id and, if it can't, lists the sources to choose from. |
+| `--croissants [CATALOG]` | The user asks what else they could add, or you are about to show them how to bring a source of their own. It lists the sources that have a croissant but weren't tried for this graph, each linked to its Boulangerie page. With no value it fetches the Boulangerie site's `catalog.json`, so it needs the network; offline, or to use another list, give a saved `catalog.json` file or another catalog's URL. Leave it off for a plain "what's in the graph?". |
+| `--croissant-pages URL` | Only with `--croissants`, and only when the pages aren't where the catalog is: you gave a saved catalog file but the pages have moved from the default site, or the catalog and the pages are on different sites. The links become `URL/kb/<slug>/`. |
 | `--output DIR` | They want the description somewhere other than `data/describe`. |
 
 `--user` adds the overlap: it reads each source's node ids (only the ones NodeNorm resolved) to
@@ -37,7 +39,9 @@ Outputs in the output directory:
 - `description.json`: every number, for other tools.
 - `overview.html`: a self-contained page with headline numbers, a map of the kinds of things
   and how they connect, edges per source, and with `--user`, how the user's data connects and
-  how the sources overlap. Point the user to it; it works offline and in dark mode.
+  how the sources overlap. With `--croissants`, it ends with "Additional sources with available
+  croissants", after "Other available sources not in the graph". Point the user to it; it works
+  offline and in dark mode.
 
 ## Retell it for a non-specialist
 
@@ -50,6 +54,11 @@ for. Then say what needs attention, in order of impact:
 - sources with many unresolved nodes: those nodes can't join anything else and are dropped
   by cleaning;
 - a low share of connections citing a publication, if explainability matters to them.
+
+With `--croissants`, say how many more sources have a croissant ready and name a few the user
+would recognize; the links go to pages written for non-specialists. Don't promise that one will
+build: a croissant describes the files, and the sources listed under "other available sources
+not in the graph" also had one.
 
 With a user source, give the connected share first ("53% of your 136,235 genes are already in
 the graph"), then the recommended sources in order, with what each adds. The recommendation is
@@ -73,3 +82,8 @@ ids are in a namespace NodeNorm doesn't resolve, which the metadata step can fix
 - Sources that didn't build are listed as "other available sources not in the graph", each
   with a plain reason and ORION's error.
 - A source whose `normalized_nodes.jsonl` is missing is left out of the overlap, with a warning.
+- `--croissants` matches a catalog entry to a source of this run by name: its slug or name,
+  written plainly, must equal the source id (`gene-ontology` and `Kgbcia_gene_ontology`). A
+  source the run names differently (`drug_central_indication`, say) would be listed as
+  additional when its catalog entry has another name. The default catalog is the Boulangerie
+  preview site (`BOULANGERIE_SITE` in the script), until the real site is published.
