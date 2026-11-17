@@ -91,6 +91,13 @@ class Pair(shared.pubmed.Pair):
 
     statement_ids: list[str]
     rules: list[str] = Field(default_factory=list)
+    source_pmid_pairs: dict[str, int] = Field(
+        default_factory=dict,
+        description="Each of `source_pmids` -> the number of pairs select kept that cite it, "
+        "this one included. Counted over the whole selection and carried by each pair, so "
+        "pairs.jsonl split into parts keeps them. Step 3's source screen reads them "
+        "(config.SOURCE_SCREEN_MIN_PAIRS); a pairs.jsonl from before them screens nothing",
+    )
 
 
 class LabelRun(BaseModel):
@@ -104,15 +111,15 @@ class LabelRun(BaseModel):
     prompt: str | None = Field(default=None, description="Path of the prompt file used")
     reasoning_effort: str | None = Field(
         default=None,
-        description="Effort the run sent ('none' for none); the full run continues with it. "
-        "None in a file written before it was recorded",
+        description="Effort the run sent ('omit' when it sent none; 'none' is a level); the "
+        "full run continues with it. None in a file written before it was recorded",
     )
     reviewer: str | None = None
     review_prompt_version: str | None = None
     review_reasoning_effort: str | None = Field(
         default=None,
-        description="Effort the review sent ('none' for none); the full run continues with it "
-        "while its reviewer reviews",
+        description="Effort the review sent ('omit' when it sent none; 'none' is a level); "
+        "the full run continues with it while its reviewer reviews",
     )
     repairer: str | None = Field(
         default=None,

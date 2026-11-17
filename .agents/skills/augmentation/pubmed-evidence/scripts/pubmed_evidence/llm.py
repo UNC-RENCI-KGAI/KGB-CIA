@@ -318,17 +318,32 @@ def claude_attempts(model: str, usage: Any) -> list[Attempt]:
 
 
 def sent_effort(model: config.Model, override: str | None) -> str | None:
-    """The effort a call sends: the override, else the model's; none for 'none', or for a
-    model that takes none."""
+    """The reasoning effort a call sends, as the API names it: the override, else the model's.
+    'none' is a level like the others and is sent as such. None, for no effort setting at all
+    (the service's default then applies): for config.OMIT_EFFORT, for a model with no effort of
+    its own, and for a model that takes none (`reasoning` off). Raises LLMError, before any
+    call, for an effort the model's `efforts` doesn't list, such as 'none' for Claude."""
     effort = model.effort if override is None else override
-    return effort if model.reasoning and effort and effort.lower() != "none" else None
+    if effort and effort.lower() in ("none", config.OMIT_EFFORT):
+        effort = effort.lower()
+    if not model.reasoning or not effort or effort == config.OMIT_EFFORT:
+        return None
+    if model.efforts is not None and effort not in model.efforts:
+        raise LLMError(
+            f"{model.id} takes the reasoning efforts {', '.join(model.efforts)}, not "
+            f"{effort!r}; {config.OMIT_EFFORT!r} sends none, for the model's default"
+        )
+    return effort
 
 
 def run_effort(model_id: str, override: str | None = None) -> str:
-    """The reasoning effort a step's calls to `model_id` send, as its prompt version hashes it:
-    the model's own in config.MODELS, or `override`; 'none' when they send none. Raises
-    LLMError for a model not in config.MODELS."""
-    return sent_effort(model(model_id), override) or "none"
+    """The reasoning effort a step's calls to `model_id` send, as its prompt version hashes it
+    and label_run.json records it: the model's own in config.MODELS, or `override`; 'omit'
+    (config.OMIT_EFFORT) when they send none, which as an override sends none again. 'none' is
+    the level sent as such, so the two never share a version, and every other effort hashes
+    as it always has. Raises LLMError for a model not in config.MODELS or an effort it doesn't
+    take."""
+    return sent_effort(model(model_id), override) or config.OMIT_EFFORT
 
 
 class OpenAIClient:
@@ -337,8 +352,9 @@ class OpenAIClient:
     itself, as the service's `retry-after` asks.
 
     `max_output_tokens` and `reasoning_effort` override the model's own settings, for tuning:
-    an effort of 'none' sends none. A model that takes no reasoning effort is sent none.
-    `http_client` (an `httpx2.Client`, the SDK's HTTP library) is for tests."""
+    'none' is sent as such, and 'omit' sends no effort (`sent_effort`). A model that takes no
+    reasoning effort is sent none. `http_client` (an `httpx2.Client`, the SDK's HTTP library)
+    is for tests."""
 
     def __init__(
         self,
@@ -428,11 +444,13 @@ class AnthropicClient:
     The SDK finds the credentials, `ANTHROPIC_API_KEY` or an `ant auth login` profile; with
     none, building the client raises LLMError, before any call. The system prompt ends in a
     `cache_control` breakpoint, so later calls read it from the prompt cache. The schema goes in
-    `output_config.format` with the effort beside it; thinking stays at the model's default,
-    adaptive. A model with `fallbacks` asks for Anthropic's server-side fallback: a request a
-    safety classifier declines is run again on a model Anthropic picks by the refusal's
-    category, and each attempt is priced by its own model (`claude_attempts`). A refusal that
-    stands is a failed call. The settings and `http_client` are as for `OpenAIClient`."""
+    `output_config.format` with the effort beside it (Claude's efforts have no 'none', which
+    `sent_effort` refuses; 'omit' leaves the model's default); thinking stays at the model's
+    default, adaptive. A model with `fallbacks` asks for Anthropic's server-side fallback: a
+    request a safety classifier declines is run again on a model Anthropic picks by the
+    refusal's category, and each attempt is priced by its own model (`claude_attempts`). A
+    refusal that stands is a failed call. The settings and `http_client` are as for
+    `OpenAIClient`."""
 
     FALLBACK_BETA = "server-side-fallback-2026-07-01"
 

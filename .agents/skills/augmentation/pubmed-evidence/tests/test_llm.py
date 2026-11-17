@@ -128,13 +128,96 @@ def test_a_reply_that_is_not_a_json_object_fails_at_once(text):
 def test_settings_come_from_the_model_unless_overridden():
     server = Server(reply("{}"), reply("{}"), reply("{}"))
     call(client(server))
-    call(client(server, reasoning_effort="None"))
+    call(client(server, reasoning_effort="omit"))
     plain = dataclasses.replace(MODEL, id="gpt-plain", reasoning=False, max_output_tokens=900)
     call(client(server, plain, reasoning_effort="low"))
-    default, none, no_reasoning = server.bodies()
+    default, omitted, no_reasoning = server.bodies()
     assert (default["reasoning"], default["max_output_tokens"]) == ({"effort": "medium"}, 16000)
-    assert "reasoning" not in none
+    assert "reasoning" not in omitted
     assert "reasoning" not in no_reasoning and no_reasoning["max_output_tokens"] == 900
+
+
+LUNA = config.MODELS["gpt-6-luna"]
+
+
+def test_luna_is_sent_none_as_such_and_omit_sends_no_effort():
+    """With no effort setting gpt-6-luna reasons at medium (probed), so 'none' must be sent
+    as such, never left out; 'omit' is what leaves it out. Its default, low, is sent as
+    before."""
+    server = Server(*(reply("{}") for _ in range(5)))
+    for effort in ("none", "None", "low", None, "omit"):
+        call(client(server, LUNA, reasoning_effort=effort))
+    none, capitalized, low, default, omitted = server.bodies()
+    assert none["reasoning"] == capitalized["reasoning"] == {"effort": "none"}
+    assert (
+        low
+        == default
+        == {
+            "model": "gpt-6-luna",
+            "instructions": "s",
+            "input": "u",
+            "max_output_tokens": 16000,
+            "store": False,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "test_reply",
+                    "strict": True,
+                    "schema": SCHEMA.body,
+                }
+            },
+            "reasoning": {"effort": "low"},
+        }
+    )
+    assert omitted == {k: v for k, v in low.items() if k != "reasoning"}
+
+
+def test_an_effort_a_model_doesnt_take_is_never_sent(monkeypatch):
+    # Claude's efforts have no 'none': refused before any call, saying what sends none.
+    monkeypatch.setenv(config.ANTHROPIC_API_KEY, "key")
+    haiku = config.MODELS["claude-haiku-5-5"]
+    with pytest.raises(llm.LLMError, match="claude-haiku-5-5 takes .*, not 'none'; 'omit'"):
+        llm.client_for(haiku, reasoning_effort="none")
+    with pytest.raises(llm.LLMError, match="not 'none'"):
+        llm.run_effort("claude-haiku-5-5", "none")
+    output = llm.client_for(haiku, reasoning_effort="omit")._body("s", "u", SCHEMA)
+    assert output["output_config"] == {"format": {"type": "json_schema", "schema": SCHEMA.body}}
+    assert llm.client_for(haiku)._body("s", "u", SCHEMA)["output_config"]["effort"] == "medium"
+    # gpt-6-luna rejects 'minimal' (probed).
+    with pytest.raises(llm.LLMError, match="gpt-6-luna takes .*, not 'minimal'"):
+        llm.run_effort("gpt-6-luna", "minimal")
+    # gpt-oss-120b has no 'none' either, and takes no effort here: it is sent none, whatever
+    # is asked.
+    server = Server(reply("{}"), reply("{}"))
+    oss = config.MODELS["gpt-oss-120b"]
+    call(client(server, oss, reasoning_effort="none"))
+    call(client(server, oss))
+    assert ["reasoning" in body for body in server.bodies()] == [False, False]
+
+
+def test_versions_tell_none_sent_from_none_omitted():
+    """A prompt version hashes `effort=<run_effort>`. Every level, 'none' among them, keeps the
+    name it always had; only sending no effort moved, from 'none' to 'omit', so that 'none'
+    names the level alone."""
+    for effort in ("none", "low", "medium", "high", "xhigh", "max"):
+        assert llm.run_effort("gpt-6-luna", effort) == effort
+    assert llm.run_effort("gpt-6-luna") == "low"
+    assert llm.run_effort("gpt-5.6-terra") == "medium"
+    assert llm.run_effort("gpt-6-luna", "omit") == "omit"
+    assert llm.run_effort("gpt-oss-120b") == llm.run_effort("gpt-oss-120b", "none") == "omit"
+    # A model whose efforts aren't known is sent what it is asked for.
+    assert llm.run_effort("gpt-5.6-terra", "none") == "none"
+    # Recorded in label_run.json, 'omit' is given back as the override and sends none again.
+    assert llm.sent_effort(LUNA, llm.run_effort("gpt-6-luna", "omit")) is None
+
+
+def test_default_efforts_are_ones_their_models_take():
+    for model in config.MODELS.values():
+        if model.efforts is not None and model.effort is not None:
+            assert model.effort in model.efforts, model.id
+        if model.backend == "anthropic":
+            assert model.efforts == config.CLAUDE_EFFORTS and "none" not in model.efforts
+    assert "none" in LUNA.efforts and "minimal" not in LUNA.efforts
 
 
 def test_a_server_error_the_retries_dont_clear_is_a_failed_call():

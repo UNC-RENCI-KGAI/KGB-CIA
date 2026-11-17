@@ -389,6 +389,25 @@ def test_message_shows_each_claim_in_words_and_structured_and_each_abstract_once
     assert all(s.system == review.review_prompt()[0] for s in client.sent)
 
 
+def test_message_shows_each_nodes_most_specific_category_whatever_the_order():
+    # The cleaned graph lists categories alphabetically, BiologicalEntity before Gene.
+    gene = ["biolink:BiologicalEntity", "biolink:Gene", "biolink:NamedThing"]
+    chemical = ["biolink:ChemicalEntity", "biolink:NamedThing", "biolink:SmallMolecule"]
+
+    def message(chemical: list[str], gene: list[str]) -> str:
+        entities = {
+            IMATINIB: records.Entity(id=IMATINIB, name="imatinib", category=chemical),
+            ABL1: records.Entity(id=ABL1, name="ABL1", category=gene),
+        }
+        return review.build_message(GENE_PAIR, [], entities, {}, {})
+
+    user = message(chemical, gene)
+    assert f"- {IMATINIB}: imatinib (SmallMolecule)\n- {ABL1}: ABL1 (Gene)\n" in user
+    # The same message as with the most specific category first.
+    assert user == message(chemical[::-1], gene[1:2] + gene[:1] + gene[2:])
+    assert f"- {ABL1}: ABL1\n" in message(chemical, [])
+
+
 def test_batches_split_by_abstracts_and_items(monkeypatch):
     monkeypatch.setattr(config, "REVIEW_ITEMS_PER_CALL", 3)
     monkeypatch.setattr(config, "ABSTRACTS_PER_CALL", 2)

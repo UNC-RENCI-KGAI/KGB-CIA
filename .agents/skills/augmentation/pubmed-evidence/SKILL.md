@@ -136,8 +136,10 @@ Use `--help`, or `augment.py STEP --help` for a step's options.
      it with who made it (`code`, or the review model for a quote code couldn't place), which
      should be the sentence the claim rests on or `none`, never a loosely related one;
    - `INVALID` claims and their errors (the summary lists the most common): qualifiers the
-     predicate doesn't take, `causes` without an aspect or direction, a predicate that "fits
-     neither way" between the nodes, `also_supports` entries that add nothing;
+     predicate doesn't take, a predicate that "fits neither way" between the nodes. Some slips
+     aren't `INVALID`, since code repairs them after labeling (DESIGN.md, "Repaired after
+     labeling"): a bare `causes`, a gene's qualifier on the disease, `also_supports` entries
+     that add nothing;
    - negatives without explicit language: absence of evidence, safety, cost or approval
      status, "not studied", a better drug recommended instead (all no claim);
    - claims stated higher or lower than the abstract: a direction or aspect the text doesn't

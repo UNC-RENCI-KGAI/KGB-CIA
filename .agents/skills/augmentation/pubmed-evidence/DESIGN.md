@@ -60,8 +60,12 @@ failed calls (`llm.MAX_FAILED_SHARE`, 5%) still stops the run.
   and write, and any longer-prompt tier) with where and when they were copied from. It also has
   the output cap and reasoning effort a call sends unless `--max-output-tokens` or
   `--reasoning-effort` overrides them: `low` for the Azure bulk candidates, `medium` for the
-  rest, and Anthropic's own default for each Claude model until tuned. A model not in the table
-  is an error. The Azure prices are copied from `.pi/models.json`, which Pi reads for itself,
+  rest, and Anthropic's own default for each Claude model until tuned. `none` is an effort like
+  the others, sent as such; `omit` sends no effort setting, so the service's default applies,
+  which for gpt-6-luna is `medium` (probed Nov 16 2026: with no setting it reasons at medium,
+  and at `none` not at all). Where the efforts a model takes are known they are in the table
+  too (`efforts`: gpt-6-luna's, probed, and Claude's, which have no `none`), and another effort
+  is an error before any call. A model not in the table is an error. The Azure prices are copied from `.pi/models.json`, which Pi reads for itself,
   so a price change there has to be copied by hand. The Claude prices are Anthropic's list
   prices, from its pricing page.
 - **Claude models** go through Anthropic's Messages API and its SDK (`llm.AnthropicClient`),
@@ -85,19 +89,36 @@ contradict it.
 | Tier | Subject → predicate → object | Main TCRD sources |
 | --- | --- | --- |
 | Query | ChemicalEntity/Drug → `treats`, `contraindicated_in`, `treats_or_applied_or_studied_to_treat` → Disease | DrugCentral |
+| Query | ChemicalEntity/Drug → the same → PhenotypicFeature | DrugCentral |
 | Query | ChemicalEntity → `affects`, `directly_physically_interacts_with`, `binds` → Gene/Protein | DrugCentral, ChEMBL, IUPHAR |
+| Query | ChemicalEntity ↔ `interacts_with` (the rest of it: drug-target activity) ↔ Gene/Protein | ChEMBL, WOMBAT-PK, DrugMatrix, DrugCentral, GtoPdb, PDSP |
 | Query | Gene → `associated_with` (and everything below it: `gene_associated_with_condition`, `genetically_associated_with`, `associated_with_increased_likelihood_of`, `correlated_with`, `biomarker_for`, ...), `contributes_to` (and `causes`) → Disease | DisGeNET, JensenLab, OMIM, Monarch (ClinGen), GWAS Catalog |
 | Query, capped | Gene ↔ `physically_interacts_with`, `interacts_with` ↔ Gene | STRING, BioPlex, Reactome |
 | Query, capped | Gene → `has_phenotype` → PhenotypicFeature | IMPC, MGI, HPO via Monarch |
-| Skip | Gene → `participates_in` → Pathway; Gene → `enables`, `participates_in`, `located_in` → GO terms | Reactome, KEGG, WikiPathways, GO |
+| Query, capped | Gene → `associated_with`, `contributes_to` → PhenotypicFeature, DiseaseOrPhenotypicFeature (traits) | TIGA |
+| Query, capped | Gene → `located_in` → CellularComponent, as `knowledge_level: text_co_occurrence` | COMPARTMENTS' text mining |
+| Skip | Gene → `participates_in` → Pathway; Gene → `enables`, `participates_in`, `located_in` → GO terms (all but text co-occurrence locations) | Reactome, KEGG, WikiPathways, GO |
 | Skip | Gene → `expressed_in` → AnatomicalEntity/Cell | GTEx, HPA, Jensen TISSUES |
 | Skip | `orthologous_to`, `has_part`, `subclass_of`, `member_of` | Orthologs, Pfam, PANTHER, DTO |
 | Skip | `occurs_together_in_literature_with` | Literature co-occurrence |
-| Capped, by provenance | any edge a query or capped rule above keeps with `knowledge_level: text_co_occurrence` or `agent_type: text_mining_agent`, whatever its predicate | eRAM's text mining (`gene_associated_with_condition`) |
+| Capped, by provenance | any edge a query or capped rule above keeps with `knowledge_level: text_co_occurrence` or `agent_type: text_mining_agent`, whatever its predicate | eRAM's text mining (`gene_associated_with_condition`), COMPARTMENTS' |
 
 - **Capped:** gene–gene interactions are numerous and symmetric, and many come from a single
   high-throughput screen. Query only pairs above a confidence cutoff, and dedupe unordered
-  pairs. Phenotype names are long and varied, so expect low recall.
+  pairs. Phenotype and trait names are long and varied, so expect low recall.
+- **Drug targets, traits and text-mined locations** joined the defaults on 2026-11-16 (rules
+  `drug-target`, `chemical-treats-phenotype`, `gene-trait`, `text-mined-location`). Before,
+  the defaults left drug-target `interacts_with` (25,148 pairs in the cleaned Nov 9 2026 graph),
+  TIGA's gene-trait associations (564,098) and DrugCentral's phenotype indications (920)
+  unmatched, and skipped COMPARTMENTS' text-mined locations (4,782,056) as GO. The 2026-11-13
+  PubMed search and the 2026-11-16 label run used the same rules in a rules file, so a default
+  run now shares their label prompt version, and their cached claims. Order matters:
+  `drug-target` comes after the chemical-gene rule, which keeps `binds`, below
+  `interacts_with`; `gene-trait` after gene-disease, since Disease is below
+  DiseaseOrPhenotypicFeature; and `text-mined-location`, which names the knowledge level,
+  before the GO skip, so curated GO locations stay skipped. The location edges are text
+  co-occurrence, so they are capped by the provenance rule below, in its cap
+  (`reference/rules.md`).
 - **Text-mined edges are capped,** in caps of their own, whatever statement rule keeps them.
   They are the least trustworthy edges in the graph, and they carry no publications or
   supporting sentence, so the cleaning stage's evidence check can't judge them: this step is
@@ -106,8 +127,9 @@ contradict it.
   the cost: eRAM writes 113,706 co-mentions as `gene_associated_with_condition` with
   `knowledge_level: text_co_occurrence`, and the Nov 12 2026 run, which skipped only
   `occurs_together_in_literature_with`, put 127,774 of its 131,195 pairs in the query tier
-  that way. How many pairs the capped default keeps on the whole graph needs a rerun. Two
-  provenance rules (below) set the cap; a rules file can make them skip rules instead.
+  that way. In the cleaned Nov 9 2026 graph the edges they take are all COMPARTMENTS'
+  text-mined locations: 4,782,056 pairs, of which the cap keeps 10,000. Two provenance rules
+  (below) set the cap; a rules file can make them skip rules instead.
 - **Skipped:** pathway and GO names rarely appear verbatim in abstracts, and GO annotations
   already carry their own references and evidence codes. Expression edges are measurements
   rather than claims and are very numerous. Literature co-occurrence isn't a claim, and
@@ -158,7 +180,8 @@ Every in-scope pair is searched, even when its edges arrive with PMIDs in `publi
 (likely GeneRIF, ChEMBL activity references and DrugCentral references; the TCRD columns still
 need checking). Those PMIDs are always fetched and read as well, even when they fall outside
 the search's top results. This matters most for ChEMBL compound–target edges, where a name
-search finds little.
+search finds little. The one exception is a paper that a hundred pairs or more cite and whose
+abstract doesn't name the pair: step 3 leaves it unread ("Source papers many pairs cite").
 
 ### What step 2 records for each pair
 
@@ -229,6 +252,11 @@ alone, so every refinement can be reproduced and audited.
   abstracts in chunks of 20 (`--abstracts-per-call` can lower that). The nodes go as `X` and
   `Y`, with name, id, most specific category, synonyms and MeSH headings. The edges are never
   sent, so one pair's claims serve every edge between the pair, from any graph, now or later.
+- **The category shown** is the node's most specific whatever order the graph lists them in
+  (`biolink.shown_category`): the cleaned graph lists them alphabetically, so the first is
+  `BiologicalEntity` for every gene, protein, disease and phenotype. Of categories none of the
+  others is below, the narrowest is shown, and of equals the first listed. The review message
+  shows the same.
 - **Per abstract:** a study design (one of `StudyDesign`'s eleven values) and zero or more
   claims. No claims means the abstract states nothing about the pair.
 - **A claim** is one finding about X and Y: its `polarity` (`positive` or `negative`), its
@@ -254,6 +282,62 @@ alone, so every refinement can be reproduced and audited.
   quote verbatim). The domain rules (what counts as a negative, treatment and comparators,
   which entity a finding is about, genes and qualifiers) are in `prompts/claim-rules.md`, which
   both the label and the review prompt include, so the reviewer judges by the same rules.
+
+### Source papers many pairs cite
+
+- **The rule.** A PMID that a pair has only as a source citation (origin `source`: its edges
+  cite it, and the search didn't find it) isn't read when at least
+  `config.SOURCE_SCREEN_MIN_PAIRS` (100) pairs of the selection cite it, unless its title and
+  abstract name both nodes (`label.screened`). A paper the search found is always read.
+- **Why.** Such a paper is a high-throughput study, such as BioPlex 3.0 (167,351 pairs of the
+  Nov 13 search) or a GWAS paper (30,000-116,000 pairs each). Its abstract names few of the
+  pairs that cite it, so reading it for each one costs a call and finds nothing.
+  - **Cost.** In the Nov 13 search's parts, 1.23M of the 3.72M (pair, PMID) jobs were source
+    citations of just 17,247 papers.
+  - **No loss measured.** Replaying the Nov 6 runs, Monarch's 558 answers from source papers
+    cited by 100 or more pairs held no claim, and skipping them changed no edge, proposal or
+    PMID.
+  - **Looser rules lose evidence.** Skipping every source paper whose abstract names neither
+    node lost 16% of Monarch's supported edges, and skipping those cited by 20 or more pairs
+    lost 25%: a source paper is often an edge's only evidence.
+  - **At scale.** The Nov 16 label run screened its parts 001-045 by hand
+    (`data/augmentation/cost-reduction-2026-11-16/scripts/screen_sources.py`): 1,073,966 of
+    3,120,426 jobs left out (34%), 1,316 kept because the abstract names both nodes, and
+    694,469 pairs left with nothing to read.
+- **The count is the selection's.** Select counts, for each source PMID, the pairs it keeps
+  that cite it (`scope.citing_pairs`), and writes each pair's counts on the pair
+  (`Pair.source_pmid_pairs`).
+  - So the screen doesn't depend on how pairs.jsonl is split into parts, which copy the
+    records, or merged back, or on how many pairs step 2 searches.
+  - A count over a work dir's `pubmed.jsonl` would change with each of those.
+  - It counts every pair whose edges cite the paper, whether or not the search also found it
+    there. The hand screen counted only the pairs that had it as a source alone, over the
+    searched parts (001-069).
+  - Both put the same 613 papers at 100 or more, and the selection's count adds 7. Two have no
+    abstract, so they are never read anyway. The other 5 are GWAS papers cited by 101-104
+    pairs, 93-99 of them as a source alone.
+  - On parts 001-045, the code with the hand screen's counts keeps exactly the hand screen's
+    2,046,460 jobs. With the selection's counts it leaves out 478 more (0.02%), all from those
+    5 papers, and 259 more pairs have nothing to read.
+- **Naming both nodes.** `label.names_both` looks for any term step 2 searched each node by
+  (`PubmedRecord.synonyms`), as whole words with case and punctuation aside, or, for a term of
+  3 characters or more, with spaces and hyphens squashed out of both. It is permissive, so a
+  doubtful abstract is read. A lexical check alone would be unsafe (above), so it only keeps a
+  paper back from the screen.
+- **What follows from it.** Steps 5 and 6 ask the same question (`label.pair_pmids`), so a
+  paper left unread never holds a pair or leaves it not fully labeled.
+  - A pair is checked on the abstracts read. One the screen leaves with none is checked with no
+    evidence, its edges unsupported with score 0, as when the search finds nothing. That is
+    what reading the papers gave on Nov 6, and how the hand-screened run's step 6 sees it too.
+  - Treating a paper left unread as unanswered would leave its pair not fully labeled for
+    good, its edges unchecked however often label runs.
+  - What was left unread is recorded instead. `refinements.jsonl` names it per pair
+    (`abstracts_screened`), and the label summary and apply report count it (`source abstracts
+    screened out`, `pairs left without abstracts by the source screen`).
+  - The edge keeps the paper in its `publications`, as its source cited it, and `lit_evidence`
+    lists only the abstracts read.
+- **Off, or from before.** `SOURCE_SCREEN_MIN_PAIRS = None` turns the screen off. A
+  `pairs.jsonl` written before select counted citations has no counts, and screens nothing.
 
 ### Which predicates, and which way round
 
@@ -286,9 +370,10 @@ alone, so every refinement can be reproduced and audited.
 
 ### Checked in code
 
-A claim that fails any check is invalid as a whole: it stays in the cache and counts for
-nothing, and its errors go to the `claim_checks` table and the label summary. The checks are
-recomputed on every run for the run's pairs, since nothing versions them.
+A claim that fails any check, even after the repairs below, is invalid as a whole: it stays
+in the cache and counts for nothing, and its errors go to the `claim_checks` table and the label
+summary. The checks are recomputed on every run for the run's pairs, since nothing versions
+them.
 
 - The predicate fits the pair's nodes one way round or the other (above).
 - Each statement's qualifier slots and values are allowed for its predicate's association
@@ -310,6 +395,51 @@ gene–disease). It finds the classes from each class's inherited subject, predi
 ranges instead. Context qualifiers whose values are ontology terms (anatomical, species,
 population) are never in the reply's qualifiers: models make up CURIEs, so species and anatomy
 come in the claim's context instead.
+
+### Repaired after labeling
+
+Some claims fail a check only for how the model wrote them, not for what they say: 13.1% of the
+claims of a 200-pair sample of the Nov 16 kinase cut, and 7.6% of the Nov 6 Monarch run's. Read
+against their abstracts, 66 of the kinase sample's 71 were true. So the check, the review and
+step 6 read every claim through `label.read_claim`, which repairs a statement that fails as
+written (`label.SALVAGE`) rather than failing its claim:
+
+- **A bare `causes`:** `qualified_predicate: causes` with no aspect or direction to qualify is
+  dropped. It says nothing the predicate doesn't.
+- **A gene product as its gene:** a Protein, which NodeNorm keeps apart from its gene, also
+  fits a `gene` domain or range: `gene_associated_with_condition`, and `regulates`, whose range
+  Biolink 4.4.6 puts a Gene under but not a Protein. This applies only where the node's own
+  categories fail the statement. Step 6 still proposes an edge only if it is valid with the
+  node's own categories, so such a claim supports the Protein's edges and never adds an invalid
+  one.
+- **The gene's qualifier on the disease's side:** a subject or object qualifier on a disease or
+  phenotype, which takes none, moves to the gene, gene product or chemical on the other side. A
+  direction moves only with an aspect beside it, since alone it may describe the disease's own
+  course; otherwise it is dropped, as is a slot the other side sets already.
+- **A symmetric statement written from the disease,** with the gene's qualifiers on the
+  object, is read from the gene, as step 6 writes a proposal.
+- **A redundant `also_supports` entry,** one the claim's own statement already entails, is
+  dropped rather than failing the claim.
+
+A statement that passes as written is read as written, and each repair reads a statement as
+saying no more than the model wrote: no repair drops a slot from what a negative claim denies,
+which would deny more. A claim no repair saves keeps the errors of the claim as written. A slot
+an association doesn't take for other reasons still fails the claim.
+
+The repairs are post-label and change no version. The stored claim stays as the model gave it
+(`claim_id` hashes it), and nothing that feeds the label prompt version changes: the prompt,
+`FORMAT_VERSION`, the reply schemas and the effort. Since the checks are recomputed on every
+run, the next label run applies them to every cached label without a call, and its repair pass
+then sees the claims they recover whose sentence wasn't found. On the cached runs they recover
+all 71 failing claims of the kinase sample at effort low and all 49 at effort none, 147 of the
+Nov 6 Monarch run's 148, and all 271 of the Nov 6 DrugCentral run's, while every claim that
+passed reads exactly as before. Step 6 replayed on them gains, and loses nothing:
+
+| Run | Supported edges | Edge PMIDs | Proposals |
+|---|---|---|---|
+| Kinase sample (no review, every claim counts) | 29 → 34 | 68 → 100 | 17 → 19 |
+| Nov 6 Monarch (recovered claims counted as upheld) | 348 → 373 | 1,098 → 1,197 | 237 → 260 |
+| Nov 6 DrugCentral (the same) | 3,943 → 3,944 | 25,651 → 25,654 | 486 → 487 |
 
 ### Quotes and repair
 
@@ -494,9 +624,10 @@ qualifier value is an enum, so code checks only what a schema can't say (above).
 - **Checked edges:** an edge is checked when select kept its statement and its pair is fully
   labeled: every abstract step 3 asks about has an answer of the run, and every claim of those
   answers has been checked. A pair with no abstracts is checked too, and its edges are
-  unsupported. A pair with a failed call, or with claims a label run stored but stopped before
-  checking, leaves its edges unchanged until a label run finishes it; it is never refined on
-  part of its claims.
+  unsupported. A source paper step 3's screen left unread isn't asked about, so it holds
+  nothing ("Source papers many pairs cite"). A pair with a failed call, or with claims a label
+  run stored but stopped before checking, leaves its edges unchanged until a label run
+  finishes it; it is never refined on part of its claims.
 - **Evidence:** one record per abstract read for the pair, with its claims. Claims that failed
   a check are left out and counted. Anatomy is grounded through step 4's cache, and every
   statement is read Biolink's way round. Each claim carries the verdict of the review
@@ -654,7 +785,8 @@ them back out.
   claims that make it, and `source` the PMIDs its originals cite. It is never negated, and it
   carries no `kgbcia_source_records`.
 - **Refinement records:** `work/refinements.jsonl` has one line per refined pair, by pair id:
-  the number of abstracts read for it; each in-scope edge's statement, support, score,
+  the number of abstracts read for it, and the source papers step 3's screen left unread;
+  each in-scope edge's statement, support, score,
   supporting and added PMIDs and `refined_by`;
   the proposed edges; and the links, each with the edges it names (`linked_to`). Held and
   unchecked pairs get no line, and neither do folded proposals, which only the report counts.
@@ -779,8 +911,9 @@ across a team:
   rebuilt without calling a model.
 - **Prompt versions** hash the prompt file's text with the files it includes, the step's
   `FORMAT_VERSION` (the version of the request layout), its reply schema or schemas and the
-  reasoning effort sent. Any edit to a prompt or a schema, or another effort, starts fresh
-  answers; bump `FORMAT_VERSION` when the code that writes the request changes.
+  reasoning effort sent (`effort=omit` when none is sent, `effort=none` for the level `none`).
+  Any edit to a prompt or a schema, or another effort, starts fresh answers; bump
+  `FORMAT_VERSION` when the code that writes the request changes.
 - **Earlier tables:** a label cache from before the claims also has the statement labels'
   tables (`labels`, `proposals`, `reviews`, `repairs`). No code reads or writes them, and they
   stay as they are.
@@ -820,6 +953,9 @@ saves little. Revisit if we move to full text and need to choose which paragraph
   often a claim is invalid as a whole for one bad `also_supports` entry, how often the model
   puts the wrong node first, and how many claims review gets. Then the comparison pages are
   rewritten around refinements.
+- **The source screen's threshold** (100 pairs) is validated only on Monarch's Nov 6 source
+  papers. The edges themselves don't say that their source paper went unread: only
+  `refinements.jsonl` and the report do.
 - **A support threshold:** an edge is supported from one abstract on. "Supported by 2+
   abstracts" would be one filter on `lit_support_score`, here or in the cleaning stage; the
   gold set can show whether one abstract is precise enough.

@@ -147,6 +147,23 @@ class World:
         with PubMedCache() as cache:
             cache.put_abstracts([Abstract(pmid, f"Title {pmid}", text, year, "", types)])
 
+    def cite(self, counts: dict[str, dict[str, int]]) -> None:
+        """pairs.jsonl as select writes it: each pair's source PMIDs, with the number of pairs
+        of the selection citing each (`Pair.source_pmid_pairs`)."""
+        graphio.write_jsonl(
+            self.work / records.PAIRS,
+            [
+                records.Pair(
+                    pair_id=pid,
+                    nodes=graphio.pair_nodes(pid),
+                    statement_ids=[],
+                    source_pmids=list(cited),
+                    source_pmid_pairs=cited,
+                )
+                for pid, cited in counts.items()
+            ],
+        )
+
     def answer(
         self,
         pair_id: str,
@@ -216,6 +233,29 @@ def test_a_searched_pair_with_no_abstracts_is_bundled_with_no_evidence(world):
     world.edges(edge(IMATINIB, "biolink:treats", CML))
     [b] = world.load().pairs
     assert b.evidence == () and b.claims == [] and len(b.edges) == 1
+
+
+def test_a_paper_the_source_screen_leaves_unread_holds_no_pair(world):
+    """Select counted 500 pairs citing PMID 7, which neither pair's search found and whose
+    abstract names neither node, so the label step never asks about it: the treats pair is
+    bundled on its other abstract, and the gene pair, left with none, with no evidence."""
+    world.edges(edge(IMATINIB, "biolink:treats", CML), edge(IMATINIB, "biolink:affects", ABL1))
+    world.abstract(TREATS_PAIR, "1", "Imatinib treats CML.")
+    for pid in (TREATS_PAIR, GENE_PAIR):
+        world.abstract(pid, "7", "A map of 120,000 protein interactions.", origin="source")
+    world.cite({TREATS_PAIR: {"7": 500}, GENE_PAIR: {"7": 500}})
+    world.answer(TREATS_PAIR, "1")
+    loaded = world.load()
+    assert loaded.unlabeled == []
+    treats, gene = sorted(loaded.pairs, key=lambda b: b.pair_id != TREATS_PAIR)
+    assert [e.publication for e in treats.evidence] == ["PMID:1"]
+    assert gene.evidence == ()
+    assert treats.screened == gene.screened == ("7",)
+    assert loaded.counts["source abstracts screened out"] == 2
+    assert loaded.counts["pairs left without abstracts by the source screen"] == 1
+    # Without select's counts (a pairs.jsonl from before them, or none), PMID 7 is asked about.
+    (world.work / records.PAIRS).unlink()
+    assert sorted(world.load().unlabeled) == sorted([TREATS_PAIR, GENE_PAIR])
 
 
 def test_edges_in_scope_with_their_ids(world):
@@ -319,6 +359,45 @@ def test_claims_read_the_way_round_biolink_puts_them(world):
     assert loaded.counts["claims failing a check"] == 1
     reread = bundle.claim_record(backwards, sentence_found=True)
     assert (reread.statement.subject, reread.statement.object) == (CML, IMATINIB)
+
+
+ABL1_PROTEIN = "UniProtKB:P00519"
+PROTEIN_CATEGORIES = {ABL1_PROTEIN: ["biolink:Protein"], CML: ["biolink:Disease"]}
+
+
+def test_a_claim_reads_as_the_post_label_salvage_repairs_it():
+    """Step 6 reads a claim as its check did (`label.read_claim`): `causes` with nothing to
+    qualify is dropped, and an `also_supports` entry the claim implies too."""
+    bare = statement(ABL1_PROTEIN, "biolink:causes", CML, "biolink:causes")
+    also = statement(ABL1_PROTEIN, "biolink:contributes_to", CML)
+    claim = stored(bare, sentence="x", also=(also,))
+    record = bundle.claim_record(claim, sentence_found=True, categories=PROTEIN_CATEGORIES)
+    assert record.statement.qualified_predicate is None and record.also_supports == []
+    # Read without the nodes' categories, as stored.
+    as_stored = bundle.claim_record(claim, sentence_found=True)
+    assert as_stored.statement.qualified_predicate == "biolink:causes"
+    assert len(as_stored.also_supports) == 1
+
+
+def test_a_proteins_gene_claim_supports_its_edge_but_proposes_no_invalid_edge():
+    """A Protein's claim with a gene's predicate counts, read as the gene's (`label.SALVAGE`'s
+    "gene_product"), and supports the Protein's broader edge; but no edge is proposed from it,
+    since a proposal must be valid with the node's own categories."""
+    claim = stored(
+        statement(ABL1_PROTEIN, "biolink:gene_associated_with_condition", CML), sentence="x"
+    )
+    record = bundle.claim_record(claim, sentence_found=True, categories=PROTEIN_CATEGORIES)
+    assert record.statement.predicate == "biolink:gene_associated_with_condition"
+    original = edge(ABL1_PROTEIN, "biolink:associated_with", CML, id="e1")
+    out = refine.refine_pair(
+        [original],
+        [refine.Claim("PMID:1", record, False)],
+        refine.Lattice(),
+        PROTEIN_CATEGORIES,
+        require_review=False,
+    )
+    [outcome] = out.edges
+    assert outcome.pmids == ("PMID:1",) and out.proposed == () and out.links == ()
 
 
 def test_a_sentence_counts_as_found_from_its_repair(world):
