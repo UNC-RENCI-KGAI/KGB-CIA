@@ -62,6 +62,7 @@ fi
 [[ -d "$reports_dir" ]] || { echo "missing reports directory: $reports_dir" >&2; exit 2; }
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 command -v uv >/dev/null || { echo "uv is required to run kgbcia-mcp hubs" >&2; exit 2; }
+command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -171,7 +172,7 @@ done < <(find "$reports_dir" -type f -name transform_report.json | sort)
   echo "no transform_report.json found under $reports_dir" >&2; exit 1;
 }
 if [[ -n "$description" && -f "$description" ]]; then
-  python - "$description" "$artifacts_dir/description.json" <<'PY'
+  python3 - "$description" "$artifacts_dir/description.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -408,7 +409,7 @@ print(f"precomputed meta_graph rows: {len(stats['meta_graph'])}")
 PY
 )
 
-python - "$artifacts_dir" "$graph_version" <<'PY'
+python3 - "$artifacts_dir" "$graph_version" <<'PY'
 import json
 import sys
 from pathlib import Path

@@ -219,8 +219,8 @@ chart:
   probes on `/health`, and `mcp.enableCypher`. Add a Service and an optional Ingress for it.
 - `values.yaml` holds safe defaults, with environment files `values-dev.yaml` and
   `values-aws.yaml`. Keep secrets out of all of them.
-- **Resources are values,** not constants. The deployed real cleaned graph has 943,412 nodes
-  and 11,701,010 edges, so the heap, page cache, transaction cap and volume size come from the
+- **Resources are values,** not constants. The deployed final graph has 943,412 nodes
+  and 11,710,097 edges, so the heap, page cache, transaction cap and volume size come from the
   values file of each environment.
 - Validate it with `helm lint` and `helm template`. These need no cluster, so they can run in CI.
 
