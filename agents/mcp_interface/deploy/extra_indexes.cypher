@@ -5,4 +5,4 @@ CREATE FULLTEXT INDEX kgbcia_node_fulltext IF NOT EXISTS
 FOR (node:`biolink:NamedThing`)
 ON EACH [node.name, node.synonym, node.equivalent_identifiers];
 
-CALL db.awaitIndexes();
+CALL db.awaitIndexes(7200);

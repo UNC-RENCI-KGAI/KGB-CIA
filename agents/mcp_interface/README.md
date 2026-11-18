@@ -171,8 +171,9 @@ Confirmed on the local-k8s Neo4j 5.26.31 load in November 2026:
 
 ## Status
 
-The MCP interface is deployed against the real cleaned graph on the prepared AWS k3s host. The
-loaded graph has **943,412 nodes** and **11,701,010 edges**. Neo4j runs read-only with
+The MCP interface is deployed against the final graph (Nov 17, 2026) on the prepared AWS k3s
+host: the cleaned graph plus the edges augmentation proposed from PubMed. The loaded graph has
+**943,412 nodes** and **11,710,097 edges**. Neo4j runs read-only with
 `NEO4J_AUTH=none`; the MCP HTTP deployment is disabled (`mcp.enabled=false`), so teammates run
 `kgbcia-mcp` locally over stdio and connect to the shared Bolt endpoint. Network exposure is
 controlled by the maintainer outside this repository.
@@ -189,8 +190,8 @@ time a new `artifacts.tar.gz` is published.
 
 Current verification:
 
-- `get_graph_info()` returns 943,412 nodes and 11,701,010 edges and includes the `build` section
-  from `description.json`.
+- `get_graph_info()` returns 943,412 nodes and 11,710,097 edges and includes the `build` section
+  from `description.json`, with its `after_augmentation` part.
 - `get_schema()` returns a 116-row one-category meta-graph, avoiding the former whole-graph
   aggregate timeout.
 - Precomputed flag counts are present for `unresolved_node` (1,914,123), `type_violation`

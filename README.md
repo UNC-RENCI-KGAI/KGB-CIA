@@ -21,7 +21,8 @@ described below.
 The submitted graph comes from the Nov 9, 2026 build: 22 sources merged into one graph, citing
 45 primary knowledge sources.
 
-- **943,412 nodes and 11,701,010 edges** after cleaning. Every node ID is normalized with
+- **943,412 nodes and 11,710,097 edges:** 11,701,010 after cleaning, plus 9,087 edges
+  augmentation proposed from PubMed. Every node ID is normalized with
   [NodeNorm](https://github.com/TranslatorSRI/NodeNormalization).
 - **Biolink provenance on every edge:** `primary_knowledge_source`, `knowledge_level`,
   `agent_type`, and publications where the source gives them. Each edge also points back to

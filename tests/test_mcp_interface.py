@@ -1580,7 +1580,8 @@ def test_dump_scripts_pin_images_and_create_idempotent_indexes():
     assert 'docker cp "$dump_container:/data/dump-export/$DATABASE.dump"' in preparation
     assert "kgbcia_relationship_id_" in preparation
     assert "CREATE FULLTEXT INDEX kgbcia_node_fulltext IF NOT EXISTS" in indexes
-    assert "CALL db.awaitIndexes()" in indexes
+    assert "CALL db.awaitIndexes(7200)" in indexes
+    assert "CALL db.awaitIndexes(7200)" in preparation
 
 
 def test_check_accepts_augmentor_edges_without_source_records(toy_graph):
@@ -1714,3 +1715,48 @@ def test_summarize_node_edges_counts_each_edge_once_by_most_specific_categories(
     assert rows[1]["reads_as"] == (
         "biolink:Drug + biolink:SmallMolecule → biolink:treats → MONDO:0004994 (MONDO:0004994)"
     )
+
+
+def test_add_final_cleaning_records_augmentation_and_final_totals(tmp_path):
+    script = Path(__file__).parents[1] / "agents/mcp_interface/deploy/add_final_cleaning.py"
+    description = tmp_path / "description.json"
+    description.write_text(
+        json.dumps({"totals": {"basis": "cleaned graph", "nodes": 50, "edges": 100}})
+    )
+    first = tmp_path / "first_cleaning_report.json"
+    first.write_text(json.dumps({"nodes": {"in": 60, "out": 50}, "edges": {"in": 120, "out": 100}}))
+    final = tmp_path / "final_cleaning_report.json"
+    final.write_text(
+        json.dumps(
+            {
+                "nodes": {"in": 50, "out": 50},
+                "edges": {"in": 110, "out": 108},
+                "dropped_edges": {"broken_id": 2},
+                "dropped_nodes": {},
+                "flagged_edges": 7,
+                "flags": {"unresolved_node": 7},
+            }
+        )
+    )
+    output = tmp_path / "description-final.json"
+
+    completed = subprocess.run(
+        [sys.executable, str(script), str(description), str(first), str(final), str(output)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(output.read_text())
+    # The original build description is kept unchanged.
+    assert result["totals"] == {"basis": "cleaned graph", "nodes": 50, "edges": 100}
+    after = result["after_augmentation"]
+    # Augmentation added the difference between the final cleaning's input and the first
+    # cleaning's output.
+    assert after["added_by_augmentation"] == {"nodes": 0, "edges": 10}
+    assert after["final_cleaning"]["edges"] == {"in": 110, "out": 108}
+    assert after["final_cleaning"]["dropped_edges"] == {"broken_id": 2}
+    assert after["final_cleaning"]["flagged_edges"] == 7
+    assert after["deployed_totals"] == {"nodes": 50, "edges": 108}
+    assert "before augmentation" in after["note"]
+    assert "deployed totals" in completed.stdout

@@ -70,13 +70,13 @@ uninstall the stuck Helm release and delete only its failed hook Job, verify the
 
 ## 1. On the laptop: create a short-lived dump URL
 
-Confirm that these checksums are the current release values (the cleaned graph of
-November 13, 2026), then set them in your shell. The artifact URL is public and long-lived; use the URL supplied by
+Confirm that these checksums are the current release values (the final graph of
+November 17, 2026, after augmentation), then set them in your shell. The artifact URL is public and long-lived; use the URL supplied by
 the AWS administrator. Do not save either URL in a repository file.
 
 ```bash
-export DUMP_SHA256=6fd2728baba5299c5538221c6e8495ad85c8690b10feb03fa563fc412ce85773
-export ARTIFACTS_SHA256=e47b3b5ea8fcba2b21530d4cdc90eeaf36e3ebb68e8b402b8c6a5fc541b29ee7
+export DUMP_SHA256=df074e4260864daf2aa98d1ad1484aee0c7de638534029f581dcf3e14258f0c2
+export ARTIFACTS_SHA256=87bf335f0fe1f9173b5a6e901e77babf81150c67055e442cd96a04d589f8d783
 export ARTIFACTS_URL='<public artifacts.tar.gz URL supplied by the AWS administrator>'
 DUMP_URL="$(aws s3 presign 's3://<private bucket created by the AWS administrator>/neo4j-dumps/kgb.dump' \
   --region us-east-2 --expires-in 7200)"
@@ -101,8 +101,8 @@ cd /path/to/KGB-CIA
 bash agents/mcp_interface/deploy/aws/verify_host.sh
 
 export NAMESPACE=kgb-mcp
-export DUMP_SHA256=6fd2728baba5299c5538221c6e8495ad85c8690b10feb03fa563fc412ce85773
-export ARTIFACTS_SHA256=e47b3b5ea8fcba2b21530d4cdc90eeaf36e3ebb68e8b402b8c6a5fc541b29ee7
+export DUMP_SHA256=df074e4260864daf2aa98d1ad1484aee0c7de638534029f581dcf3e14258f0c2
+export ARTIFACTS_SHA256=87bf335f0fe1f9173b5a6e901e77babf81150c67055e442cd96a04d589f8d783
 read -r -p 'Paste the fresh presigned dump URL: ' DUMP_URL
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE"
 

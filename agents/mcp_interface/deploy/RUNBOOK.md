@@ -48,13 +48,39 @@ but it copies the input dump to the output unchanged. Publishing only the new
 `artifacts.tar.gz` and checksum is therefore enough; do not reinstall the dump or change the
 Helm dump checksum for an artifacts-only refresh.
 
-For the real graph's build description follow-up, generate `data/describe/description.json` on
-the VM that has the Nov 9 transformation workspaces and cleaning report, for example by running
-`.agents/skills/filter/describe-graph/scripts/describe_graph.py` there against the 11-09
-transformation output and `data/cleaning/cleaning_report.json`. A later checkpoint wires that
-file into `prepare_dump.sh` through an explicit argument (defaulting to
-`data/describe/description.json`); when the file is supplied, the dump-preparation script will
-copy and sanitize it rather than re-running the skill.
+### Build description (`description.json`)
+
+`--description` is optional; without it, `get_graph_info` has no `build` section. To produce
+it, run the `describe-graph` skill **from a repository checkout** (the script locates the repo
+root from its own path) with `uv run`, on a machine that has the transformation output:
+
+```bash
+uv run python .agents/skills/filter/describe-graph/scripts/describe_graph.py \
+  <run-dir> --output <describe-output-dir>
+```
+
+`<run-dir>` must contain `graphs/` (the per-source transformation workspaces) and `merged/`
+(with `merge-metadata.json`), and a `cleaning/` folder **beside** `<run-dir>` must hold the
+cleaning report and the cleaned `nodes.jsonl`; symlinks are fine. The script only accepts a
+cleaning report whose input counts equal the merge's final counts, so use the report of the
+cleaning that ran directly on the merged graph. Check the first lines of `description.md`: the
+basis should be the cleaned graph, not the merged one.
+
+If augmentation added edges and cleaning ran again afterwards, `describe_graph.py` cannot see
+those steps. Record them with `add_final_cleaning.py`, which keeps the description and adds an
+`after_augmentation` section (edges and nodes added, the final cleaning's counts and flags, and
+the deployed totals):
+
+```bash
+python3 agents/mcp_interface/deploy/add_final_cleaning.py \
+  <describe-output-dir>/description.json \
+  <first cleaning_report.json> \
+  <final cleaning_report.json> \
+  data/describe/description.json
+```
+
+Pass the resulting file to `prepare_dump.sh --description`; the script strips local paths from
+it before packing the artifacts.
 
 Record the graph version, dump checksum, artifact checksum, source version, and download
 date in `data/README.md`. The current sample release is:
