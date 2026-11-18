@@ -156,7 +156,7 @@ while IFS= read -r relationship_type; do
 done < <(docker exec "$container_name" cypher-shell --format plain -u neo4j -p "$password" -d "$DATABASE" \
   'CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType' \
   | sed '1d; s/^"//; s/"$//')
-docker exec "$container_name" cypher-shell -u neo4j -p "$password" -d "$DATABASE" 'CALL db.awaitIndexes()'
+docker exec "$container_name" cypher-shell -u neo4j -p "$password" -d "$DATABASE" 'CALL db.awaitIndexes(7200)'
 
 artifacts_dir="$work_dir/artifacts"
 mkdir -p "$artifacts_dir/reports"
